@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 
@@ -22,7 +23,22 @@ def verify(raw, receipt, variant, node, binary, hook):
         assert [(e['step_id'],e['exit_code']) for e in observed]==[(e['step_id'],e['exit_code']) for e in ref['tools']]
     final,=[e for e in ev if e['event']=='final_task_state']
     expected,=[e for e in ref['source_setup_and_final_state'] if e['event']=='final_task_state']
-    assert final['checks']==expected['checks']
+    validation = "exact_final_checks"
+    if ref["task"] == "constraints-scheduling":
+        # All five source writers generate a live DTSTAMP, and some generate a UUID.
+        # Their final guest command validates the resulting event against all inputs.
+        reply = observed[-1]
+        source = ref["tools"][-1]
+        assert reply["exit_code"] == 0
+        assert reply["output_comparison"] == "matched_ignoring_trailing_newlines"
+        assert reply["stdout_sha256"] == source["stdout_sha256"] == source["source_output_sha256"]
+        actual_lines = final["checks"].splitlines()
+        assert re.fullmatch(r"[0-9a-f]{64}  meeting_scheduled\.ics", actual_lines[0])
+        assert actual_lines[1:] == expected["checks"].splitlines()[1:] == [
+            "alice_calendar.ics: OK", "bob_calendar.ics: OK", "carol_calendar.ics: OK"]
+        validation = "source_calendar_assertions_and_unchanged_input_hashes"
+    else:
+        assert final['checks']==expected['checks']
     digest=hashlib.sha256(binary.read_bytes()).hexdigest()
     assert digest==ref['adapter_binary_sha256']
     revisions=dict(aries_cli=ref['adapter_revision'],aries_cli_sha256=digest,aries_hook=hook,
@@ -34,7 +50,7 @@ def verify(raw, receipt, variant, node, binary, hook):
                    root_ext4_sha256='292a537a4bdb05fe4323352ecf74299c13c732b9e430d153d5bd5e53772fed5f')
     return dict(run_id=raw.name,workload=ref['task'],variant=variant,node=node,source_trial=ref['trial_id'],
                 job_id=ref['job_id'],status='validated',snapshot_id=None,snapshot_mode='native-file' if variant in ('v3','v4') else 'file',
-                revisions=revisions,source_validation_receipt=receipt.name,final_checks=final['checks'],
+                revisions=revisions,source_validation_receipt=receipt.name,final_checks=final['checks'],final_validation=validation,
                 memory_mib=create['memory_mib'],storage_mib=create['storage_mib'],vcpus=create['vcpus'],
                 fidelity=dict(external_responses_unavailable=ref.get('external_actions',[]),
                               expected_exits=[e['expected_exit_code'] for e in observed],
