@@ -13,10 +13,8 @@ from cohort_image_circuit import IMAGE_HELPER, TASKS, boundaries, digest, verify
 
 def install(src, dst):
     dst.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.link(src, dst)
-    except OSError:
-        shutil.copy2(src, dst)
+    # Keep the archived bytes independent of later edits and new native builds.
+    shutil.copy2(src, dst)
 
 
 def main():
