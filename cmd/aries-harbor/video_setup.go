@@ -26,3 +26,11 @@ test -x "$target"
 mkdir -p "$alias_dir"
 ln -s "$target" "$alias_dir/apply_patch"
 readlink "$alias_dir/apply_patch"`
+
+// Source steps 20 and 21 list the harness worktree and locate GNU patch.
+// Only the observed directory structure is needed in this image. The native
+// validation receipt retains listing differences from the live harness.
+const videoHarnessTrial = "07e979df-d2c5-4b88-9638-abcc492c3dc3"
+const videoHarnessDirectory = `install -d -m 0755 /tmp/codex-home/.tmp
+test -d /tmp/codex-home/.tmp
+printf '%s\n' 'prepared /tmp/codex-home/.tmp; original transient harness contents unavailable'`
