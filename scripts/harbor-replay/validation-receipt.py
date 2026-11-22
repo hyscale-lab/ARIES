@@ -85,6 +85,8 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
         "task": task, "host": host, "configuration": configuration, "adapter_revision": revision,
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
         "observer": first["observer"], "session_completed": bool(full),
+        "diagnostic_video_images": first.get("diagnostic_video_images",False),
+        "all_observed_image_payloads_match": all(r["stdout_sha256"]==r["source_output_sha256"] for r in replies if r["operation"]=="ViewImage"),
         "guest_network_checks": network, "external_completion_events": external_observed,
         "expected_step_ids": expected_steps, "rejected_before_guest": rejected, "external_actions": external, "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
         "modeled_wait_ns_by_basis": dict(waits), "source_setup_and_final_state": ready, "tools": replies,

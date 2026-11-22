@@ -52,6 +52,8 @@ def make(sources, inventory, reviewed, outputs):
                     row["external_actions"] = r["external_actions"]
                     if row["state"] == "validated_observed_exits":
                         row["state"] = "validated_guest_exits_external_response_unavailable"
+                if r.get("all_observed_image_payloads_match") is False:
+                    row["state"] = "completed_guest_calls_image_payload_diverged" if r["session_completed"] else "partial_or_divergent"
                 row["live_guest_calls"] = len(r["tools"])
             elif attempts:
                 row["state"] = "live_attempt_incomplete_or_divergent"

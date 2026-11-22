@@ -15,10 +15,11 @@ import (
 // Hooks stay on the host. Boundary returns only after the VM is running again.
 // Its own freeze receipts identify the exact pause/resume bounds.
 type Hooks struct {
-	Exec      func(context.Context, replay.Call) (core.CommandResult, error)
-	Boundary  func(context.Context, string, int) error
-	Record    func(Receipt) error
-	IntraTool *IntraToolOptions
+	DiagnosticVideoImages bool
+	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
+	Boundary              func(context.Context, string, int) error
+	Record                func(Receipt) error
+	IntraTool             *IntraToolOptions
 }
 
 type Receipt struct {
@@ -79,6 +80,9 @@ func compareOutput(source []byte, result core.CommandResult) string {
 // Run follows source order, substituting live elapsed time for each recorded
 // guest call interval. There is no verifier, benchmark deadline or LLM client.
 func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
+	if h.DiagnosticVideoImages && r.Task != "video-processing" {
+		return errors.New("unreviewed video diagnostic")
+	}
 	if h.Exec == nil || h.Boundary == nil || h.Record == nil {
 		return errors.New("missing replay hooks")
 	}
@@ -195,6 +199,9 @@ func recordReply(h Hooks, call replay.Call, receipt Receipt, out core.CommandRes
 		return err
 	}
 	if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
+		if h.DiagnosticVideoImages && out.ExitCode == 0 && comparableLiveImage(call, out.Stdout) {
+			return nil
+		}
 		return fmt.Errorf("step %d image attachment differs from the source", receipt.Step)
 	}
 	if int32(out.ExitCode) != call.ExitCode {

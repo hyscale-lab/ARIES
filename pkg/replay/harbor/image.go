@@ -70,3 +70,19 @@ func imageCall(c indexedCall, origin, ts time.Time, seq uint64) (replay.Call, er
 	wire, err := json.Marshal([]imageItem{item})
 	return replay.Call{Operation: "ViewImage", ImageWidth: cfg.Width, ImageHeight: cfg.Height, Path: args.Path, Sequence: seq, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: wire}, err
 }
+
+// Check live bytes are an actual image of the source shape and MIME before
+// continuing a video-only diagnostic that preserves the divergent attachment.
+func comparableLiveImage(call replay.Call, wire string) bool {
+	var actual, original []imageItem
+	if json.Unmarshal([]byte(wire), &actual) != nil || json.Unmarshal(call.ResponseStdout, &original) != nil || len(actual) != 1 || len(original) != 1 {
+		return false
+	}
+	prefix, encoded, ok := strings.Cut(actual[0].ImageURL, ",")
+	originalPrefix, _, _ := strings.Cut(original[0].ImageURL, ",")
+	if !ok || len(encoded) > 12<<20 || prefix != originalPrefix || actual[0].Type != original[0].Type || actual[0].Detail != original[0].Detail {
+		return false
+	}
+	decoded, format, err := image.Decode(base64.NewDecoder(base64.StdEncoding, strings.NewReader(encoded)))
+	return err == nil && "data:image/"+format+";base64" == prefix && decoded.Bounds().Dx() == call.ImageWidth && decoded.Bounds().Dy() == call.ImageHeight
+}
