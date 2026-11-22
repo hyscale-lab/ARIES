@@ -125,7 +125,8 @@ func command(ctx context.Context) error {
 		torchPoll := r.Task == torchTask && (r.Trial == "e047ddea-bb8c-43c0-b71e-e625a611565f" || r.Trial == "ce62b3a5-602c-44c7-b13e-6537dca35d1d")
 		grpcPoll := r.Task == kvTask && r.Trial == "69ba9b75-cf5b-4722-94f4-7ce3ea31bbb4"
 		financialPoll := r.Task == financialTask && r.Trial == "dce59078-0f61-4eac-92f9-3b2728e4ef28"
-		allowed := grpcPoll || financialPoll || torchPoll || r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
+		hfPoll := r.Task == hfTask && (r.Trial == "f0d5e4b5-b20d-40bf-89ec-6483b65525dc" || r.Trial == "071ce48d-3de4-4c02-9e42-3eb64933acd2")
+		allowed := grpcPoll || financialPoll || hfPoll || torchPoll || r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
 		if !allowed || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 {
 			return errors.New("process drift diagnostics require a reviewed uninstrumented recording")
 		}
