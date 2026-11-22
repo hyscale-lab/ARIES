@@ -2,6 +2,7 @@
 import argparse
 from collections import Counter
 from guest_classes import cross_tab
+from replay_windows import identify, assign
 import json
 from pathlib import Path
 import tempfile
@@ -31,6 +32,25 @@ def ranges(sorted_gpas, page):
 
 def reconcile(raw, output, meta):
     events = list(read(raw/"events.jsonl"))
+    partial = meta["status"] == "partial_fidelity"
+    groups, process_status = identify(events, complete=not partial)
+    meta = dict(meta, process_handle_reconciliation=process_status)
+    if partial:
+        # Keep actual running/early-terminal results and incomplete starts without
+        # admitting windows from a failed replay into group comparisons.
+        create, = [e for e in events if e["event"]=="create_start"]
+        if (meta["source_trial"],meta["job_id"]) != (create["trial_id"],create["job_id"]):
+            raise ValueError("partial event origin mismatch")
+        if output.exists():
+            raise FileExistsError(output)
+        output.parent.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+            stage=Path(temporary)/"run"
+            stage.mkdir()
+            (stage/"run.json").write_text(json.dumps(meta,indent=2)+"\n")
+            write(stage/"events.jsonl",[{k:v for k,v in e.items() if k not in ("stdout","stderr")} for e in events])
+            stage.rename(output)
+        return
     samples = list(read(raw/"samples.jsonl"))
     start, = [e for e in events if e["event"] == "session_start"]
     end, = [e for e in events if e["event"] == "session_end"]
@@ -39,11 +59,6 @@ def reconcile(raw, output, meta):
         raise ValueError("run metadata disagrees with replay origin")
     if not any(e["event"]=="restore_complete" for e in events) or events[-1]["event"]!="removed":
         raise ValueError("restore or cleanup incomplete")
-    dispatch = [e["step_id"] for e in events if e["event"]=="tool_dispatch"]
-    replies = [e for e in events if e["event"]=="tool_reply"]
-    if not dispatch or dispatch != [r["step_id"] for r in replies] or any(
-            r["exit_code"] != r["expected_exit_code"] for r in replies):
-        raise ValueError("incomplete or divergent tool sequence")
     instance = {(s["pid"], str(s["start_ticks"])) for s in samples}
     if len(instance)!=1 or len(samples)<2:
         raise ValueError("missing one-second samples or changed VMM")
@@ -92,7 +107,8 @@ def reconcile(raw, output, meta):
             if counts != w["unknown_counts"]:
                 raise ValueError("unknown counts disagree with detailed census")
             ambiguous=sorted(int(k) for k,v in w["unknown_gpas"].items() if v=="newly-resident-unarmed")
-            windows.append(dict(phase=e["window_kind"],step=e["step"],begin_ns=w["arm_end_ns"],
+            phase, attribution = assign(e["window_kind"], e["step"], groups)
+            windows.append(dict(phase=phase, **attribution,step=e["step"],begin_ns=w["arm_end_ns"],
                 end_ns=w["scan_begin_ns"], page_bytes=page, eligible_bytes=(len(w["accessed_gpas"])+len(w["idle_gpas"]))*page,
                 marked_referenced_bytes=len(w["accessed_gpas"])*page,
                 demand_evidenced_new_bytes=None, ambiguous_arrival_bytes=len(ambiguous)*page,
@@ -101,7 +117,7 @@ def reconcile(raw, output, meta):
                 unknown_counts=dict(counts), referenced_gpa_ranges=ranges(w["accessed_gpas"],page),
                 ambiguous_arrival_gpa_ranges=ranges(ambiguous,page),coverage=w["coverage_scope"]))
         expected=[("session-start",0)]
-        for step in dispatch:
+        for step in groups:
             expected.extend([("pre-tool",step),("post-tool",step)])
         if phases!=expected+[("session-end",0)]:
             raise ValueError("tracing missed a required boundary")
