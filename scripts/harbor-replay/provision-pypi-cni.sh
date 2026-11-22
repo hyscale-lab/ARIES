@@ -10,13 +10,19 @@ name=zbvideo183
 tls_hosts=(pypi.org files.pythonhosted.org)
 http_hosts=()
 github_addresses=()
+dataset_profile=false
+dns_unit=
 case "${3:-video}" in
     video) ;;
-    dataset)
-        bridge=zbtok189
-        subnet=10.232.189.0/28
-        chain=ZB189TOK
-        name=zbtoken189
+    dataset|dataset-amd183)
+        dataset_profile=true
+        node=189
+        if [[ ${3:-video} == dataset-amd183 ]]; then node=183; fi
+        bridge=zbtok$node
+        subnet=10.232.$node.0/28
+        chain=ZB${node}TOK
+        name=zbtoken$node
+        dns_unit=zb-token-dns-amd$node
         tls_hosts=(huggingface.co us.aws.cdn.hf.co pypi.org files.pythonhosted.org)
         ;;
     compcert)
@@ -32,8 +38,8 @@ esac
 ipt=(sudo -n iptables -w -t mangle)
 jump=(-i "$bridge" -s "$subnet" -m comment --comment "$name" -j "$chain")
 if [[ "$action" == remove ]]; then
-    if [[ ${3:-video} == dataset ]] && sudo -n systemctl is-active --quiet zb-token-dns-amd189; then
-        sudo -n systemctl stop zb-token-dns-amd189
+    if [[ $dataset_profile == true ]] && sudo -n systemctl is-active --quiet "$dns_unit"; then
+        sudo -n systemctl stop "$dns_unit"
     fi
     if "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
         "${ipt[@]}" -D PREROUTING "${jump[@]}"
@@ -63,7 +69,7 @@ mkdir -p "$base"/{conf,ipam,cache}
 (cd "$base/bin"; sha256sum -c ../SHA256SUMS)
 resolver=$(awk '$1=="nameserver" && $2 !~ /^127\./ && $2 !~ /:/ {print $2;exit}' /run/systemd/resolve/resolv.conf)
 test -n "$resolver"
-if [[ ${3:-video} == dataset ]]; then resolver=10.232.189.1; fi
+if [[ $dataset_profile == true ]]; then resolver=10.232.$node.1; fi
 printf 'nameserver %s\n' "$resolver" > "$base/resolv.conf"
 python3 - "$base" "$subnet" "$bridge" "$name" <<'PY'
 import ipaddress, json, pathlib, subprocess, sys
@@ -82,7 +88,7 @@ config={"cniVersion":"1.0.0","name":name,"plugins":[{"type":"bridge","bridge":br
             "resolvConf":str(base/"resolv.conf")}},{"type":"firewall"},{"type":"tc-redirect-tap"},{"type":"loopback"}]}
 (base/"conf"/"10-video.conflist").write_text(json.dumps(config,indent=2)+"\n")
 PY
-if [[ ${3:-video} == dataset ]]; then
+if [[ $dataset_profile == true ]]; then
     python3 - "$base/conf/dataset-hosts.json" "${tls_hosts[@]}" <<'PYTLS'
 import ipaddress,json,pathlib,socket,ssl,sys
 path=pathlib.Path(sys.argv[1]); hosts={}
@@ -104,10 +110,10 @@ PYTLS
     # The platform mounts /etc/hosts read-only. Resolve service records on this
     # dedicated bridge and return NXDOMAIN for names outside the approved set.
     test -x /usr/sbin/dnsmasq
-    if sudo -n systemctl is-active --quiet zb-token-dns-amd189; then
-        sudo -n systemctl kill --signal=HUP zb-token-dns-amd189
+    if sudo -n systemctl is-active --quiet "$dns_unit"; then
+        sudo -n systemctl kill --signal=HUP "$dns_unit"
     else
-        sudo -n systemd-run --unit=zb-token-dns-amd189 --property=Restart=no \
+        sudo -n systemd-run --unit="$dns_unit" --property=Restart=no \
             /usr/sbin/dnsmasq --keep-in-foreground --conf-file=/dev/null --no-hosts --no-resolv \
             --bind-dynamic --interface="$bridge" --except-interface=lo --listen-address="$resolver" \
             --addn-hosts="$base/dns.hosts" --local=/#/ --pid-file="$base/dns.pid"
@@ -126,12 +132,12 @@ if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     fi
     "${ipt[@]}" -A "$chain" -j DROP
 fi
-if [[ ${3:-video} == dataset ]]; then
+if [[ $dataset_profile == true ]]; then
     mapfile -t verified < <(python3 -c 'import json,sys;print("\n".join(sorted(set(json.load(open(sys.argv[1])).values()))))' "$base/conf/dataset-hosts.json")
 else
     verified=("${github_addresses[@]}")
 fi
-if [[ ${3:-video} == dataset ]]; then
+if [[ $dataset_profile == true ]]; then
     for protocol in udp tcp; do
         if ! "${ipt[@]}" -C "$chain" -d "$resolver" -p "$protocol" --dport 53 -j RETURN 2>/dev/null; then
             "${ipt[@]}" -I "$chain" 1 -d "$resolver" -p "$protocol" --dport 53 -j RETURN

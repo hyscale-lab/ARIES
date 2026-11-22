@@ -19,7 +19,7 @@ import (
 const codexPrefixSHA = "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab"
 
 type taskSetup struct {
-	packagesSHA, output, inputCheck, initialCheck string
+	packagesSHA, packagesField, output, inputCheck, initialCheck string
 }
 
 var taskSetups = map[string]taskSetup{
@@ -60,7 +60,13 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	if r.Trial == videoPatchTrial {
 		task.initialCheck += "\n" + videoPatchAlias
 	}
+	if r.Trial == "427a5c05-723c-407c-bdbd-a2927203c0eb" || r.Trial == "eaa24caa-f211-4745-a943-0f7041aa4214" {
+		task.packagesSHA = "6e8e1dac4bc58e974f2654b53c6e4d5210cc8b7f492f1ad5660cdab5ac4c6998"
+		task.packagesField = "debian_curl_archive_sha256"
+		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
+	}
 	if r.Trial == debianPatchTrial {
+		task.packagesField = "debian_patch_archive_sha256"
 		task.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
 		task.initialCheck += "\ntest \"$(command -v patch)\" = /usr/bin/patch\ndpkg-query -W patch"
 	}
@@ -160,14 +166,18 @@ ARIESPATH`}})
 command -v node codex rg python3
 test "$(node --version)" = v22.23.2
 rg --version | head -1`
-	if task.packagesSHA != "" && r.Trial != debianPatchTrial {
+	if task.packagesSHA != "" && task.packagesField == "" {
 		state += "\ncommand -v git patch perl\ndpkg-query -W python3 git patch perl-base"
 	}
 	out, err := checked(ctx, m, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", state}, Dir: r.Workdir})
 	if err != nil {
 		return "", nil, err
 	}
-	details := map[string]string{"codex_prefix_sha256": codexPrefixSHA, "ubuntu_packages_sha256": task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}
+	pkgField := task.packagesField
+	if pkgField == "" {
+		pkgField = "ubuntu_packages_sha256"
+	}
+	details := map[string]string{"codex_prefix_sha256": codexPrefixSHA, pkgField: task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}
 	if r.Task == sparqlTask {
 		pip, err := prepareSparql(ctx, m, id, r.Trial)
 		if err != nil {
