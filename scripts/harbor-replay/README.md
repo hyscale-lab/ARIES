@@ -100,7 +100,7 @@ hashes and package service reachability across restore.
 
 Selected video, circuit and token-count recordings need the Debian
 Bookworm GNU patch package. Build the verified archive with
-`prepare-os-tools.py bookworm-patch circuit-patch-debs.tar.gz` using
+`python3 prepare-os-tools.py bookworm-patch circuit-patch-debs.tar.gz` using
 Bookworm APT indices, or add `--package-dir RETAINED_DEBS` to use locally
 archived package bytes. The same option reconstructs the token-count curl
 archive with `dataset-bookworm-curl`.
