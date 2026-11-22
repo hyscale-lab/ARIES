@@ -17,7 +17,12 @@ def process_times(proc):
 
 def sample(api_socket, limit, output):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
-        peer.connect(api_socket)
+        path = Path(api_socket)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            peer.connect(f"/proc/self/fd/{directory}/{path.name}")
+        finally:
+            os.close(directory)
         pid, _, _ = struct.unpack("3i", peer.getsockopt(
             socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
         proc = Path("/proc") / str(pid)
