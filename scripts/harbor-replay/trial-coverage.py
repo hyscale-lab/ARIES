@@ -7,6 +7,8 @@ from pathlib import Path
 def make(sources, inventory, reviewed, outputs):
     inspected = {(r["task"], r["trial"]): r for r in inventory}
     bound = {(w["task"], t["trial"]) for w in reviewed for t in w["trials"]}
+    review_file = outputs / "full-replay-exclusions.json"
+    exclusions = {(r["task"], r["trial"]): r for r in json.loads(review_file.read_text())} if review_file.exists() else {}
     unsafe_goals = {"break-filter-js-from-html", "crack-7z-hash"}
     require_review = {
         "break-filter-js-from-html": "Recorded task asks for a sanitization bypass.",
@@ -59,6 +61,9 @@ def make(sources, inventory, reviewed, outputs):
                 row["state"] = "live_attempt_incomplete_or_divergent"
             elif row["reviewed_dispatch"]:
                 row["state"] = "source_bound_awaiting_validation"
+            elif (task, ident) in exclusions:
+                review = exclusions[task, ident]
+                row.update(state=review["state"], reason=review["reason"], reviewed_source_steps=review["source_steps"])
             elif task in require_review:
                 row.update(state="excluded_unsafe_goal" if task in unsafe_goals else "source_review_pending",
                            reason=require_review[task])
