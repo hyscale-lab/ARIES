@@ -17,12 +17,12 @@ BEGIN
 tracepoint:syscalls:sys_enter_ioctl
 /args->cmd == 0x4020ae46 || args->cmd == 0x40a0ae49/
 {
-    if (comm == "firecracker") {
-        $region = uptr((struct slot_region *)args->arg);
-        @region[tid] = (args->fd, $region->slot, $region->flags, $region->guest_phys_addr,
+    // Restore threads may have a different comm. The consumer binds events
+    // to SO_PEERCRED PID and process start time on the isolated worker.
+    $region = uptr((struct slot_region *)args->arg);
+    @region[tid] = (args->fd, $region->slot, $region->flags, $region->guest_phys_addr,
                         $region->memory_size, $region->userspace_addr);
-        @entry[tid] = nsecs;
-    }
+    @entry[tid] = nsecs;
 }
 
 tracepoint:syscalls:sys_exit_ioctl
