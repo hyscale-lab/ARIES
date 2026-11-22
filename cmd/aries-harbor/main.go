@@ -2,7 +2,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,12 +12,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
+	"github.com/hyscale-lab/aries/pkg/harness"
 	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/replay/harbor"
 )
@@ -34,6 +38,8 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
+	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
+	probe := flag.String("guest-probe", "", "optional guest telemetry executable for diagnostic runs")
 	sampler := flag.String("sampler", "", "host sample_vmm.py")
 	samples := flag.String("samples", "", "new one-second VMM samples JSONL")
 	log := flag.String("log", "", "new private JSONL run log")
@@ -73,10 +79,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *storage, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *storage, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples string, storage int, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe string, storage int, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -113,6 +119,36 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if err = m.Validate(validateCtx, id, req, nil); err != nil {
 		logErr := log.Encode(map[string]any{"event": "validation_error", "error": err.Error(), "command_timing": timings.Snapshot()})
 		return errors.Join(err, logErr)
+	}
+	for _, helper := range []struct{ name, path, expected string }{
+		{"rg", rg, "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"},
+		{"zb-guest", probe, ""},
+	} {
+		if helper.path == "" {
+			continue
+		}
+		data, err := os.ReadFile(helper.path)
+		if err != nil {
+			return err
+		}
+		sum := fmt.Sprintf("%x", sha256.Sum256(data))
+		if helper.expected != "" && sum != helper.expected {
+			return fmt.Errorf("incorrect %s helper digest", helper.name)
+		}
+		archive, err := harness.StageArchive(nil, map[string]harness.ArchiveFile{helper.name: {Content: data, Mode: 0755}})
+		if err != nil {
+			return err
+		}
+		if err = m.UploadArchive(ctx, id, "/usr/local/bin", bytes.NewReader(archive)); err != nil {
+			return fmt.Errorf("prepare guest %s: %w", helper.name, err)
+		}
+		check, err := m.Exec(ctx, id, core.Command{Path: "/usr/bin/sha256sum", Args: []string{"/usr/local/bin/" + helper.name}})
+		if err != nil || check.ExitCode != 0 || !strings.HasPrefix(check.Stdout, sum+" ") {
+			return errors.Join(fmt.Errorf("verify guest helper %s", helper.name), err)
+		}
+		if err = log.Encode(map[string]any{"event": "guest_prepared", "helper": helper.name, "guest_sha256": sum}); err != nil {
+			return err
+		}
 	}
 	if err = m.Start(ctx, id); err != nil {
 		return err
@@ -155,15 +191,29 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return m.Exec(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir})
 		},
 		Boundary: func(ctx context.Context, phase string, step int) error {
-			if observer == "" {
-				return nil
+			if observer != "" {
+				cmd := exec.CommandContext(ctx, observer, phase, id, fmt.Sprint(step), socket)
+				cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+				cmd.WaitDelay = 30 * time.Second
+				cmd.Stdout = os.Stderr
+				cmd.Stderr = os.Stderr
+				if err := cmd.Run(); err != nil {
+					return err
+				}
 			}
-			cmd := exec.CommandContext(ctx, observer, phase, id, fmt.Sprint(step), socket)
-			cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-			cmd.WaitDelay = 30 * time.Second
-			cmd.Stdout = os.Stderr
-			cmd.Stderr = os.Stderr
-			return cmd.Run()
+			if probe != "" && (phase == "post-tool" || phase == "session-start") {
+				begin, err := harbor.Clock()
+				if err != nil {
+					return err
+				}
+				out, err := m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/zb-guest", Args: []string{"snapshot"}})
+				end, clockErr := harbor.Clock()
+				if err != nil || clockErr != nil || out.ExitCode != 0 || !json.Valid([]byte(out.Stdout)) {
+					return errors.Join(errors.New("guest memory probe failed"), err, clockErr)
+				}
+				return log.Encode(map[string]any{"event": "guest_probe", "after": phase, "step_id": step, "begin_monotonic_ns": begin, "end_monotonic_ns": end, "sample": json.RawMessage(out.Stdout)})
+			}
+			return nil
 		},
 	}
 	return harbor.Run(ctx, r, h)
