@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/mdlayher/vsock"
 )
 
 func main() {
@@ -30,12 +32,14 @@ func execute(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	var pfnStart, pfnCount uint64
 	var socket, dir string
+	var hostSocket bool
 	switch command {
 	case "snapshot", "serve":
 		fs.Uint64Var(&pfnStart, "pfn-start", 0, "first guest PFN to inspect")
 		fs.Uint64Var(&pfnCount, "pfn-count", 0, "number of guest PFNs to inspect, zero disables")
 		if command == "serve" {
 			fs.StringVar(&socket, "socket", "", "Unix socket path in a private directory")
+			fs.BoolVar(&hostSocket, "host-vsock", false, "serve the fixed snapshot request to the host CID on port 4099")
 		}
 	case "request":
 		fs.StringVar(&socket, "socket", "", "running local guest telemetry socket")
@@ -55,6 +59,16 @@ func execute(args []string, out io.Writer) error {
 	case "snapshot":
 		return encoder.Encode(snapshot(pfnStart, pfnCount))
 	case "serve":
+		if hostSocket {
+			if socket != "" {
+				return errors.New("choose a single telemetry transport")
+			}
+			listener, err := vsock.Listen(4099, nil)
+			if err != nil {
+				return err
+			}
+			return serveListener(listener, pfnStart, pfnCount)
+		}
 		return serve(socket, pfnStart, pfnCount)
 	case "request":
 		return request(socket, out)
@@ -85,6 +99,10 @@ func serve(path string, start, count uint64) error {
 	if err != nil {
 		return err
 	}
+	return serveListener(listener, start, count)
+}
+
+func serveListener(listener net.Listener, start, count uint64) error {
 	defer listener.Close()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
@@ -105,6 +123,10 @@ func serve(path string, start, count uint64) error {
 		}
 		if err != nil {
 			return err
+		}
+		if peer, ok := conn.RemoteAddr().(*vsock.Addr); ok && peer.ContextID != vsock.Host {
+			conn.Close()
+			continue
 		}
 		handleSnapshot(conn, start, count)
 	}
