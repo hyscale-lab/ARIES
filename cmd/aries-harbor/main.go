@@ -41,6 +41,7 @@ func command(ctx context.Context) error {
 	var o vhive.Options
 	o.IdleMode = "checkpoint"
 	flag.BoolVar(&o.GuestTaskV3, "guest-task-v3", true, "containerd-v2 stack with guest task v3 and framed streams")
+	flag.BoolVar(&o.NativeCheckpoint, "native-checkpoint", false, "optimized native checkpoint and restore API")
 	flag.StringVar(&o.Socket, "socket", "", "containerd socket")
 	flag.StringVar(&o.Namespace, "namespace", "aries", "containerd namespace")
 	flag.StringVar(&o.CheckpointDir, "checkpoint-dir", "", "private host checkpoint directory")

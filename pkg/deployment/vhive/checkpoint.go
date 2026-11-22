@@ -32,6 +32,7 @@ type checkpointState struct {
 	Request             *proto.CreateVMRequest `json:"request"`
 	Memory              string                 `json:"memory,omitempty"`
 	Snapshot            string                 `json:"snapshot,omitempty"`
+	NativeDirectory     string                 `json:"native_directory,omitempty"`
 	Processes           []checkpointProcess    `json:"processes,omitempty"`
 }
 
@@ -247,10 +248,6 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	snap, ok := control.(snapshotControl)
-	if !ok {
-		return errors.New("native VM control lacks snapshot operations")
-	}
 	endStage := core.TimeCommandStage(ctx, "checkpoint.inspect_task")
 	running, err := m.guestTaskRunning(ctx, id)
 	endStage()
@@ -274,6 +271,14 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	s.Processes = processes
+	if m.options.NativeCheckpoint {
+		return m.suspendNativeCheckpoint(ctx, id, s)
+	}
+	snap, ok := control.(snapshotControl)
+	if !ok {
+		return errors.New("VM control lacks snapshot operations")
+	}
 	// Each generation has fresh paths: never overwrite memory backing a resumed VM.
 	dir, err := os.MkdirTemp(m.runtimeDir(id), "snapshot-")
 	if err != nil {
@@ -281,7 +286,7 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 	}
 	s.Memory = filepath.Join(dir, "memory")
 	s.Snapshot = filepath.Join(dir, "vmstate")
-	s.Processes = processes
+	s.NativeDirectory = ""
 	s.Phase = "pausing"
 	endStage = core.TimeCommandStage(ctx, "checkpoint.persist_pausing")
 	err = m.saveCheckpoint(id, s)
@@ -323,9 +328,13 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 		}
 	}
 	endSync()
+	return m.finishCheckpointSuspend(ctx, id, s, dir)
+}
+
+func (m *Manager) finishCheckpointSuspend(ctx context.Context, id string, s *checkpointState, dir string) error {
 	s.Phase = "stopping"
-	endStage = core.TimeCommandStage(ctx, "checkpoint.persist_stopping")
-	err = m.saveCheckpoint(id, s)
+	endStage := core.TimeCommandStage(ctx, "checkpoint.persist_stopping")
+	err := m.saveCheckpoint(id, s)
 	endStage()
 	if err != nil {
 		return err
@@ -377,6 +386,9 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if s.NativeDirectory != "" {
+		return m.restoreCheckpointVM(ctx, id, s, nativeRestoreRequest(id, s))
+	}
 	request := pb.Clone(s.Request).(*proto.CreateVMRequest)
 	request.LoadSnapshot = true
 	request.SnapshotPath = s.Snapshot
@@ -397,13 +409,17 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 		return errors.New("UFFD restore requires the original retained disk source")
 	}
 	request.ContainerSnapshotPath = mounts[0].Source
+	return m.restoreCheckpointVM(ctx, id, s, request)
+}
+
+func (m *Manager) restoreCheckpointVM(ctx context.Context, id string, s *checkpointState, request *proto.CreateVMRequest) error {
 	// Mark before submitting: an ambiguous native response must never replay a VM.
 	s.Phase = "restoring"
 	// The previous VMM and shim have exited; a failed restore may own new
 	// processes whose absence must be established independently during cleanup.
 	s.Processes = nil
-	endStage = core.TimeCommandStage(ctx, "restore.persist_restoring")
-	err = m.saveCheckpoint(id, s)
+	endStage := core.TimeCommandStage(ctx, "restore.persist_restoring")
+	err := m.saveCheckpoint(id, s)
 	endStage()
 	if err != nil {
 		return err

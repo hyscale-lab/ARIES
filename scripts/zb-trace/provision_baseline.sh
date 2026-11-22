@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Start one study worker from the already built common kernel/root and stack binaries.
-# Usage: provision_baseline.sh STACK_DIR UNIT DISK_BASELINE_CONFIG v1|v2
+# Usage: provision_baseline.sh STACK_DIR UNIT RUNTIME_PROFILE v1|v2|v3|v4
 set -euo pipefail
 stack=$(realpath "$1")
 unit=$2
 profile=$(realpath "$3")
 variant=$4
 [[ "$unit" =~ ^fcmod-zepbound-[a-z0-9-]+$ ]]
-[[ "$variant" == v1 || "$variant" == v2 ]]
+[[ "$variant" =~ ^v[1-4]$ ]]
 work="$stack/runtime"
 bin="$work/bin"
 socket="/run/$unit/containerd.sock"
@@ -60,15 +60,23 @@ disabled_plugins = ["io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images", 
 EOF
 
 python3 - "$profile" "$work" "$variant" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
 
 source, work = map(pathlib.Path, sys.argv[1:3])
 config = json.loads(source.read_text())
-if sys.argv[3] == "v2":
+variant = sys.argv[3]
+if variant == "v2":
     config["free_page_reporting"] = True
     config["kernel_args"] += " page_reporting.page_reporting_order=9"
+if variant in ("v3", "v4"):
+    with (work / "common-rootfs.ext4").open("rb") as image:
+        config["root_drive_sha256"] = hashlib.file_digest(image, "sha256").hexdigest()
+    config["root_drive_use_pmem"] = variant == "v4"
+    config["guest_reclamation"] = {"Enabled": True}
+    config["smt_enabled"] = False
 config.update(
     firecracker_binary_path=str(work / "bin/firecracker"),
     kernel_image_path=str(work / "common-vmlinux.bin"),
@@ -104,4 +112,8 @@ test -S "$socket.ttrpc"
 "${ctr[@]}" plugins ls | awk '$1=="io.containerd.snapshotter.v1" && $2=="devmapper" && $NF=="ok" { good = 1 } END { exit !good }'
 "${ctr[@]}" images pull --local --platform linux/amd64 --snapshotter devmapper "$image"
 "${ctr[@]}" images check --snapshotter devmapper
-printf 'BASELINE_RUNTIME_READY socket=%s namespace=aries image=%s\n' "$socket" "$image"
+if [[ "$variant" == v1 || "$variant" == v2 ]]; then
+    printf 'BASELINE_RUNTIME_READY socket=%s namespace=aries image=%s\n' "$socket" "$image"
+else
+    printf 'OPTIMIZED_RUNTIME_READY variant=%s socket=%s namespace=aries image=%s\n' "$variant" "$socket" "$image"
+fi

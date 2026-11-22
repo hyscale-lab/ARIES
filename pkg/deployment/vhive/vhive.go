@@ -62,6 +62,9 @@ type Options struct {
 	// CheckpointAfterExec parks borrowed bridge calls. Runner operations restore
 	// on demand and leave preparation/evaluation processes running.
 	CheckpointAfterExec bool
+	// NativeCheckpoint selects CheckpointVM and native artifact restore on the
+	// optimized firecracker-containerd runtime.
+	NativeCheckpoint bool
 	// RestoreMemorySocket selects a caller-owned native UFFD memory backend.
 	// The caller must serve the current checkpoint through VMM teardown. Empty uses File.
 	// This research-only option is not exposed through profiles or borrowed bridges.
@@ -148,6 +151,9 @@ func New(options Options) (*Manager, error) {
 }
 
 func validateOptions(o Options) error {
+	if o.NativeCheckpoint && (o.IdleMode != "checkpoint" || o.RestoreMemorySocket != "") {
+		return errors.New("native checkpoints require checkpoint mode and File-backed restore")
+	}
 	if o.RestoreMemorySocket != "" {
 		p := o.RestoreMemorySocket
 		if o.IdleMode != "checkpoint" || !filepath.IsAbs(p) || filepath.Clean(p) != p || p == "/" || strings.ContainsRune(p, 0) {
