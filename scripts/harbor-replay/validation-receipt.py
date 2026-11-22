@@ -21,10 +21,11 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
                 != "60697f48d70cc5dd5d41067d17ba36871845c0b68266b4cfa8e8d1368ada7e03"):
             raise ValueError("original pre-dispatch rejection differs")
         rejected = [dict(step_id=11, call_id=rejected_id, reason="original harness refused before guest dispatch")]
-    expected_steps = [step["step_id"] for step in json.loads(original)["steps"]
+    original_calls = [(step["step_id"], call["tool_call_id"]) for step in json.loads(original)["steps"]
                       for call in step.get("tool_calls", [])
                       if call["function_name"] not in {"update_plan", "web_search_call"}
                       and not (rejected and call["tool_call_id"] == rejected_id)]
+    expected_steps = [step for step, _ in original_calls]
     external = [{"step_id": s["step_id"], "arguments": t["arguments"], "response_status": "unavailable_in_original_source"}
                 for s in json.loads(original)["steps"] for t in s.get("tool_calls", [])
                 if t["function_name"] == "web_search_call"]
@@ -57,8 +58,9 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
                    "expected_exit_code", "stdout_sha256", "stderr_sha256", "source_output_sha256",
                    "output_comparison")}
             row["operation"] = e.get("operation", "Exec")
-            if "status_basis" in e:
-                row["status_basis"] = e["status_basis"]
+            for key in ("status_basis", "source_call_id", "source_process_session_id"):
+                if key in e:
+                    row[key] = e[key]
             row["dispatch_monotonic_ns"] = dispatch[e["sequence"]]["monotonic_ns"]
             row["reply_monotonic_ns"] = e["monotonic_ns"]
             row["duration_ns"] = row["reply_monotonic_ns"] - row["dispatch_monotonic_ns"]
@@ -67,7 +69,11 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
     last = next((e for e in reversed(events) if e["event"] == "tool_reply"), {})
     observed_steps = [row["step_id"] for row in replies]
     full = ("session_end" in lifecycle and "removed" in lifecycle
-            and observed_steps == expected_steps and len(dispatch) == len(replies))
+            and observed_steps == expected_steps and len(dispatch) == len(replies)
+            and set(dispatch) == {row["sequence"] for row in replies})
+    if any("source_call_id" in row for row in replies):
+        observed_calls = [(row["step_id"], row.get("source_call_id")) for row in replies]
+        full = full and collections.Counter(original_calls) == collections.Counter(observed_calls)
     if rejected:
         boundaries = [e.get("source_kind") for e in events if e["event"] == "source_event"
                       and e.get("source_call_id") == rejected_id]

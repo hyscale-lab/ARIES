@@ -63,6 +63,9 @@ def verify(run, receipt, *, sorted_final=False):
         original = expected[seq]
         if any(e[k] != original[k] for k in ("step_id", "rollout_line", "exit_code", "expected_exit_code")):
             raise ValueError(f"source position or process status mismatch for occurrence {seq}")
+        for key in ("source_call_id", "source_process_session_id"):
+            if key in original and e.get(key) != original[key]:
+                raise ValueError(f"{key} differs at occurrence {seq}")
         if e.get("operation", "Exec") != original["operation"]:
             raise ValueError(f"operation mismatch for occurrence {seq}")
         if original["operation"] == "ViewImage":
