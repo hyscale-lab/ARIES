@@ -23,11 +23,17 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
     lifecycle = {}
     replies = []
     ready = []
+    network = []
+    external_observed = []
     for e in events:
         kind = e["event"]
         if kind in ("create_start", "snapshot_start", "snapshot_complete", "restore_start",
                     "restore_complete", "session_start", "session_end", "removed"):
             lifecycle[kind] = e["monotonic_ns"]
+        elif kind == "validated_guest_network":
+            network.append(e)
+        elif kind == "source_event" and e.get("source_kind") == "web_search_call":
+            external_observed.append({key: e[key] for key in ("step_id", "source_call_id", "rollout_line", "basis")})
         elif kind.startswith("source_") and kind.endswith("_ready"):
             ready.append(e)
         elif kind == "final_task_state":
@@ -65,6 +71,7 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
         "task": task, "host": host, "configuration": "v1", "adapter_revision": revision,
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
         "observer": first["observer"], "session_completed": bool(full),
+        "guest_network_checks": network, "external_completion_events": external_observed,
         "expected_step_ids": expected_steps, "external_actions": external, "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
         "modeled_wait_ns_by_basis": dict(waits), "source_setup_and_final_state": ready, "tools": replies,
         "final_tool_stdout": final_stdout, "final_tool_stderr": last.get("stderr", ""),

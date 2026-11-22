@@ -16,3 +16,13 @@ cat /tmp/aries-video-requirements.txt
 rm /tmp/aries-video-requirements.txt
 python -c 'import cv2,numpy; print("ready guest",cv2.__version__,numpy.__version__); assert (cv2.__version__,numpy.__version__)==("5.0.0","2.5.2")'
 printf '%s\n' 'export PIP_REPORT=/tmp/aries-reviewed-pip-install.json' > /etc/profile.d/zz-aries-pip.sh`
+
+// Source step 12 reads this exact symlink and step 18 invokes its patch-only
+// argv[0] alias. This trial uses tomllib from Python's standard library.
+const videoPatchTrial = "020f911b-467e-49ad-8113-bb725bee1d4b"
+const videoPatchAlias = `alias_dir=/root/.codex/tmp/arg0/codex-arg0BTXgJr
+target=/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex
+test -x "$target"
+mkdir -p "$alias_dir"
+ln -s "$target" "$alias_dir/apply_patch"
+readlink "$alias_dir/apply_patch"`

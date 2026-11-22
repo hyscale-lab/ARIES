@@ -54,6 +54,9 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // Only this original circuit session invokes GNU patch to apply local gate diffs.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
+	if r.Trial == videoPatchTrial {
+		task.initialCheck += "\n" + videoPatchAlias
+	}
 	if r.Trial == debianPatchTrial {
 		task.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
 		task.initialCheck += "\ntest \"$(command -v patch)\" = /usr/bin/patch\ndpkg-query -W patch"
@@ -239,7 +242,7 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	if r.Task == "compile-compcert" {
 		cmd += "\n" + compilerResult
 	}
-	if r.Task == "video-processing" {
+	if r.Task == "video-processing" && r.Trial != videoPatchTrial {
 		cmd += `
 python - <<'PYREPORT'
 import json
