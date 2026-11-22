@@ -23,8 +23,8 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
-	sparqlTask:         sparqlSetup,
-	"compile-compcert": compilerSetup,
+	sparqlTask: sparqlSetup,
+	kvTask:     kvSetup,
 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
@@ -103,6 +103,11 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	task, ok := sourceSetup(r)
 	if !ok {
 		return "", nil, fmt.Errorf("no ready-state definition for %s", r.Task)
+	}
+	if r.Task == kvTask {
+		if err := uploadPinned(ctx, m, id, packages, kvPythonSHA, "/"); err != nil {
+			return "", nil, err
+		}
 	}
 	if task.packagesSHA != "" {
 		if err := installPackages(ctx, m, id, packages, task.packagesSHA); err != nil {
@@ -220,15 +225,15 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		return err
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
+	if r.Task == kvTask {
+		cmd += kvFinalCheck
+	}
 	if r.Task == sparqlTask {
 		check, err := sparqlOutputCheck(r.Trial)
 		if err != nil {
 			return err
 		}
 		cmd += check
-	}
-	if r.Task == "compile-compcert" {
-		cmd += "\n" + compilerResult
 	}
 	if r.Task == "video-processing" {
 		cmd += `
@@ -258,9 +263,6 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 		return err
 	}
 	python, probe := "/usr/local/bin/python", pypiProbe
-	if task == "compile-compcert" {
-		python, probe = "/usr/bin/python3", compilerNetworkProbe
-	}
 	if task == sparqlTask {
 		python, probe = "/usr/bin/python3", sparqlNetworkProbe
 	}

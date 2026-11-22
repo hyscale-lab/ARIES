@@ -349,5 +349,30 @@
       "web_search_call"
     ],
     "needs_network": true
+  },
+  {
+    "task": "kv-store-grpc",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/kv-store-grpc@sha256:3399400800dcb207634daa42bc1b052e831e285cc9d221eea66c47bc0fc79791",
+    "effects": [
+      "Install recorded public Python packages, generate protobuf bindings, and validate a guest-local key-value service."
+    ],
+    "trials": [
+      {
+        "trial": "720d990f-65c3-4e3a-8613-c813937dd7d4",
+        "trajectory_sha256": "101f80a27a1ca8a60606212661af1dd58c8fd030d5ec27e3803c7871bdf49848",
+        "rollout_sha256": "4232803749c4dcfeb7a75518cba48c3dfcb6128a7fda7e9fb7b9c0dc24b5ad7a"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "needs_network": true
   }
 ]
