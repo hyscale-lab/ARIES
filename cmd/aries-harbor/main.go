@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -23,6 +24,9 @@ import (
 	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/replay/harbor"
 )
+
+//go:embed fix_git_ready.py
+var initialGitState string
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -149,6 +153,18 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if err = log.Encode(map[string]any{"event": "guest_prepared", "helper": helper.name, "guest_sha256": sum}); err != nil {
 			return err
 		}
+	}
+	prepBegin, err := harbor.Clock()
+	if err != nil {
+		return err
+	}
+	gitState, err := m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-c", initialGitState}, Dir: "/app/personal-site"})
+	prepEnd, clockErr := harbor.Clock()
+	if err != nil || clockErr != nil || gitState.ExitCode != 0 || !json.Valid([]byte(gitState.Stdout)) {
+		return errors.Join(fmt.Errorf("restore source Git starting state: %s", gitState.Stderr), err, clockErr)
+	}
+	if err = log.Encode(map[string]any{"event": "source_git_ready", "begin_monotonic_ns": prepBegin, "end_monotonic_ns": prepEnd, "state": json.RawMessage(gitState.Stdout)}); err != nil {
+		return err
 	}
 	if err = m.Start(ctx, id); err != nil {
 		return err
