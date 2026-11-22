@@ -12,9 +12,19 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
     original = trajectory.read_bytes()
     if hashlib.sha256(original).hexdigest() != first["trajectory_sha256"]:
         raise ValueError("ATIF input differs from the native diagnostic")
+    rejected_id = "call_zA4CJyQ1w3PXPk6iaDhcWYyN"
+    rejected = []
+    if first["trial_id"] == "720d990f-65c3-4e3a-8613-c813937dd7d4":
+        step, = [s for s in json.loads(original)["steps"] if s["step_id"] == 11]
+        result, = step["observation"]["results"]
+        if (result["source_call_id"] != rejected_id or hashlib.sha256(result["content"].encode()).hexdigest()
+                != "60697f48d70cc5dd5d41067d17ba36871845c0b68266b4cfa8e8d1368ada7e03"):
+            raise ValueError("original pre-dispatch rejection differs")
+        rejected = [dict(step_id=11, call_id=rejected_id, reason="original harness refused before guest dispatch")]
     expected_steps = [step["step_id"] for step in json.loads(original)["steps"]
                       for call in step.get("tool_calls", [])
-                      if call["function_name"] not in {"update_plan", "web_search_call"}]
+                      if call["function_name"] not in {"update_plan", "web_search_call"}
+                      and not (rejected and call["tool_call_id"] == rejected_id)]
     external = [{"step_id": s["step_id"], "arguments": t["arguments"], "response_status": "unavailable_in_original_source"}
                 for s in json.loads(original)["steps"] for t in s.get("tool_calls", [])
                 if t["function_name"] == "web_search_call"]
@@ -58,6 +68,10 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
     observed_steps = [row["step_id"] for row in replies]
     full = ("session_end" in lifecycle and "removed" in lifecycle
             and observed_steps == expected_steps and len(dispatch) == len(replies))
+    if rejected:
+        boundaries = [e.get("source_kind") for e in events if e["event"] == "source_event"
+                      and e.get("source_call_id") == rejected_id]
+        full = full and boundaries == ["harness_rejection_request", "harness_rejection_reply"]
     exit_match = all(e["exit_code"] == e["expected_exit_code"] for e in replies)
     # Durable outcome and final guest checks appear in the last recorded tool.
     # Keep the final returned streams as evidence of what checks actually ran.
@@ -72,7 +86,7 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
         "observer": first["observer"], "session_completed": bool(full),
         "guest_network_checks": network, "external_completion_events": external_observed,
-        "expected_step_ids": expected_steps, "external_actions": external, "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
+        "expected_step_ids": expected_steps, "rejected_before_guest": rejected, "external_actions": external, "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
         "modeled_wait_ns_by_basis": dict(waits), "source_setup_and_final_state": ready, "tools": replies,
         "final_tool_stdout": final_stdout, "final_tool_stderr": last.get("stderr", ""),
     }

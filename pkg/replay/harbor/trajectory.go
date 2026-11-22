@@ -252,7 +252,9 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 			e.ParallelSize = batchSizes[c.step]
 			e.Step = c.step
 			e.Kind = p.Name
-			if p.Name != "update_plan" {
+			if rejectedBeforeGuest(trial, c) {
+				e.Kind = "harness_rejection_request"
+			} else if p.Name != "update_plan" {
 				call, err := guestCall(c, cwd, r.Plan.StartedAt, raw.Time, uint64(len(r.Plan.Calls)+1))
 				if err != nil {
 					return nil, err
@@ -269,7 +271,10 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 			}
 			e.Step = c.step
 			e.ParallelSize = batchSizes[c.step]
-			if c.call.Name != "update_plan" {
+			if rejectedBeforeGuest(trial, c) {
+				e.Kind = "harness_rejection_reply"
+				e.Basis = "recorded_harness_tool_interval"
+			} else if c.call.Name != "update_plan" {
 				e.Basis = "replaced_by_live_guest_reply"
 				e.Wait = 0
 				e.Sequence = seq
