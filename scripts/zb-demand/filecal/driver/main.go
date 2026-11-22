@@ -27,6 +27,7 @@ func run(ctx context.Context) (retErr error) {
 	flag.StringVar(&opts.ShimDir, "shim-dir", "", "isolated shim directory")
 	flag.StringVar(&opts.IODir, "io-dir", "", "isolated I/O directory")
 	flag.BoolVar(&opts.NativeCheckpoint, "native-checkpoint", false, "use the optimized native checkpoint API")
+	flag.BoolVar(&opts.NativeReportingOnly, "native-reporting-only", false, "enable native reporting without DAMON")
 	image := flag.String("image", "", "prepared benchmark image for an idle guest task")
 	hook := flag.String("hook", "", "host file-backing diagnostic observer")
 	flag.Parse()
