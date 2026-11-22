@@ -27,6 +27,8 @@ case "${3:-video}" in
         if [[ ${3:-video} == dataset-amd* ]]; then node=${3#dataset-amd}; fi
         bridge=zbtok$node
         subnet=10.232.$node.0/28
+        # The amd182 source-validation inference bridge owns 10.232.182.0/28.
+        if [[ "$node" == 182 ]]; then subnet=10.238.182.0/28; fi
         chain=ZB${node}TOK
         name=zbtoken$node
         dns_unit=zb-token-dns-amd$node
