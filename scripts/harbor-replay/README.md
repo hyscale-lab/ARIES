@@ -89,7 +89,7 @@ are containernetworking/plugins v1.9.1 and awslabs/tc-redirect-tap
 
 To package strict video recordings, run
 `prepare-image-circuit-cohort.py --video CACHE RECEIPTS NEW_BUNDLE`.
-The bundle retains the signed source pair, validated runner, guest image
+The bundle retains the hash-verified source pair, validated runner, guest image
 codec, and public package provenance for each eligible recording. Copy its
 `cni/` directory to a private writable location on the worker. Run
 `provision-pypi-cni.sh PRIVATE_CNI install video-amdNNN`, then
