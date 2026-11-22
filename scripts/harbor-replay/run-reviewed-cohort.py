@@ -114,20 +114,26 @@ def main():
         elif task not in TASKS:
             args.extend(['-os-tools',str(asset/(task+'-debs.tar.gz'))])
         rc=subprocess.run(args,env=env).returncode
-        (first/'driver.exit').write_text(str(rc)+'\n')
-        if rc:raise RuntimeError(f'{trial} exited {rc}')
-        if task in TASKS:
-            checks=verify(first,receipt)
-            (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
-        elif task == 'count-dataset-tokens':
-            checks=cohort_dataset.verify(first,receipt)
-            (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
-        elif task in SOURCE_DEPENDENCY_TASKS:
-            checks=cohort_sparql.verify(first/'events.jsonl',receipt)
-            (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
-        elif task in PYPI_TASKS:
-            checks=cohort_pypi.verify(first/'events.jsonl',receipt,entry['reference_boundaries'],pypi_network,financial_apt)
-            (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
+        status=first/'driver.exit'
+        if rc:
+            status.write_text(str(rc)+'\n')
+            raise RuntimeError(f'{trial} exited {rc}')
+        try:
+            checks=None
+            if task in TASKS:
+                checks=verify(first,receipt)
+            elif task == 'count-dataset-tokens':
+                checks=cohort_dataset.verify(first,receipt)
+            elif task in SOURCE_DEPENDENCY_TASKS:
+                checks=cohort_sparql.verify(first/'events.jsonl',receipt)
+            elif task in PYPI_TASKS:
+                checks=cohort_pypi.verify(first/'events.jsonl',receipt,entry['reference_boundaries'],pypi_network,financial_apt)
+            if checks is not None:
+                (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
+        except Exception:
+            status.write_text('1\n')
+            raise
+        status.write_text('0\n')
 
 
 if __name__=='__main__':
