@@ -113,6 +113,18 @@ TLS service endpoints for PyPI, the public bootstrap and the raw GitHub
 helper. Remove that scope with
 `provision-sparql-cni.sh BUNDLE/cni remove amdNNN` when finished.
 
+For the reviewed CPU Torch trial, use
+`prepare-sparql-cohort.py CACHE RECEIPTS NEW_BUNDLE --task torch-tensor-parallelism`.
+The cache needs the exact Torch adapter and private live log under `torch/`,
+the source pair under `sources/torch-tensor-parallelism/`, and the pinned
+common Ubuntu archive under `sparql/`. In the bundle, provision
+`provision-sparql-cni.sh BUNDLE/cni install amdNNN torch` and select
+`--torch-cni BUNDLE/cni` in the cohort driver. The adapter enforces the
+source's 8 GiB guest envelope, completion boundary, ten live package
+digests and exact output file. The bundle also lists the other four source
+trials pending native fidelity. The CPU index and wheel download hosts use
+a separate CNI scope from the SPARQL profile.
+
 ## Token counting and compiler builds
 
 The token-count replay checks the original Hugging Face dataset and tokenizer

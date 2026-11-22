@@ -12,6 +12,7 @@ from cohort_image_circuit import IMAGE_HELPER, TASKS, digest as file_digest, ver
 
 
 PYPI_TASKS = {'kv-store-grpc', 'financial-document-processor'}
+SOURCE_DEPENDENCY_TASKS = {'sparql-university', 'torch-tensor-parallelism'}
 
 
 def main():
@@ -20,6 +21,7 @@ def main():
     cli.add_argument('assets',type=Path);cli.add_argument('variant',choices=('v1','v2','v3','v4'))
     cli.add_argument('manifest',type=Path)
     cli.add_argument('--sparql-cni',type=Path,help='private pre-provisioned SPARQL network profile')
+    cli.add_argument('--torch-cni',type=Path,help='private pre-provisioned CPU Torch network profile')
     cli.add_argument('--dataset-cni',type=Path,help='private token dataset network profile')
     cli.add_argument('--pypi-cni',type=Path,help='private gRPC and financial PyPI network profile')
     a=cli.parse_args()
@@ -38,12 +40,13 @@ def main():
     entries=json.loads(a.manifest.read_text())
     for entry in entries:
         task=entry['task'];trial=entry['trial_id']
-        if task not in {'constraints-scheduling','regex-log','overfull-hbox','sparql-university','count-dataset-tokens',*TASKS,*PYPI_TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
+        if task not in {'constraints-scheduling','regex-log','overfull-hbox','count-dataset-tokens',*TASKS,*PYPI_TASKS,*SOURCE_DEPENDENCY_TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
             raise ValueError('unexpected trial')
         if task == 'count-dataset-tokens':
             import cohort_dataset
-        if task == 'sparql-university':
+        if task in SOURCE_DEPENDENCY_TASKS:
             import cohort_sparql
+            cni=a.sparql_cni if task == 'sparql-university' else a.torch_cni
         if task in PYPI_TASKS:
             import cohort_pypi
             receipt=cohort_pypi.load_receipt(asset,entry)
@@ -78,7 +81,7 @@ def main():
                         verify(first,receipt)
                     if task == 'count-dataset-tokens':
                         cohort_dataset.verify(first, receipt)
-                    if task == 'sparql-university':
+                    if task in SOURCE_DEPENDENCY_TASKS:
                         cohort_sparql.verify(events,receipt)
                     if task in PYPI_TASKS:
                         cohort_pypi.verify(events,receipt,entry['reference_boundaries'],pypi_network)
@@ -100,8 +103,8 @@ def main():
                 args.extend(['-os-tools',str(archive)])
         elif task == 'count-dataset-tokens':
             args.extend(cohort_dataset.replay_args(asset,receipt,a.dataset_cni))
-        elif task == 'sparql-university':
-            args.extend(cohort_sparql.replay_args(asset,a.sparql_cni))
+        elif task in SOURCE_DEPENDENCY_TASKS:
+            args.extend(cohort_sparql.replay_args(asset,cni,task))
         elif task in PYPI_TASKS:
             args.extend(pypi_args)
         elif task not in TASKS:
@@ -115,7 +118,7 @@ def main():
         elif task == 'count-dataset-tokens':
             checks=cohort_dataset.verify(first,receipt)
             (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
-        elif task == 'sparql-university':
+        elif task in SOURCE_DEPENDENCY_TASKS:
             checks=cohort_sparql.verify(first/'events.jsonl',receipt)
             (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
         elif task in PYPI_TASKS:
