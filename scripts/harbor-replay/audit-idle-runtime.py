@@ -18,6 +18,8 @@ def run(*command):
 def idle(ctr, sockets):
     tasks = {str(sock): run(ctr, "--address", sock, "--namespace", "aries", "tasks", "list", "-q").splitlines()
              for sock in sockets}
+    if any(tasks.values()):
+        raise RuntimeError(f"active guest tasks: {tasks}")
     vmms = {}
     for process in Path("/proc").iterdir():
         if not process.name.isdecimal():
@@ -29,8 +31,8 @@ def idle(ctr, sockets):
         name = Path(filename.removesuffix(" (deleted)")).name
         if name == "firecracker" or name.startswith(".firecracker-real"):
             vmms[process.name] = filename
-    if any(tasks.values()) or vmms:
-        raise RuntimeError(f"active guest discovered: {tasks} {vmms}")
+    if vmms:
+        raise RuntimeError(f"active VMM processes: {vmms}")
     return {"tasks_by_socket": tasks, "vmm_processes": vmms}
 
 
