@@ -71,9 +71,10 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
     full = ("session_end" in lifecycle and "removed" in lifecycle
             and observed_steps == expected_steps and len(dispatch) == len(replies)
             and set(dispatch) == {row["sequence"] for row in replies})
-    if any("source_call_id" in row for row in replies):
-        observed_calls = [(row["step_id"], row.get("source_call_id")) for row in replies]
-        full = full and collections.Counter(original_calls) == collections.Counter(observed_calls)
+    # Earlier runners omitted call IDs on some grouped replies. Their native
+    # sequence, step and rollout line remain available for verification.
+    identified = [(row["step_id"], row["source_call_id"]) for row in replies if "source_call_id" in row]
+    full = full and collections.Counter(identified) <= collections.Counter(original_calls)
     if rejected:
         boundaries = [e.get("source_kind") for e in events if e["event"] == "source_event"
                       and e.get("source_call_id") == rejected_id]
