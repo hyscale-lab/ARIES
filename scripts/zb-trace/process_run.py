@@ -107,6 +107,17 @@ def reconcile(raw, output, meta):
             raise ValueError("tracing missed a required boundary")
     elif meta["status"]=="validated":
         raise ValueError("measurement admission requires traced boundaries")
+    sampled_idle = []
+    if sampled:
+        sampled_gfns = {r["gfn"] for _,tags in sampled for r in tags}
+        for boundary in read(trace):
+            if "window" not in boundary:
+                continue
+            w = boundary["window"]
+            page = w["page_bytes"]
+            stable_idle = sorted(a//page for a in w["idle_gpas"] if a//page in sampled_gfns)
+            sampled_idle.append(dict(begin_ns=w["arm_end_ns"],end_ns=w["scan_begin_ns"],
+                                     stable_idle_gfns=stable_idle))
     sample_rows=[]
     for receipt,tags in sampled:
         by_state={}
@@ -136,6 +147,7 @@ def reconcile(raw, output, meta):
         write(stage/"classes.jsonl",classes)
         if sample_rows:
             write(stage/"sampled-pages.jsonl",sample_rows)
+            write(stage/"sampled-idle.jsonl",sampled_idle)
         stage.rename(output)
 
 
