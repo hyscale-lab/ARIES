@@ -1,0 +1,11 @@
+{
+  "name": "sandbox",
+  "description": "Cold and warm end-to-end latency of the microbenchmark tasks for each harness, with the sandbox as a plain Kubernetes pod, as an agent-sandbox Sandbox, and claimed from an agent-sandbox warm pool, each under runc, gVisor and Kata where it applies; the model held constant by replaying the 20261115-e5-2630v3 recordings.",
+  "harnesses": ["openclaw", "hermes"],
+  "setups": ["k8s", "k8s-agent-sandbox", "k8s-agent-sandbox-gvisor", "k8s-agent-sandbox-kata", "k8s-warm-pool", "k8s-warm-pool-gvisor", "k8s-warm-pool-kata"],
+  "tasks": ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"],
+  "repetitions": 5,
+  "warm": true,
+  "record_warm": true,
+  "bridge_repository": "aries-local/aries-bridge"
+}
