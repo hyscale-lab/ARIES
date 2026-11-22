@@ -87,6 +87,24 @@ scoped firewall rule can be removed with
 are containernetworking/plugins v1.9.1 and awslabs/tc-redirect-tap
 34bf829e9a5c as pinned by firecracker-containerd.
 
+To package strict video recordings, run
+`prepare-image-circuit-cohort.py --video CACHE RECEIPTS NEW_BUNDLE`.
+The bundle retains the signed source pair, validated runner, guest image
+codec, and public package provenance for each eligible recording. Copy its
+`cni/` directory to a private writable location on the worker. Run
+`provision-pypi-cni.sh PRIVATE_CNI install video-amdNNN`, then
+`run-reviewed-cohort.py RUNTIME UNIT BUNDLE VARIANT BUNDLE/manifest.json --video-cni PRIVATE_CNI`.
+The verifier compares the restored guest's image bytes with each original
+attachment, verifies the input video and final TOML, and checks the wheel
+hashes and package service reachability across restore.
+
+Selected video, circuit and token-count recordings need the Debian
+Bookworm GNU patch package. Build the verified archive with
+`prepare-os-tools.py bookworm-patch circuit-patch-debs.tar.gz` using
+Bookworm APT indices, or add `--package-dir RETAINED_DEBS` to use locally
+archived package bytes. The same option reconstructs the token-count curl
+archive with `dataset-bookworm-curl`.
+
 The SPARQL runner preserves recorded native web-search completion events
 and their source gaps as host boundaries. Their start timestamps and results
 are absent from the original recordings. Guest pip and direct PyPI requests
