@@ -347,10 +347,10 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		return imageCall(c, origin, ts, sequence)
 	}
 	var args struct {
-		Cmd          string `json:"cmd"`
-		Workdir      string `json:"workdir"`
-		OutputTokens int    `json:"max_output_tokens"`
-		YieldMs      int    `json:"yield_time_ms"`
+		Cmd          string  `json:"cmd"`
+		Workdir      string  `json:"workdir"`
+		OutputTokens int     `json:"max_output_tokens"`
+		YieldMs      *uint64 `json:"yield_time_ms"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(c.call.Args))
 	dec.DisallowUnknownFields()
@@ -373,12 +373,17 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		return replay.Call{Operation: "ApplyPatch", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Body: []byte(patch), ResponseStdout: []byte(body)}, nil
 	}
 	header, body, found := strings.Cut(c.output, "\nOutput:\n")
-	if state := runningHeader.FindStringSubmatch(header); len(state) == 2 && found && args.Cmd != "" && path.IsAbs(args.Workdir) && args.YieldMs > 0 {
+	if state := runningHeader.FindStringSubmatch(header); len(state) == 2 && found && args.Cmd != "" && path.IsAbs(args.Workdir) {
 		id, err := strconv.Atoi(state[1])
 		if err != nil || id == 0 {
 			return replay.Call{}, errors.New("invalid running session ID")
 		}
-		return replay.Call{Operation: "StartProcess", SessionID: id, YieldTime: time.Duration(args.YieldMs) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: true, ExitCode: ProcessRunning, ResponseStdout: []byte(body)}, nil
+		// Codex 0.151.0 default_exec_yield_time_ms and Linux clamp_yield_time.
+		yield := uint64(10000)
+		if args.YieldMs != nil {
+			yield = min(30000, max(250, *args.YieldMs))
+		}
+		return replay.Call{Operation: "StartProcess", SessionID: id, YieldTime: time.Duration(yield) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: true, ExitCode: ProcessRunning, ResponseStdout: []byte(body)}, nil
 	}
 	match := exitHeader.FindStringSubmatch(header)
 	if !found || len(match) != 2 || args.Cmd == "" || !path.IsAbs(args.Workdir) {
@@ -400,7 +405,7 @@ func processPoll(c indexedCall, origin, ts time.Time, sequence uint64) (replay.C
 	}
 	d := json.NewDecoder(bytes.NewReader(c.call.Args))
 	d.DisallowUnknownFields()
-	if err := d.Decode(&args); err != nil || args.SessionID <= 0 || args.Chars != "" || args.YieldMs <= 0 {
+	if err := d.Decode(&args); err != nil || args.SessionID <= 0 || args.Chars != "" || args.YieldMs < 0 {
 		return replay.Call{}, errors.New("only empty, bounded native process polls are reviewed")
 	}
 	header, body, ok := strings.Cut(c.output, "\nOutput:\n")
