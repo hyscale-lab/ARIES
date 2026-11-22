@@ -31,6 +31,18 @@ def make(sources, inventory, reviewed, outputs):
             attempts = sorted((outputs / "attempts").glob(f"{task}-{ident}-*.json"))
             if attempts:
                 row["attempts"] = [str(p.relative_to(outputs)) for p in attempts]
+            sparql_path = outputs / "sparql" / (ident+".json")
+            if task == "sparql-university" and sparql_path.exists():
+                proof = json.loads(sparql_path.read_text())
+                row["source_record"] = str(sparql_path.relative_to(outputs))
+                if proof.get("replay"):
+                    live = proof["replay"]
+                    row.update(receipt=row["source_record"], external_actions=proof["external_actions"],
+                               live_guest_calls=len(live["tools"]),
+                               state="validated_guest_exits_external_response_unavailable" if
+                               live["session_completed"] and live["all_observed_exits_match"] else "partial_or_divergent")
+                    rows.append(row)
+                    continue
             if path.exists():
                 r = json.loads(path.read_text())
                 row["receipt"] = path.name
