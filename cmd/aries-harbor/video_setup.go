@@ -34,3 +34,6 @@ const videoHarnessTrial = "07e979df-d2c5-4b88-9638-abcc492c3dc3"
 const videoHarnessDirectory = `install -d -m 0755 /tmp/codex-home/.tmp
 test -d /tmp/codex-home/.tmp
 printf '%s\n' 'prepared /tmp/codex-home/.tmp; original transient harness contents unavailable'`
+
+// Source 80f95afc invokes the GNU patch command when writing its analyzer.
+const videoGNUPatchTrial = "80f95afc-7eb6-4fa4-9c39-13abb473cdc8"

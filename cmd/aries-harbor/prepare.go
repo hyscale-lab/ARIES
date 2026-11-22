@@ -75,7 +75,7 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	if r.Trial == videoHarnessTrial {
 		task.initialCheck += "\n" + videoHarnessDirectory
 	}
-	if r.Trial == debianPatchTrial || r.Trial == videoHarnessTrial {
+	if r.Trial == debianPatchTrial || r.Trial == videoHarnessTrial || r.Trial == videoGNUPatchTrial {
 		task.packagesField = "debian_patch_archive_sha256"
 		task.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
 		task.initialCheck += "\ntest \"$(command -v patch)\" = /usr/bin/patch\ndpkg-query -W patch"
