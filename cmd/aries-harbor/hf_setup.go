@@ -62,6 +62,24 @@ rm -r /tmp/aries-hf-setup
 
 func hfSourceSetup(trial string) string {
 	extra := ""
+	// This recording resolved its own sandbox hostname to loopback at step 24.
+	if trial == "f0d5e4b5-b20d-40bf-89ec-6483b65525dc" {
+		extra = `
+python - <<'HOSTCHECK'
+from pathlib import Path
+import socket
+name = socket.gethostname()
+assert name and not any(c.isspace() or c == "#" for c in name)
+try:
+    address = socket.gethostbyname(name)
+except socket.gaierror:
+    with Path("/etc/hosts").open("a") as hosts:
+        hosts.write("\n127.0.0.1 " + name + "\n")
+assert socket.gethostbyname(name) == "127.0.0.1"
+print("Verified original sandbox hostname resolves to loopback")
+HOSTCHECK
+`
+	}
 	if trial == "071ce48d-3de4-4c02-9e42-3eb64933acd2" {
 		extra = `
 alias_dir=/root/.codex/tmp/arg0/codex-arg03HR69E
