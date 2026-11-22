@@ -220,9 +220,19 @@
     ],
     "trials": [
       {
+        "trial": "07ed20ac-d63b-4d58-baba-e4c5b47f5299",
+        "trajectory_sha256": "1fba6dd0606edd80ce80bdd000293fd0199223eef86df99cd7236de8c9cdeec3",
+        "rollout_sha256": "cd2f76fb67b37e3c90f04d7a74966ade97a4ae41aeab7ff21cb300924d5fe13f"
+      },
+      {
         "trial": "4bb52b55-6168-4724-8bb5-208e4d8ceb41",
         "trajectory_sha256": "b167d7ff032bf48a877d3651abdc4e46cbede494652e0c7be21992cf2b325518",
         "rollout_sha256": "6dca30e99358df93d00a2fbed7cff856f748907b838974586348d4dc82d073fa"
+      },
+      {
+        "trial": "99c36c5d-aba5-476b-93b2-d08a39c7a353",
+        "trajectory_sha256": "276dd959b2ea6753982138f3ff6c567e5da464460473ee8e5c55dd8482d67172",
+        "rollout_sha256": "ffefe75734e28a428247da5d253209164a5256935182a1bda276721a547c4b87"
       },
       {
         "trial": "b43d6be8-70d4-44fb-97a6-358b6bb55b3f",
@@ -241,7 +251,8 @@
     "tools": [
       "exec_command",
       "update_plan",
-      "write_stdin"
+      "write_stdin",
+      "web_search_call"
     ]
   },
   {

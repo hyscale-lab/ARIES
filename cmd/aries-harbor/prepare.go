@@ -46,6 +46,19 @@ c97e85dbcdd756758f8a80f4db5fd5c1dcacee79298e4d2262f46de5ff680b50  bob_calendar.i
 ARIESSHA`},
 }
 
+const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
+
+// Debian Bookworm's signed Packages index identifies patch_2.7.6-7_amd64.deb.
+// Only this original circuit session invokes GNU patch to apply local gate diffs.
+func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
+	task, ok := taskSetups[r.Task]
+	if r.Trial == debianPatchTrial {
+		task.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
+		task.initialCheck += "\ntest \"$(command -v patch)\" = /usr/bin/patch\ndpkg-query -W patch"
+	}
+	return task, ok
+}
+
 func checked(ctx context.Context, m *vhive.Manager, id string, cmd core.Command) (string, error) {
 	res, err := m.Exec(ctx, id, cmd)
 	if err != nil || res.ExitCode != 0 {
@@ -86,7 +99,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 		}
 		return "source_git_ready", json.RawMessage(out), nil
 	}
-	task, ok := taskSetups[r.Task]
+	task, ok := sourceSetup(r)
 	if !ok {
 		return "", nil, fmt.Errorf("no ready-state definition for %s", r.Task)
 	}
@@ -134,7 +147,7 @@ ARIESPATH`}})
 command -v node codex rg python3
 test "$(node --version)" = v22.23.2
 rg --version | head -1`
-	if task.packagesSHA != "" {
+	if task.packagesSHA != "" && r.Trial != debianPatchTrial {
 		state += "\ncommand -v git patch perl\ndpkg-query -W python3 git patch perl-base"
 	}
 	out, err := checked(ctx, m, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", state}, Dir: r.Workdir})

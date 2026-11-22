@@ -48,7 +48,7 @@ func command(ctx context.Context) error {
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
 	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
-	osTools := flag.String("os-tools", "", "pinned task-specific offline Ubuntu package archive")
+	osTools := flag.String("os-tools", "", "pinned task-specific offline package archive")
 	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
 	probe := flag.String("guest-probe", "", "optional guest telemetry executable for diagnostic runs")
 	sampler := flag.String("sampler", "", "host sample_vmm.py")
@@ -118,7 +118,8 @@ func command(ctx context.Context) error {
 	if needsImage && *imageHelper == "" {
 		return errors.New("this task requires the pinned in-guest -image-helper")
 	}
-	if r.Task != "fix-git" && (*codexTools == "" || (taskSetups[r.Task].packagesSHA != "" && *osTools == "")) {
+	readySetup, _ := sourceSetup(r)
+	if r.Task != "fix-git" && (*codexTools == "" || (readySetup.packagesSHA != "" && *osTools == "")) {
 		return errors.New("missing pinned guest tool bundle for this task")
 	}
 	if (*sampler == "") != (*samples == "") {
