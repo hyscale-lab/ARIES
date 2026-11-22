@@ -93,6 +93,8 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
         "observer": first["observer"], "session_completed": bool(full),
         "diagnostic_process_drift": first.get("diagnostic_process_drift",False),
+        "diagnostic_opam_log": first.get("diagnostic_opam_log",False),
+        "opam_log_identity_observations": [e for e in events if e["event"] in ("diagnostic_opam_log_discovery","diagnostic_opam_log_read")],
         "additional_process_observations": [
             {k:v for k,v in e.items() if k not in ("stdout","stderr")} for e in events
             if e["event"] == "diagnostic_process_observation"
