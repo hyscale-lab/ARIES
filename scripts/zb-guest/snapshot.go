@@ -46,6 +46,7 @@ type sample struct {
 	Sources          map[string]string `json:"sources"`
 	Errors           map[string]string `json:"source_errors"`
 	PageBytes        int               `json:"page_bytes"`
+	RegularFiles     *regularMapScan   `json:"regular_files,omitempty"`
 	PFNs             *pfnScan          `json:"pfn_scan,omitempty"`
 }
 
@@ -105,6 +106,10 @@ func snapshot(start, count uint64) sample {
 		if err != nil {
 			out.Errors["kpageflags_clock_end"] = err.Error()
 		}
+	}
+	if os.Getenv("ZB_REGULAR_MAPS") == "1" {
+		files := collectRegularFiles()
+		out.RegularFiles = &files
 	}
 	out.EndNS, err = monotonic()
 	if err != nil {

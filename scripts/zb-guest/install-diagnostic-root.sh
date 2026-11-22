@@ -9,13 +9,16 @@ staging=$(mktemp -d "$(dirname "$dest")/.zb-root.XXXXXXXX")
 trap 'rm -d "$staging" 2>/dev/null || true' EXIT
 cp --sparse=always --reflink=auto "$source_image" "$staging/image"
 chmod u+w "$staging/image"
-cat > "$staging/unit" <<'EOF'
+regular_maps=${ZB_REGULAR_MAPS:-0}
+[[ "$regular_maps" =~ ^[01]$ ]]
+cat > "$staging/unit" <<EOF
 [Unit]
 Description=Private guest memory telemetry
 Before=firecracker.target
 After=local-fs.target
 
 [Service]
+Environment=ZB_REGULAR_MAPS=$regular_maps
 ExecStart=/usr/local/bin/zb-guest serve --host-vsock --pfn-count 524288
 
 [Install]
