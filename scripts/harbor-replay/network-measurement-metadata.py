@@ -8,6 +8,7 @@ import cohort_dataset
 import cohort_image_circuit
 import cohort_pypi
 import cohort_sparql
+import cohort_video
 
 
 def digest(path):
@@ -43,6 +44,8 @@ def metadata(raw, bundle, deployment):
             checks = cohort_sparql.verify(log,receipt)
         elif task == "count-dataset-tokens":
             checks = cohort_dataset.verify(raw,receipt)
+        elif task == cohort_video.TASK:
+            checks = cohort_video.verify(raw,receipt)
         else:
             raise ValueError(f"no network measurement verifier for {task}")
     if checks != json.loads((raw/"fidelity-checks.json").read_text()):
