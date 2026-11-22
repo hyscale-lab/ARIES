@@ -23,6 +23,14 @@ func listedCoqLog(output string) (string, error) {
 	if !ok || !strings.Contains(prefix, "retrieved coq.8.16.1") {
 		return "", fmt.Errorf("OPAM package retrieval and directory listing are required")
 	}
+	stem, err := listedCoqFiles(listing)
+	if err != nil {
+		return "", err
+	}
+	return "/root/.opam/log/" + stem + ".out", nil
+}
+
+func listedCoqFiles(listing string) (string, error) {
 	var stem string
 	found := make(map[string]bool)
 	for _, line := range strings.Split(listing, "\n") {
@@ -43,7 +51,7 @@ func listedCoqLog(output string) (string, error) {
 	if len(found) != 3 {
 		return "", fmt.Errorf("OPAM output, environment and metadata files were not all observed")
 	}
-	return "/root/.opam/log/" + stem + ".out", nil
+	return stem, nil
 }
 
 type compilerGuestExec func(context.Context, replay.Call) (core.CommandResult, error)

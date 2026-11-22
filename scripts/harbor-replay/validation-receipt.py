@@ -94,6 +94,8 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
         "observer": first["observer"], "session_completed": bool(full),
         "diagnostic_process_drift": first.get("diagnostic_process_drift",False),
         "diagnostic_opam_log": first.get("diagnostic_opam_log",False),
+        "diagnostic_opam_pid": first.get("diagnostic_opam_pid",False),
+        "opam_pid_identity_observations": [e for e in events if e["event"] in ("diagnostic_opam_pid_discovery","diagnostic_opam_pid_check")],
         "opam_log_identity_observations": [e for e in events if e["event"] in ("diagnostic_opam_log_discovery","diagnostic_opam_log_read")],
         "additional_process_observations": [
             {k:v for k,v in e.items() if k not in ("stdout","stderr")} for e in events

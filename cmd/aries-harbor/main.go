@@ -59,6 +59,7 @@ func command(ctx context.Context) error {
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
+	opamPID := flag.Bool("diagnostic-opam-pid", false, "bind the recorded compiler signal-zero check and progress reads to the observed guest installer")
 	opamLog := flag.Bool("diagnostic-opam-log", false, "bind the original compiler progress-log name to its observed OPAM file in a diagnostic")
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
@@ -114,6 +115,9 @@ func command(ctx context.Context) error {
 	if o.VCPUs != r.VCPUs || o.MemoryMB != r.MemoryMiB || *storage != r.StorageMiB {
 		return fmt.Errorf("trial %s requires %d vCPUs, %d MiB memory and %d MiB storage", r.Trial, r.VCPUs, r.MemoryMiB, r.StorageMiB)
 	}
+	if *opamPID && (!*processDrift || r.Trial != compilerWaitTrial) {
+		return errors.New("OPAM installer identity mapping requires the uninstrumented 921 process diagnostic")
+	}
 	if *opamLog && (!*processDrift || r.Trial != compilerLogTrial) {
 		return errors.New("OPAM log identity mapping requires the uninstrumented BF3 process diagnostic")
 	}
@@ -167,10 +171,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *imageHelper, *videoDifferences, *processDrift, *opamLog, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, imageHelper string, videoDifferences, processDrift, opamLog bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, imageHelper string, videoDifferences, processDrift, opamLog, opamPID bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -182,7 +186,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if err != nil {
 			return err
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
@@ -350,6 +354,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			}
 			return nil
 		},
+	}
+	if opamPID {
+		h.Exec = mapCompilerWait(h.Exec, log.Encode)
 	}
 	if opamLog {
 		h.Exec = mapCompilerLog(h.Exec, log.Encode)

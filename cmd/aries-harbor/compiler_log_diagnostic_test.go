@@ -51,3 +51,47 @@ func TestCompilerLogDiagnosticUsesOneObservedTrio(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnosticInstallerPIDAndLogMustAgree(t *testing.T) {
+	const format = "%s 10121 01:04 7.6 0.1 opam opam install --switch=compcert-3.13.1 --jobs=2 coq.8.16.1 menhir.20230608 dune.3.15.3\n"
+	sourcePS, livePS := fmt.Sprintf(format, "10691"), fmt.Sprintf(format, "3238")
+	sourceFiles, liveFiles := testCoqListing(originalCoqBuildStem), testCoqListing("coq-3238-58bc74")
+	var last string
+	exec := mapCompilerWait(func(_ context.Context, call replay.Call) (core.CommandResult, error) {
+		last = call.Script
+		switch call.ToolCallID {
+		case "call_FwQedwl1g7q1DZooMva0h7DK":
+			return core.CommandResult{Stdout: livePS}, nil
+		case "call_Fc8R3gqnH98Oonmr8TZa6TLF":
+			return core.CommandResult{Stdout: liveFiles}, nil
+		}
+		return core.CommandResult{}, nil
+	}, func(any) error { return nil })
+	discover := replay.Call{ToolCallID: "call_FwQedwl1g7q1DZooMva0h7DK", ResponseStdout: []byte(sourcePS)}
+	list := replay.Call{ToolCallID: "call_Fc8R3gqnH98Oonmr8TZa6TLF", ResponseStdout: []byte(sourceFiles)}
+	check := replay.Call{ToolCallID: "call_XvxnxIIgvuE5dTlYGPEXcnEr", Script: "while kill -0 10691 2>/dev/null; do sleep 10; done"}
+	read := replay.Call{ToolCallID: "call_Ene8L95LHhXkOg48Fefv9dFv", Script: "tail -n 2 " + coqBuildLogDir + originalCoqBuildStem + ".out"}
+	for _, call := range []replay.Call{discover, list, check} {
+		if _, err := exec(t.Context(), call); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if last != "while kill -0 3238 2>/dev/null; do sleep 10; done" {
+		t.Fatal(last)
+	}
+	if _, err := exec(t.Context(), read); err != nil || last != "tail -n 2 /tmp/compcert-opam/log/coq-3238-58bc74.out" {
+		t.Fatal(last, err)
+	}
+	liveFiles = testCoqListing("coq-9999-58bc74")
+	if _, err := exec(t.Context(), list); err == nil {
+		t.Fatal("accepted log belonging to another installer")
+	}
+	livePS += fmt.Sprintf(format, "4001")
+	if _, err := exec(t.Context(), discover); err == nil {
+		t.Fatal("accepted ambiguous installer command line")
+	}
+	check.Script = "while kill -9 10691 2>/dev/null; do sleep 10; done"
+	if _, err := exec(t.Context(), check); err == nil {
+		t.Fatal("accepted a changed liveness check")
+	}
+}
