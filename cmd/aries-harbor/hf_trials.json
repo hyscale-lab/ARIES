@@ -1,0 +1,46 @@
+{
+  "071ce48d-3de4-4c02-9e42-3eb64933acd2": {
+    "dependency": "waitress==3.0.2",
+    "files": {
+      "app.py": "aee590a9eefebdebb9c8166ba7ee722b743a82e8ac289e39d8b687d0a015fac0",
+      "download_model.py": "b0de23bb30f5162315062ff2c82e7e6c2c521954bc8c2d0407ca76efbad8a2b8",
+      "requirements.txt": "9eb2120ed6b52f02b93d89fa9983bdd310514721a3397b7720a54ed06a4532f9",
+      "README.md": "671f70aca56327d6791fc29f204f0cdb3fa458cd6198138af099ef48ea9cb31b"
+    }
+  },
+  "249f2934-972f-4c61-af3d-0315ce5003c0": {
+    "dependency": "gunicorn==26.2.0",
+    "files": {
+      "app.py": "010b3fe3b654fd0477e5b1828127bb9c70d7f4ecf7e2b11c3e52a3a3a6bf6e33",
+      "download_model.py": "468db4ec8ee7f7fdbdecf176b71187b977c0a6f06d2b5505041e5f8e139d4fc4",
+      "requirements.txt": "e9c7eb5caaf97c4bc5427713dad2b6724de885cc67d275d2186e30ed01d8c215",
+      "README.md": "49d03389372561e848efab7f60e55dfc6ca72a3a0bf5265fc6c714cadbee862d"
+    }
+  },
+  "85e3b0db-f1cb-43b5-9f8a-a2333db196c1": {
+    "dependency": "gunicorn==26.2.0",
+    "files": {
+      "app.py": "5b638d4fa5fb5cb07fcaa1ab5d974d1737678a87ba05399b10705edde2b0074c",
+      "download_model.py": "c62fc261ea63da0ab84996684212fc7b0adb15527c5fbe80e36b6b14af7aeb3d",
+      "requirements.txt": "767317c3046a34796849d8a35e2ce0a11b2329bd165b63fbba3fa05bbf9f6ef0",
+      "README.md": "88aa4110a3b71a51fe69d342a56babb7ad22d8f70f1540070ac0c89324a94921"
+    }
+  },
+  "b615a3ec-fae8-4198-ae4c-0aedf9c3e25b": {
+    "dependency": "",
+    "files": {
+      "app.py": "986aedc1ed198b673cd05fe0173deba5b81b9eb3b4d58b283d480e1db518ddec",
+      "download_model.py": "860177462a3f96bf739d1dda09b209964223bf9fc3fc6185946663cea114b6a0",
+      "requirements.txt": "bf026892f936fff1a6874d57566b79c61ca9862beef92e8ec379ea2e5ba76e78",
+      "README.md": "3de6b68ee4c78a59fa7b9f36bbdac9700e2364f5988a2863210d1cf7e581aa3a"
+    }
+  },
+  "f0d5e4b5-b20d-40bf-89ec-6483b65525dc": {
+    "dependency": "waitress==3.0.2",
+    "files": {
+      "app.py": "0b5cc6d227466414da9ae130b8fe8604d0fc48d73fd2128d9f81542549d631bc",
+      "requirements.txt": "a3c94fd0e5ea7af958876c6e36064ae371c5b4d508ab00b293f3172ad59d5bfd",
+      "README.md": "8040a0bb18aa5ef0c2b226aa49c96175db955dac477f1d8c10b01ca79d49ab29"
+    }
+  }
+}

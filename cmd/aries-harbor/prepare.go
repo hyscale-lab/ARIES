@@ -58,6 +58,10 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
+	if r.Task == hfTask {
+		_, ok = hfTrials[r.Trial]
+		task.initialCheck += hfSourceSetup(r.Trial)
+	}
 	if profile, ok := financialAptTrials[r.Trial]; ok {
 		task.initialCheck += financialAptSetup(profile)
 	}
@@ -271,7 +275,7 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
 	if r.Task == hfTask {
-		cmd += hfFinal
+		cmd += hfFinalCheck(r.Trial)
 	}
 	if r.Task == financialTask {
 		cmd += financialFinalCheck

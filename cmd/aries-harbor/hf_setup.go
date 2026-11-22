@@ -1,5 +1,28 @@
 package main
 
+import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+//go:embed hf_trials.json
+var hfProfilesJSON []byte
+
+type hfSource struct {
+	Dependency string            `json:"dependency"`
+	Files      map[string]string `json:"files"`
+}
+
+var hfTrials = func() map[string]hfSource {
+	var profiles map[string]hfSource
+	if err := json.Unmarshal(hfProfilesJSON, &profiles); err != nil {
+		panic(err)
+	}
+	return profiles
+}()
+
 const hfTask = "hf-model-inference"
 const hfEnvironmentSHA = "04ac35b54101efa80a45737dac838f3e51dfbd481f079be1495ffdfe4f05732a"
 
@@ -34,33 +57,53 @@ assert actual == expected, (actual.items() - expected.items(), expected.items() 
 print(json.dumps(actual, sort_keys=True))
 PYCHECK
 rm -r /tmp/aries-hf-setup
+`,
+}
+
+func hfSourceSetup(trial string) string {
+	extra := ""
+	if trial == "071ce48d-3de4-4c02-9e42-3eb64933acd2" {
+		extra = `
 alias_dir=/root/.codex/tmp/arg0/codex-arg03HR69E
 target=/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex
 test -x "$target"
 mkdir -p "$alias_dir"
 ln -s "$target" "$alias_dir/apply_patch"
+`
+	}
+	if dep := hfTrials[trial].Dependency; dep != "" {
+		extra += fmt.Sprintf(`
 test ! -e /etc/pip.conf
-printf 'waitress==3.0.2\n' > /etc/aries-hf-constraints.txt
-printf '[install]\nconstraint = /etc/aries-hf-constraints.txt\n' > /etc/pip.conf`,
+echo '%s' > /etc/aries-hf-constraints.txt
+printf '[install]\nconstraint = /etc/aries-hf-constraints.txt\n' > /etc/pip.conf`, dep)
+	}
+	return extra
 }
 
-const hfFinal = `
-sha256sum -c <<'HASHES'
-aee590a9eefebdebb9c8166ba7ee722b743a82e8ac289e39d8b687d0a015fac0  app.py
-b0de23bb30f5162315062ff2c82e7e6c2c521954bc8c2d0407ca76efbad8a2b8  download_model.py
-9eb2120ed6b52f02b93d89fa9983bdd310514721a3397b7720a54ed06a4532f9  requirements.txt
-671f70aca56327d6791fc29f204f0cdb3fa458cd6198138af099ef48ea9cb31b  README.md
-7c3919835e442510166d267fe7cbe847e0c51cd26d9ba07b89a57b952b49b8aa  model_cache/sentiment_model/model.safetensors
+func hfFinalCheck(trial string) string {
+	profile := hfTrials[trial]
+	var cmd strings.Builder
+	cmd.WriteString("\nsha256sum -c <<'HASHES'\n")
+	for _, name := range []string{"app.py", "download_model.py", "requirements.txt", "README.md"} {
+		if digest, ok := profile.Files[name]; ok {
+			fmt.Fprintf(&cmd, "%s  %s\n", digest, name)
+		}
+	}
+	cmd.WriteString(`7c3919835e442510166d267fe7cbe847e0c51cd26d9ba07b89a57b952b49b8aa  model_cache/sentiment_model/model.safetensors
 HASHES
-python - <<'PYRESULT'
-from importlib.metadata import version
+`)
+	if name, version, ok := strings.Cut(profile.Dependency, "=="); ok {
+		fmt.Fprintf(&cmd, "python -c 'from importlib.metadata import version; assert version(%q) == %q'\n", name, version)
+	}
+	cmd.WriteString(`python - <<'PYRESULT'
 import requests
-assert version("waitress") == "3.0.2"
 r = requests.post("http://127.0.0.1:5000/sentiment", json={"text":"I absolutely love this!"}, timeout=10)
 r.raise_for_status()
 assert r.json()["sentiment"] == "positive"
 print("Guest sentiment service returned positive")
-PYRESULT`
+PYRESULT`)
+	return cmd.String()
+}
 
 const hfNetworkProbe = `import json
 from urllib.request import urlopen
