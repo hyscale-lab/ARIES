@@ -7,14 +7,15 @@ from pathlib import Path
 def make(sources, inventory, reviewed, outputs):
     inspected = {(r["task"], r["trial"]): r for r in inventory}
     bound = {(w["task"], t["trial"]) for w in reviewed for t in w["trials"]}
-    held = {
+    unsafe_goals = {"break-filter-js-from-html", "crack-7z-hash"}
+    require_review = {
         "break-filter-js-from-html": "Recorded task asks for a sanitization bypass.",
         "crack-7z-hash": "Recorded task asks for password cracking.",
-        "git-leak-recovery": "Recorded task asks to recover secrets from Git history.",
+        "git-leak-recovery": "Review each original command and any synthetic recovered secret before admitting a live credential-remediation workflow.",
         "fix-code-vulnerability": "Original command sequence lacks a review isolating defensive code edits from vulnerability reproduction.",
         "filter-js-from-html": "Original command sequence lacks a review isolating defensive filtering from executable attack tests.",
-        "protein-assembly": "Original sequence engineering and synthesis work has not been admitted for live replay.",
-        "dna-assembly": "Original sequence-specific assembly and primer design has not been admitted for live replay.",
+        "protein-assembly": "Fluorescent fusion work awaits source-specific review of substrates, original calls, and external dependencies.",
+        "dna-assembly": "Fluorescent and tag marker assembly awaits source-specific review of substrates, original calls, and external dependencies.",
     }
     rows = []
     for workload in sources["workloads"]:
@@ -35,8 +36,9 @@ def make(sources, inventory, reviewed, outputs):
                 row["live_guest_calls"] = len(r["tools"])
             elif row["reviewed_dispatch"]:
                 row["state"] = "source_bound_awaiting_validation"
-            elif task in held:
-                row.update(state="metadata_only", reason=held[task])
+            elif task in require_review:
+                row.update(state="excluded_unsafe_goal" if task in unsafe_goals else "source_review_pending",
+                           reason=require_review[task])
             else:
                 ops = sorted(set(item["tool_counts"]) - {"exec_command", "update_plan"}) if item else []
                 row.update(state="unsupported_or_unreviewed",
