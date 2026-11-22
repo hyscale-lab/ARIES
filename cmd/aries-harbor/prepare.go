@@ -79,7 +79,7 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 		task.packagesField = "debian_curl_archive_sha256"
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
-	if r.Trial == videoHarnessTrial || r.Trial == datasetPatchDiscoveryTrial {
+	if r.Trial == videoHarnessTrial || r.Trial == datasetPatchDiscoveryTrial || r.Trial == financialHarnessTrial {
 		task.initialCheck += "\n" + sourceHarnessDirectory
 	}
 	if r.Trial == debianPatchTrial || r.Trial == videoHarnessTrial || r.Trial == videoGNUPatchTrial || r.Trial == datasetPatchDiscoveryTrial {

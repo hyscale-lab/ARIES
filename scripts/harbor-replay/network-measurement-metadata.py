@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import cohort_dataset
+import cohort_image_circuit
 import cohort_pypi
 import cohort_sparql
 
@@ -34,7 +35,9 @@ def metadata(raw, bundle, deployment):
     else:
         reference = entry["reference_receipt"]
         receipt = entry["receipt"]
-        if task in cohort_sparql.PROFILES:
+        if task in cohort_image_circuit.TASKS:
+            checks = cohort_image_circuit.verify(raw,receipt)
+        elif task in cohort_sparql.PROFILES:
             checks = cohort_sparql.verify(log,receipt)
         elif task == "count-dataset-tokens":
             checks = cohort_dataset.verify(raw,receipt)

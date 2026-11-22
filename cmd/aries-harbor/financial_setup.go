@@ -39,6 +39,9 @@ print("17 original-sized, hash-verified files restored under their recorded name
 FINANCIAL`,
 }
 
+// The source searches /tmp/codex-home and observes a successful, empty find result.
+const financialHarnessTrial = "dce59078-0f61-4eac-92f9-3b2728e4ef28"
+
 const financialMuPDFTrial = "3e740f93-fb59-47e8-9033-bcadb10a87dd"
 
 const financialTempAllocation = `
