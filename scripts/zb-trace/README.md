@@ -50,6 +50,17 @@ including harness activity and background work, belongs to the corresponding
 observation envelope. The driver event log gives the narrower command and
 replay intervals.
 
+For a separate intra-tool diagnostic, pass `-intra-tool-step 12
+-intra-tool-interval 1s -intra-tool-windows 3` to the traced replay. The driver
+waits for the real reply between captures, caps additional freezes at the
+requested count, and records reply time in the execution goroutine. Each
+`intra-tool` boundary collects and rearms the selected step. The last
+`post-tool` boundary captures the tail. A live reply can race an already
+started capture, so inspect each pause and reply timestamp. Summarize the
+selected call with `python3 scripts/zb-trace/analyze_intra_tool.py RUN_DIR`.
+Extra freezes perturb execution. Keep these receipts outside primary latency
+comparisons and retain elapsed and pause-adjusted tool time.
+
 Only stable, exclusive, resident host LRU base pages in the captured RAM
 slots are classifiable. The log preserves newly resident pages, changed
 mappings, and other unsupported cases as unknown. An accessed idle bit can

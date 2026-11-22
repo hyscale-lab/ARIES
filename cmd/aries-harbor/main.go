@@ -42,6 +42,9 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
+	intraStep := flag.Int("intra-tool-step", 0, "recorded step for experimental intra-tool tracing")
+	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
+	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
 	osTools := flag.String("os-tools", "", "pinned task-specific offline Ubuntu package archive")
 	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
@@ -99,15 +102,25 @@ func command(ctx context.Context) error {
 	if (*sampler == "") != (*samples == "") {
 		return errors.New("provide -sampler and -samples together")
 	}
+	var intraTool *harbor.IntraToolOptions
+	if *intraStep != 0 {
+		if *observer == "" {
+			return errors.New("intra-tool tracing requires an observer")
+		}
+		intraTool = &harbor.IntraToolOptions{Step: *intraStep, Interval: *intraInterval, Windows: *intraWindows}
+		if err := intraTool.Validate(r); err != nil {
+			return err
+		}
+	}
 	f, err := os.OpenFile(*log, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *storage, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools string, storage int, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools string, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -223,6 +236,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	h := harbor.Hooks{
+		IntraTool: intraTool,
 		Record: func(e harbor.Receipt) error { return log.Encode(e) },
 		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
 			return m.Exec(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir})
@@ -252,6 +266,12 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			}
 			return nil
 		},
+	}
+	if intraTool != nil {
+		if err := log.Encode(map[string]any{"event": "intra_tool_diagnostic", "step_id": intraTool.Step,
+			"interval_ns": intraTool.Interval.Nanoseconds(), "maximum_captures": intraTool.Windows}); err != nil {
+			return err
+		}
 	}
 	if err := harbor.Run(ctx, r, h); err != nil {
 		return err

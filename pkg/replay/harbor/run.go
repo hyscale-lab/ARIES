@@ -15,9 +15,10 @@ import (
 // Hooks stay on the host. Boundary returns only after the VM is running again.
 // Its own freeze receipts identify the exact pause/resume bounds.
 type Hooks struct {
-	Exec     func(context.Context, replay.Call) (core.CommandResult, error)
-	Boundary func(context.Context, string, int) error
-	Record   func(Receipt) error
+	Exec      func(context.Context, replay.Call) (core.CommandResult, error)
+	Boundary  func(context.Context, string, int) error
+	Record    func(Receipt) error
+	IntraTool *IntraToolOptions
 }
 
 type Receipt struct {
@@ -36,6 +37,8 @@ type Receipt struct {
 	Stderr           string `json:"stderr,omitempty"`
 	OutputComparison string `json:"output_comparison,omitempty"`
 	SourceOutputSHA  string `json:"source_output_sha256,omitempty"`
+	CaptureEndNS     int64  `json:"capture_end_monotonic_ns,omitempty"`
+	CaptureIndex     int    `json:"capture_index,omitempty"`
 }
 
 func Clock() (int64, error) {
@@ -72,6 +75,9 @@ func compareOutput(source []byte, result core.CommandResult) string {
 func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 	if h.Exec == nil || h.Boundary == nil || h.Record == nil {
 		return errors.New("missing replay hooks")
+	}
+	if err := h.IntraTool.Validate(r); err != nil {
+		return err
 	}
 	defer func() {
 		// A failed initial capture may have acquired observers that still need release.
@@ -126,8 +132,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		if err := emit(h, receipt); err != nil {
 			return err
 		}
-		out, err := h.Exec(ctx, call)
-		replyTime, clockErr := Clock()
+		out, replyTime, err := h.executeTool(ctx, call, receipt)
 		captureErr := h.Boundary(ctx, "post-tool", e.Step)
 		receipt.Event = "tool_reply"
 		receipt.Time = replyTime
@@ -139,7 +144,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		receipt.Stderr = out.Stderr
 		receipt.StdoutSHA = digest([]byte(out.Stdout))
 		receipt.StderrSHA = digest([]byte(out.Stderr))
-		if err = errors.Join(err, clockErr, captureErr, h.Record(receipt)); err != nil {
+		if err = errors.Join(err, captureErr, h.Record(receipt)); err != nil {
 			return err
 		}
 		if int32(out.ExitCode) != call.ExitCode {

@@ -90,6 +90,22 @@ class FreezeTests(unittest.TestCase):
             take_boundary("post-tool", 3, self.api, self.observer,
                           {"phase": "pre-tool", "step": 2, "armed": {"before": {}}}, {})
 
+    def test_intra_tool_rearms_same_step_and_classifies_tail(self):
+        for prior in ("pre-tool", "intra-tool"):
+            window = {}
+            take_boundary("intra-tool", 12, self.api, self.observer,
+                          {"phase": prior, "step": 12, "armed": {"before": {}}}, window)
+            self.assertEqual(window["window_kind"], "intra-tool")
+            self.observer.arm.assert_called_with(12)
+        tail = {}
+        take_boundary("post-tool", 12, self.api, self.observer,
+                      {"phase": "intra-tool", "step": 12, "armed": {"before": {}}}, tail)
+        self.assertEqual(tail["window_kind"], "tool-tail")
+        self.observer.arm.assert_called_with(None)
+        with self.assertRaisesRegex(RuntimeError, "unexpected trace boundary"):
+            take_boundary("intra-tool", 13, self.api, self.observer,
+                          {"phase": "intra-tool", "step": 12, "armed": {"before": {}}}, {})
+
 
 class ApiTests(unittest.TestCase):
     def test_unix_http_binds_same_peer_on_long_paths(self):

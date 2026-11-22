@@ -19,7 +19,7 @@ from snapshot_probe import sample_live, sample_snapshot
 from guest_sample import snapshot as guest_snapshot
 
 
-PHASES = ("session-start", "pre-tool", "post-tool", "session-end")
+PHASES = ("session-start", "pre-tool", "intra-tool", "post-tool", "session-end")
 MIB = 1 << 20
 # Linux PROC_PID_INIT_INO. bpf_get_current_pid_tgid reports initial-namespace IDs.
 INITIAL_PID_NAMESPACE = 0xEFFFFFFC
@@ -174,7 +174,7 @@ def frozen_capture(api, observer, phase, step, event):
                 event["content_sample"] = sample_live(api.identity[0], event["ram_slots"], int(probe_count))
             event["vmm_census"] = census(api.identity[0], event["ram_slots"], event["other_kvm_slots"], snapshot)
         if phase != "session-end":
-            event["arm"] = observer.arm(step if phase == "pre-tool" else None)
+            event["arm"] = observer.arm(step if phase in ("pre-tool", "intra-tool") else None)
     finally:
         freeze["resume_request_ns"] = time.monotonic_ns()
         try:
@@ -194,20 +194,25 @@ def take_boundary(phase, step, api, observer, previous, event):
         prior_phase, prior_step = previous["phase"], previous["step"]
         expected = {
             "pre-tool": ("session-start", "post-tool"),
-            "post-tool": ("pre-tool",),
-            "session-end": ("session-start", "post-tool", "pre-tool"),
+            "intra-tool": ("pre-tool", "intra-tool"),
+            "post-tool": ("pre-tool", "intra-tool"),
+            "session-end": ("session-start", "post-tool", "pre-tool", "intra-tool"),
         }
         if (prior_phase not in expected[phase]
-                or (phase == "post-tool" and step != prior_step)
+                or (phase in ("intra-tool", "post-tool") and step != prior_step)
                 or (phase == "pre-tool" and step <= prior_step)):
             raise RuntimeError(f"unexpected trace boundary {prior_phase}/{prior_step} → {phase}/{step}")
         observer.armed = previous["armed"]
         before = observer.armed["before"]
         observer.armed["before"] = {int(k): v for k, v in before.items()}
-        event["window_kind"] = ("tool" if prior_phase == "pre-tool" else
-                                "wait" if phase == "pre-tool" else "final")
-        if prior_phase == "pre-tool" and phase == "session-end":
-            event["window_kind"] = "incomplete-tool"
+        if phase == "intra-tool":
+            event["window_kind"] = "intra-tool"
+        elif phase == "post-tool":
+            event["window_kind"] = "tool-tail" if prior_phase == "intra-tool" else "tool"
+        elif phase == "pre-tool":
+            event["window_kind"] = "wait"
+        else:
+            event["window_kind"] = ("incomplete-tool" if prior_phase in ("pre-tool", "intra-tool") else "final")
         event["from_step"] = prior_step
     frozen_capture(api, observer, phase, step, event)
 
