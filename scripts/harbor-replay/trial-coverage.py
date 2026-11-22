@@ -33,20 +33,23 @@ def make(sources, inventory, reviewed, outputs):
             attempts = sorted((outputs / "attempts").glob(f"{task}-{ident}-*.json"))
             if attempts:
                 row["attempts"] = [str(p.relative_to(outputs)) for p in attempts]
-            sparql_path = outputs / "sparql" / (ident+".json")
-            if task == "sparql-university" and sparql_path.exists():
-                proof = json.loads(sparql_path.read_text())
-                row["source_record"] = str(sparql_path.relative_to(outputs))
-                if proof.get("replay"):
-                    live = proof["replay"]
-                    row.update(receipt=row["source_record"], external_actions=proof["external_actions"],
-                               live_guest_calls=len(live["tools"]),
-                               state="validated_guest_exits_external_response_unavailable" if
-                               live["session_completed"] and live["all_observed_exits_match"] else "partial_or_divergent")
+            nested = outputs / "sparql" / (ident+".json")
+            proof_path = nested if task == "sparql-university" and nested.exists() else path
+            proof = json.loads(proof_path.read_text()) if proof_path.exists() else {}
+            if proof_path == nested or "replay" in proof:
+                row["source_record"] = str(proof_path.relative_to(outputs))
+                live = proof.get("replay")
+                if live:
+                    completed = live["session_completed"] and live["all_observed_exits_match"] and bool(live.get("guest_final_state"))
+                    state = "partial_or_divergent"
+                    if completed:
+                        state = "validated_guest_exits_external_response_unavailable" if proof.get("external_actions") else "validated_observed_exits"
+                    row.update(receipt=row["source_record"], external_actions=proof.get("external_actions",[]),
+                               live_guest_calls=len(live["tools"]),state=state)
                     rows.append(row)
                     continue
             if path.exists():
-                r = json.loads(path.read_text())
+                r = proof
                 row["receipt"] = path.name
                 row["state"] = ("validated_observed_exits" if r["session_completed"] and
                                 r["all_observed_tool_exits_match"] else "partial_or_divergent")
