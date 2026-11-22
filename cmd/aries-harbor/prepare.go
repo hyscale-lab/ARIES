@@ -304,7 +304,7 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += datasetFinal
 	}
 	if r.Task == "compile-compcert" {
-		cmd += "\n" + compilerResult
+		cmd += "\n" + compilerResult(r.Trial)
 	}
 	if r.Task == "video-processing" && r.Trial != videoPatchTrial {
 		cmd += `
@@ -324,7 +324,8 @@ PYREPORT`
 	return log.Encode(map[string]any{"event": "final_task_state", "checks": strings.TrimSpace(out), "begin_monotonic_ns": begin, "end_monotonic_ns": end})
 }
 
-func networkEvidence(ctx context.Context, m *vhive.Manager, id, phase, task string, log *json.Encoder) error {
+func networkEvidence(ctx context.Context, m *vhive.Manager, id, phase string, recording *harbor.Recording, log *json.Encoder) error {
+	task := recording.Task
 	const pypiProbe = `import json, socket, urllib.request
 from pathlib import Path
 with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as response:
@@ -344,7 +345,7 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 		probe = datasetNetworkProbe
 	}
 	if task == "compile-compcert" {
-		python, probe = "/usr/bin/python3", compilerNetworkProbe
+		python, probe = "/usr/bin/python3", compilerNetworkCheck(recording.Trial)
 	}
 	if task == sparqlTask {
 		python, probe = "/usr/bin/python3", sparqlNetworkProbe

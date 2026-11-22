@@ -10,12 +10,12 @@ name=zbvideo183
 tls_hosts=(pypi.org files.pythonhosted.org)
 http_hosts=()
 github_addresses=()
-dataset_profile=false
+private_dns=false
 dns_unit=
 case "${3:-video}" in
     video) ;;
     dataset|dataset-amd182|dataset-amd183|dataset-amd189|dataset-amd191|dataset-amd198|dataset-amd201|dataset-amd203)
-        dataset_profile=true
+        private_dns=true
         node=189
         if [[ ${3:-video} == dataset-amd* ]]; then node=${3#dataset-amd}; fi
         bridge=zbtok$node
@@ -26,7 +26,7 @@ case "${3:-video}" in
         tls_hosts=(huggingface.co us.aws.cdn.hf.co pypi.org files.pythonhosted.org)
         ;;
     inference-amd182)
-        dataset_profile=true
+        private_dns=true
         node=182
         bridge=zbhf182
         subnet=10.232.182.0/28
@@ -34,6 +34,17 @@ case "${3:-video}" in
         name=zbinference182
         dns_unit=zb-inference-dns-amd182
         tls_hosts=(huggingface.co us.aws.cdn.hf.co cas-server.xethub.hf.co transfer.xethub.hf.co pypi.org files.pythonhosted.org)
+        ;;
+    compcert-opam)
+        private_dns=true
+        node=189
+        bridge=zbopam189
+        subnet=10.233.189.0/28
+        chain=ZB189OPAM
+        name=zbopam189
+        dns_unit=zb-opam-dns-amd189
+        tls_hosts=(github.com raw.githubusercontent.com opam.ocaml.org archive.ubuntu.com security.ubuntu.com)
+        http_hosts=(archive.ubuntu.com security.ubuntu.com)
         ;;
     compcert)
         bridge=zbcc189
@@ -48,7 +59,7 @@ esac
 ipt=(sudo -n iptables -w -t mangle)
 jump=(-i "$bridge" -s "$subnet" -m comment --comment "$name" -j "$chain")
 if [[ "$action" == remove ]]; then
-    if [[ $dataset_profile == true ]] && sudo -n systemctl is-active --quiet "$dns_unit"; then
+    if [[ $private_dns == true ]] && sudo -n systemctl is-active --quiet "$dns_unit"; then
         sudo -n systemctl stop "$dns_unit"
     fi
     if "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
@@ -79,7 +90,7 @@ mkdir -p "$base"/{conf,ipam,cache}
 (cd "$base/bin"; sha256sum -c ../SHA256SUMS)
 resolver=$(awk '$1=="nameserver" && $2 !~ /^127\./ && $2 !~ /:/ {print $2;exit}' /run/systemd/resolve/resolv.conf)
 test -n "$resolver"
-if [[ $dataset_profile == true ]]; then resolver=10.232.$node.1; fi
+if [[ $private_dns == true ]]; then resolver=${subnet%.0/28}.1; fi
 printf 'nameserver %s\n' "$resolver" > "$base/resolv.conf"
 python3 - "$base" "$subnet" "$bridge" "$name" <<'PY'
 import ipaddress, json, pathlib, subprocess, sys
@@ -98,7 +109,7 @@ config={"cniVersion":"1.0.0","name":name,"plugins":[{"type":"bridge","bridge":br
             "resolvConf":str(base/"resolv.conf")}},{"type":"firewall"},{"type":"tc-redirect-tap"},{"type":"loopback"}]}
 (base/"conf"/"10-video.conflist").write_text(json.dumps(config,indent=2)+"\n")
 PY
-if [[ $dataset_profile == true ]]; then
+if [[ $private_dns == true ]]; then
     python3 - "$base/conf/dataset-hosts.json" "${tls_hosts[@]}" <<'PYTLS'
 import ipaddress,json,pathlib,socket,ssl,sys
 path=pathlib.Path(sys.argv[1]); hosts={}
@@ -121,7 +132,7 @@ PYTLS
     # dedicated bridge and return NXDOMAIN for names outside the approved set.
     test -x /usr/sbin/dnsmasq
     # The private runtime can be mode 0700. dnsmasq reloads records after
-    # dropping privileges, so expose only these four public DNS records.
+    # dropping privileges, so expose only the selected public DNS records.
     dns_runtime=/run/$dns_unit
     sudo -n install -d -m 0755 "$dns_runtime"
     sudo -n install -m 0644 "$base/dns.hosts" "$dns_runtime/hosts"
@@ -151,15 +162,25 @@ if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     fi
     "${ipt[@]}" -A "$chain" -j DROP
 fi
-if [[ $dataset_profile == true ]]; then
+if [[ $private_dns == true ]]; then
     mapfile -t verified < <(python3 -c 'import json,sys;print("\n".join(sorted(set(json.load(open(sys.argv[1])).values()))))' "$base/conf/dataset-hosts.json")
 else
     verified=("${github_addresses[@]}")
 fi
-if [[ $dataset_profile == true ]]; then
+if [[ $private_dns == true ]]; then
     for protocol in udp tcp; do
         if ! "${ipt[@]}" -C "$chain" -d "$resolver" -p "$protocol" --dport 53 -j RETURN 2>/dev/null; then
             "${ipt[@]}" -I "$chain" 1 -d "$resolver" -p "$protocol" --dport 53 -j RETURN
+        fi
+    done
+fi
+if [[ ${3:-video} == compcert-opam ]]; then
+    # Ubuntu APT uses HTTP and verifies signed indices. Use exactly the
+    # archive addresses the scoped resolver returns to this private guest.
+    mapfile -t archives < <(python3 -c 'import json,sys;h=json.load(open(sys.argv[1]));print(h["archive.ubuntu.com"]);print(h["security.ubuntu.com"])' "$base/conf/dataset-hosts.json")
+    for address in "${archives[@]}"; do
+        if ! "${ipt[@]}" -C "$chain" -d "$address" -p tcp --dport 80 -j RETURN 2>/dev/null; then
+            "${ipt[@]}" -I "$chain" 1 -d "$address" -p tcp --dport 80 -j RETURN
         fi
     done
 fi

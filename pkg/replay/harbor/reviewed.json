@@ -351,13 +351,33 @@
     "workdir": "/app",
     "image": "docker.io/alexgshaw/compile-compcert@sha256:f60236a4fe55bbb3c573210fe0fcd91551f4ee97c417453cd4985be074b35411",
     "effects": [
-      "Install public Ubuntu toolchain packages, fetch tagged CompCert and Coq releases, build their verified compiler and proof artifacts, then run the upstream functional compiler tests in the guest. Historical external lookup responses are unavailable."
+      "Build the official CompCert v3.13.1 release and exercise upstream compiler, proof, regression and ABI artifacts in the guest. One source builds Coq directly. Four install source-observed Coq, Dune, Menhir and OCaml packages via OPAM. External search response bodies are unavailable."
     ],
     "trials": [
+      {
+        "trial": "1d11a94f-d715-44d6-9ff6-1f097a8793f8",
+        "trajectory_sha256": "8884baea60be944da79b3b1c7d23c9c16bd4b72d2245af2664d5807f00d07aea",
+        "rollout_sha256": "13ff6db310cb52a04db11db4a8a473fa29a53497712179ee2d66b90041392b61"
+      },
+      {
+        "trial": "921ac918-1cd2-41af-858a-a37490ced8f4",
+        "trajectory_sha256": "33a613ec6d7a48134bb08c52082ba0ac92143969bdb47311571671058650f7a2",
+        "rollout_sha256": "f7a9cb0ba1eae27f826c43884aefb69287c182873e07f1de91e1a6a5b48de7df"
+      },
+      {
+        "trial": "bf3c1acf-2d7d-4fa4-9b03-fb8edfce1666",
+        "trajectory_sha256": "9e3f353cf735f8b734e5a40d61ded933b10766f2c628bbc64a9edefee6d558ec",
+        "rollout_sha256": "f18f9c7e259ed8751a29d12244d569f8e868a327bb340d3eebe1d82c4babf9f3"
+      },
       {
         "trial": "d116000a-0e9f-42a4-945e-71b0a65f12a4",
         "trajectory_sha256": "88acce0287c691a28db0ee627beb7ae4fde722509ade9b6af806016fd17fdb31",
         "rollout_sha256": "c1f54b30fa80ad106782292703822e35ed4ee42b9ba321cfdad4ae2073202e75"
+      },
+      {
+        "trial": "dc2b7aed-e100-4d00-bc56-3884987b9906",
+        "trajectory_sha256": "030d3ab2624dc615896095ea87f6c3cf9bb577baa0d4fd1ae6f3f3cc0f4b2cd7",
+        "rollout_sha256": "e6fbff46d60dbce22138736573564fb21f27357ece9b06bdfa6777228f002ca8"
       }
     ],
     "vcpus": 2,

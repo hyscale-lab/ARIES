@@ -339,6 +339,12 @@ func equalJSON(a, b []byte) bool {
 	return reflect.DeepEqual(left, right)
 }
 
+var interceptedPatchDirs = map[string]string{
+	"call_5ZxflhqiRQR6xuFjOuy848zb": "/app",
+	"call_uTYuir3bN0AdKxSPlTUoVpLc": "/tmp",
+	"call_pzdaK5lgqxXR6Rddv4QXXCi6": "/tmp",
+}
+
 func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence uint64) (replay.Call, error) {
 	if c.call.Name == "write_stdin" {
 		return processPoll(c, origin, ts, sequence)
@@ -360,14 +366,14 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 	if args.Workdir == "" {
 		args.Workdir = defaultDir
 	}
-	// A pure heredoc patch in this occurrence was intercepted by Codex and
+	// These reviewed pure heredoc patches were intercepted by Codex and
 	// returned the native patch tool's nested envelope instead of a shell status.
-	if c.call.ID == "call_5ZxflhqiRQR6xuFjOuy848zb" {
+	if patchDir, intercepted := interceptedPatchDirs[c.call.ID]; intercepted {
 		const responseHeader = "Wall time: 0.0000 seconds\nOutput:\nExit code: 0\nWall time: 0 seconds\nOutput:\n"
 		body, ok := strings.CutPrefix(c.output, responseHeader)
 		patch, opened := strings.CutPrefix(args.Cmd, "apply_patch <<'PATCH'\n")
 		patch, closed := strings.CutSuffix(patch, "\nPATCH")
-		if !ok || !opened || !closed || args.Workdir != "/app" {
+		if !ok || !opened || !closed || args.Workdir != patchDir {
 			return replay.Call{}, errors.New("unexpected source patch delivery")
 		}
 		return replay.Call{Operation: "ApplyPatch", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Body: []byte(patch), ResponseStdout: []byte(body)}, nil

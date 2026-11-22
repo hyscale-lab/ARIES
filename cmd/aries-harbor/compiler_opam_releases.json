@@ -1,0 +1,74 @@
+[
+  {
+    "package": "coq.8.16.1",
+    "metadata_url": "https://opam.ocaml.org/packages/coq/coq.8.16.1/opam",
+    "metadata_sha256": "a028f9771297d6d97ad534699b85c2fe3ca00f7b662f823343a3fd451722aabf",
+    "origin": "https://github.com/coq/coq/releases/download/V8.16.1/coq-8.16.1.tar.gz",
+    "cache": "https://opam.ocaml.org/cache/sha256/58/583471c8ed4f227cb374ee8a13a769c46579313d407db67a82d202ee48300e4b",
+    "content_digest": "sha256:583471c8ed4f227cb374ee8a13a769c46579313d407db67a82d202ee48300e4b",
+    "bytes": 7401345
+  },
+  {
+    "package": "dune.3.10.0",
+    "metadata_url": "https://opam.ocaml.org/packages/dune/dune.3.10.0/opam",
+    "metadata_sha256": "2ec8c1eba5a4ac6401d3859205be951b8d143e9b61d053becef401fdc54bd146",
+    "origin": "https://github.com/ocaml/dune/releases/download/3.10.0/dune-3.10.0.tbz",
+    "cache": "https://opam.ocaml.org/cache/sha256/9f/9ff03384a98a8df79852cc674f0b4738ba8aec17029b6e2eeb514f895e710355",
+    "content_digest": "sha256:9ff03384a98a8df79852cc674f0b4738ba8aec17029b6e2eeb514f895e710355",
+    "bytes": 2105646
+  },
+  {
+    "package": "dune.3.15.3",
+    "metadata_url": "https://opam.ocaml.org/packages/dune/dune.3.15.3/opam",
+    "metadata_sha256": "edae56f84b26aabd9d0be9acffacd1ff0e6ed4308cb4efcedbe10d292c81ffea",
+    "origin": "https://github.com/ocaml/dune/releases/download/3.15.3/dune-3.15.3.tbz",
+    "cache": "https://opam.ocaml.org/cache/sha256/3c/3c27c7676414056f0368a71fdc670d2b0a59898090c78a1b68230984e5beb713",
+    "content_digest": "sha256:3c27c7676414056f0368a71fdc670d2b0a59898090c78a1b68230984e5beb713",
+    "bytes": 2362092
+  },
+  {
+    "package": "dune.3.17.2",
+    "metadata_url": "https://opam.ocaml.org/packages/dune/dune.3.17.2/opam",
+    "metadata_sha256": "3418a4a3c683536fd191430f1433c02a27084f3b9a2afb3409a37c04173f59cc",
+    "origin": "https://github.com/ocaml/dune/releases/download/3.17.2/dune-3.17.2.tbz",
+    "cache": "https://opam.ocaml.org/cache/sha256/9d/9deafeed0ecfe9e65e642cd8e6197f0864f73fcd7b94b5b199ae4d2e07a2ea64",
+    "content_digest": "sha256:9deafeed0ecfe9e65e642cd8e6197f0864f73fcd7b94b5b199ae4d2e07a2ea64",
+    "bytes": 2392889
+  },
+  {
+    "package": "menhir.20230608",
+    "metadata_url": "https://opam.ocaml.org/packages/menhir/menhir.20230608/opam",
+    "metadata_sha256": "7eb59eb4ae9921b80ec5518dfa3c8592b838711382a09b0b9d6188106a445e12",
+    "origin": "https://gitlab.inria.fr/fpottier/menhir/-/archive/20230608/archive.tar.gz",
+    "cache": "https://opam.ocaml.org/cache/sha512/33/334b9dcb1283a28b8547082a89536b1d439ff588290b8eaecdf4802c5f74dbc8d16ad6fc6c0820036183518d83e2cc273a75787a8b41137424c8e7ee82e2b50a",
+    "content_digest": "sha512:334b9dcb1283a28b8547082a89536b1d439ff588290b8eaecdf4802c5f74dbc8d16ad6fc6c0820036183518d83e2cc273a75787a8b41137424c8e7ee82e2b50a",
+    "bytes": 1340454
+  },
+  {
+    "package": "menhir.20220210",
+    "metadata_url": "https://opam.ocaml.org/packages/menhir/menhir.20220210/opam",
+    "metadata_sha256": "28f3f97f0c211ea7f0bf481c0a5506e31b085788945b401f1951c9a1bb4b84b1",
+    "origin": "https://gitlab.inria.fr/fpottier/menhir/-/archive/20220210/archive.tar.gz",
+    "cache": "https://opam.ocaml.org/cache/sha512/30/3063fec1d8b9fe092c8461b0689d426c7fe381a2bf3fd258dc42ceecca1719d32efbb8a18d94ada5555c38175ea352da3adbb239fdbcbcf52c3a5c85a4d9586f",
+    "content_digest": "sha512:3063fec1d8b9fe092c8461b0689d426c7fe381a2bf3fd258dc42ceecca1719d32efbb8a18d94ada5555c38175ea352da3adbb239fdbcbcf52c3a5c85a4d9586f",
+    "bytes": 1304983
+  },
+  {
+    "package": "zarith.1.14",
+    "metadata_url": "https://opam.ocaml.org/packages/zarith/zarith.1.14/opam",
+    "metadata_sha256": "9c859185d289c38dcb1c216aea751afa28bebf5d653e8af3d10aabb252ebe4bb",
+    "origin": "https://github.com/ocaml/Zarith/archive/release-1.14.tar.gz",
+    "cache": "https://opam.ocaml.org/cache/sha256/5d/5db9dcbd939153942a08581fabd846d0f3f2b8c67fe68b855127e0472d4d1859",
+    "content_digest": "sha256:5db9dcbd939153942a08581fabd846d0f3f2b8c67fe68b855127e0472d4d1859",
+    "bytes": 91788
+  },
+  {
+    "package": "ocamlfind.1.9.8",
+    "metadata_url": "https://opam.ocaml.org/packages/ocamlfind/ocamlfind.1.9.8/opam",
+    "metadata_sha256": "b6180836d0c101bb4d2f029196ad194090ab9fc7549a0b514408b820e11e142b",
+    "origin": "https://github.com/ocaml/ocamlfind/archive/refs/tags/findlib-1.9.8.tar.gz",
+    "cache": "https://opam.ocaml.org/cache/sha512/89/8967986de2ab4ec5993f437b0a4206742adf37aa7a292a3bba0a04438d78539b84d001191e60b2d5bde98a695b38cba2593b7051f7749adbdb964a0df3c4b661",
+    "content_digest": "sha512:8967986de2ab4ec5993f437b0a4206742adf37aa7a292a3bba0a04438d78539b84d001191e60b2d5bde98a695b38cba2593b7051f7749adbdb964a0df3c4b661",
+    "bytes": 169953
+  }
+]
