@@ -5,13 +5,18 @@ cold and warm runs split into model time, tool execution and harness logic,
 the harness's own overhead, the cost of each tool call as the harness and the
 bridge timed it, what follows the answer, CPU and memory, and every
 repetition. Values are means with their standard deviation over the valid
-runs; the last columns are each ARIES setup's difference from native.
+runs; the last columns are each setup's difference from the baseline: native
+when the campaign ran it, otherwise the plain Kubernetes pod.
 """
 
 import os
 import statistics
+import sys
 
-SETUPS = [("native", "Native"), ("docker", "ARIES Docker"), ("k8s", "ARIES K8s")]
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "microbench"))
+import setups  # noqa: E402
+
+SETUPS = [(key, setups.NAME[key]) for key in setups.KEYS]
 HARNESSES = [("openclaw", "OpenClaw"), ("hermes", "Hermes")]
 
 
@@ -155,36 +160,42 @@ def difference(values, base, unit):
     return "%+.*f" % (digits, statistics.fmean(values) - statistics.fmean(base))
 
 
+def baseline(rows_by_setup):
+    """The setup the others are compared with: native, else the plain pod."""
+    return next((s for s in ("native", "k8s") if rows_by_setup.get(s)), None)
+
+
 def table(rows_by_setup, spec_rows):
-    setups = [(s, name) for s, name in SETUPS if rows_by_setup.get(s)]
-    others = [(s, name) for s, name in setups if s != "native"]
-    has_native = bool(rows_by_setup.get("native"))
-    heads = [name for _, name in setups] + (["%s − native" % name for _, name in others] if has_native else [])
+    present = [(s, name) for s, name in SETUPS if rows_by_setup.get(s)]
+    base = baseline(rows_by_setup)
+    others = [(s, name) for s, name in present if s != base]
+    base_name = "native" if base == "native" else dict(SETUPS).get(base, "")
+    heads = [name for _, name in present] + (["%s − %s" % (name, base_name) for _, name in others] if base else [])
     out = ["| Measure | " + " | ".join(heads) + " |", "|---|" + "---|" * len(heads)]
     for key, label, unit in spec_rows:
         if key is None:
             out.append("| ***%s*** |%s" % (label, " |" * len(heads)))
             continue
-        cells = [cell(numbers(rows_by_setup[s], key), unit) for s, _ in setups]
+        cells = [cell(numbers(rows_by_setup[s], key), unit) for s, _ in present]
         if not any(c != "–" for c in cells):
             continue
-        if has_native:
-            base = numbers(rows_by_setup["native"], key)
-            cells += [difference(numbers(rows_by_setup[s], key), base, unit) for s, _ in others]
+        if base:
+            base_values = numbers(rows_by_setup[base], key)
+            cells += [difference(numbers(rows_by_setup[s], key), base_values, unit) for s, _ in others]
         out.append("| %s | %s |" % (label, " | ".join(cells)))
     return out
 
 
 def repetitions(rows_by_setup, warm):
-    setups = [(s, name) for s, name in SETUPS if rows_by_setup.get(s)]
+    present = [(s, name) for s, name in SETUPS if rows_by_setup.get(s)]
     count = max(len(rows) for rows in rows_by_setup.values())
     heads = []
-    for _, name in setups:
+    for _, name in present:
         heads += ["%s cold" % name] + (["%s warm" % name] if warm else [])
     out = ["| Repetition | " + " | ".join(heads) + " |", "|---|" + "---|" * len(heads)]
     for index in range(count):
         cells = []
-        for setup, _ in setups:
+        for setup, _ in present:
             rows = sorted(rows_by_setup[setup], key=lambda r: r.get("repetition") or 0)
             row = rows[index] if index < len(rows) else None
             for key in ("cold_latency_s", "warm_latency_s") if warm else ("cold_latency_s",):
@@ -226,8 +237,10 @@ def write(campaign, tasks, spec, descriptions):
         if task in descriptions:
             agent, checks, isolates = descriptions[task]
             out += ["The agent %s; the verifier checks %s. It isolates %s." % (agent, checks, isolates), ""]
+        names = dict(SETUPS)
+        base = baseline({s: [r for r in mine if r["backend"] == s] for s, _ in SETUPS})
         out += ["Means ± standard deviation over the valid runs, in seconds unless marked; the last columns are "
-                "each ARIES setup's mean minus native's.",
+                "each ARIES setup's mean minus %s's." % ("native" if base == "native" else names[base] if base else "the baseline"),
                 "",
                 "- **Start-up:** the phases before the first request. The harness starts while the sandbox "
                 "starts, so the *alongside* phases overlap the harness start, and start-up is less than their sum.",

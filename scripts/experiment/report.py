@@ -37,7 +37,7 @@ import task_reports  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPTS = os.path.join(ROOT, "scripts", "microbench")
-SETUPS = [("native", "Native"), ("docker", "ARIES Docker"), ("k8s", "ARIES K8s")]
+SETUPS = task_reports.SETUPS
 HARNESSES = [("openclaw", "OpenClaw"), ("hermes", "Hermes")]
 ANALYSE_COLUMNS = ["harness", "backend", "mode", "repetition", "run_dir", "requests", "variant"]
 
@@ -103,11 +103,7 @@ def stage_values(row, measure):
     return values
 
 
-SETUP_TEXT = {
-    "native": "The harness's own Docker sandbox, with no ARIES involved: the baseline.",
-    "docker": "ARIES creates the sandbox as a Docker container; the harness reaches it through ARIES's tool bridge.",
-    "k8s": "The same, with the harness, sandbox and bridge as Kubernetes pods.",
-}
+SETUP_TEXT = task_reports.setups.DESCRIPTION
 
 
 def task_descriptions():
@@ -183,24 +179,33 @@ def results_section(tasks, spec):
     out = ["## Results", "", "Means over valid runs, in seconds. Each task's full breakdown is in its own report "
            "(below).", ""]
     present = [(s, n) for s, n in SETUPS if any(r["backend"] == s for r in tasks)]
+    measures = ("cold_latency_s", "warm_latency_s") if warm else ("cold_latency_s",)
+    # Up to three setups fit cold and warm side by side; more get a table each.
+    split = len(present) > 3
     for harness, label in HARNESSES:
         mine = [row for row in tasks if row["harness"] == harness]
         if not mine:
             continue
-        heads = ["%s cold" % n for _, n in present] + (["%s warm" % n for _, n in present] if warm else [])
-        out += ["### %s" % label, "", "| Task | " + " | ".join(heads) + " |", "|---|" + "---|" * len(heads)]
-        for task in spec["tasks"]:
-            cells = []
-            for key in ("cold_latency_s", "warm_latency_s") if warm else ("cold_latency_s",):
-                cells += [fmt(means_of([r for r in mine if r["task"] == task and r["backend"] == s], key))
-                          for s, _ in present]
-            out.append("| [`%s`](tasks/%s.md) | %s |" % (task, task, " | ".join(cells)))
-        out.append("")
-    if not any(s == "native" for s, _ in present):
+        out += ["### %s" % label, ""]
+        groups = [(m, [m]) for m in measures] if split else [(None, list(measures))]
+        for title, keys in groups:
+            heads = ["%s %s" % (n, key.split("_")[0]) for key in keys for _, n in present] if not split else \
+                [n for _, n in present]
+            if title:
+                out += ["%s latency:" % title.split("_")[0].capitalize(), ""]
+            out += ["| Task | " + " | ".join(heads) + " |", "|---|" + "---|" * len(heads)]
+            for task in spec["tasks"]:
+                cells = [fmt(means_of([r for r in mine if r["task"] == task and r["backend"] == s], key))
+                         for key in keys for s, _ in present]
+                out.append("| [`%s`](tasks/%s.md) | %s |" % (task, task, " | ".join(cells)))
+            out.append("")
+    base = next((s for s in ("native", "k8s") if any(s == p for p, _ in present)), None)
+    if base is None:
         return out
-    out += ["### Overhead against native", "",
-            "Each ARIES setup's mean minus native's, averaged over the tasks. Per tool call is the warm "
-            "`mb-ten-calls` run's harness-timed tool execution divided by its calls.", "",
+    base_name = "native" if base == "native" else dict(SETUPS)[base]
+    out += ["### Overhead against %s" % base_name, "",
+            "Each ARIES setup's mean minus %s's, averaged over the tasks. Per tool call is the warm "
+            "`mb-ten-calls` run's harness-timed tool execution divided by its calls." % base_name, "",
             "| Harness | Setup | Start-up | Cold latency | Warm latency | Per tool call (ms) | Warm harness logic |",
             "|---|---|---|---|---|---|---|"]
     for harness, label in HARNESSES:
@@ -210,11 +215,11 @@ def results_section(tasks, spec):
         for setup, name in present:
             def delta(key):
                 pairs = [(means_of([r for r in mine if r["task"] == t and r["backend"] == setup], key),
-                          means_of([r for r in mine if r["task"] == t and r["backend"] == "native"], key))
+                          means_of([r for r in mine if r["task"] == t and r["backend"] == base], key))
                          for t in spec["tasks"]]
                 pairs = [a - b for a, b in pairs if a is not None and b is not None]
-                return "%+.2f" % (sum(pairs) / len(pairs)) if pairs and setup != "native" else (
-                    "–" if setup != "native" else "")
+                return "%+.2f" % (sum(pairs) / len(pairs)) if pairs and setup != base else (
+                    "–" if setup != base else "")
             # mb-ten-calls isolates the cost per call; mb-cpu's one long call
             # would swamp an average over every task.
             calls = [r for r in mine if r["backend"] == setup and r["task"] == "mb-ten-calls"
@@ -224,12 +229,12 @@ def results_section(tasks, spec):
             logic = means_of([r for r in mine if r["backend"] == setup], "warm_harness_logic_s")
             out.append("| %s | %s | %s | %s | %s | %s | %s |" % (
                 label, name,
-                fmt(means_of([r for r in mine if r["backend"] == setup], "cold_startup_s")) if setup == "native" else delta("cold_startup_s"),
-                "" if setup == "native" else delta("cold_latency_s"),
-                "" if setup == "native" or not warm else delta("warm_latency_s"),
+                fmt(means_of([r for r in mine if r["backend"] == setup], "cold_startup_s")) if setup == base else delta("cold_startup_s"),
+                "" if setup == base else delta("cold_latency_s"),
+                "" if setup == base or not warm else delta("warm_latency_s"),
                 "%.0f" % per_call if per_call is not None else "–", fmt(logic)))
-    out += ["", "The native row's start-up column is native's own start-up; the other rows are differences from "
-            "it. Per tool call and warm harness logic are absolute values in every row.", ""]
+    out += ["", "The %s row's start-up column is %s's own start-up; the other rows are differences from "
+            "it. Per tool call and warm harness logic are absolute values in every row." % (base_name, base_name), ""]
     return out
 
 

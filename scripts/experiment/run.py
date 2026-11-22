@@ -12,7 +12,8 @@
     python3 scripts/experiment/run.py rerun   experiments/coldwarm/results/NAME RUN --reason TEXT
 
 An experiment is a directory under experiments/ whose experiment.json names
-the harnesses, setups (docker, k8s, native), tasks, repetitions and whether
+the harnesses, setups (scripts/microbench/setups.py: docker, k8s and its
+gVisor, Kata, agent-sandbox and warm-pool variants, native), tasks, repetitions and whether
 each task also runs warm. A campaign is one execution of it, in
 experiments/<experiment>/results/<campaign>/, beside the spec (docs/experiments.md
 describes the layout).
@@ -50,8 +51,11 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "scripts", "microbench"))
+import setups as setup_table  # noqa: E402
+
 HARNESSES = ("openclaw", "hermes")
-SETUPS = ("docker", "k8s", "native")
+SETUPS = tuple(setup_table.KEYS)
 STATUSES = ("valid", "failed", "superseded")
 # Harnesses always start alongside their sandboxes, and recordings are always
 # made on Docker, so neither is a key.
@@ -273,10 +277,10 @@ def chain_body(spec, harnesses, address, prometheus, port):
             if setup == "native":
                 return "python3 scripts/baseline/%s_native.py --runs 1%s %s %s --port %d" % (harness, warm, selected, common, port)
             bridge = ""
-            if setup == "k8s" and spec["bridge_repository"]:
+            if setup.startswith("k8s") and spec["bridge_repository"]:
                 bridge = " --bridge-repository " + shlex.quote(spec["bridge_repository"])
-            return "scripts/microbench/run.sh --harness %s --backend %s --mode replay --runs 1%s%s %s %s --port %d" % (
-                harness, setup, warm, bridge, selected, common, port)
+            return "scripts/microbench/run.sh --harness %s %s --mode replay --runs 1%s%s %s %s --port %d" % (
+                harness, " ".join(setup_table.run_arguments(setup)), warm, bridge, selected, common, port)
 
         # One unmeasured run of the first task per setup pulls every image the
         # setup uses, whatever ARIES names them, before anything is measured.
@@ -511,7 +515,7 @@ def cmd_start(args):
                              % shlex.quote(node)).strip()
             if not address:
                 raise RuntimeError("%s: no Kubernetes node named %s" % (label, node))
-            if "k8s" in spec["setups"]:
+            if any(setup.startswith("k8s") for setup in spec["setups"]):
                 kubeconfig = remote(state, state["master"], "cat ~/aries-kubeconfig").encode()
                 remote(state, target, "umask 077; cat > ~/%s/kubeconfig" % REMOTE_ARIES, data=kubeconfig)
             needs_key = any(harness not in recordings for harness in worker["harnesses"])

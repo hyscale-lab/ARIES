@@ -32,16 +32,32 @@ import os
 import statistics
 from collections import defaultdict
 
+import sys
+
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-SETUPS = [("native", "Native (own Docker)"), ("docker", "ARIES + Docker"), ("k8s", "ARIES + Kubernetes")]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import setups  # noqa: E402
+
+# The setups the figures show, with their colours. use_setups() narrows them
+# to a campaign's, in place, so modules that imported them see the change.
+SETUPS = []
+SETUP_COLOR = {}
 HARNESSES = [("hermes", "Hermes"), ("openclaw", "OpenClaw")]
 TASKS = ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"]
-# Categorical slots 1-3 of the validated reference palette (all-pairs safe).
-SETUP_COLOR = {"native": "#2a78d6", "docker": "#eb6834", "k8s": "#1baf7a"}
+
+
+def use_setups(keys):
+    keys = setups.ordered(keys)
+    SETUPS[:] = [(key, setups.LABEL[key]) for key in keys]
+    SETUP_COLOR.clear()
+    SETUP_COLOR.update(setups.colors(keys))
+
+
+use_setups(["native", "docker", "k8s"])
 # Slots 1-6 in order, validated for adjacent pairs (stacked segments).
 STAGES = [
     ("Sandbox start and register", "#2a78d6"),
@@ -200,7 +216,7 @@ def save(figure, out, name, record):
 
 def setup_legend(figure, y=1.0):
     handles = [plt.Rectangle((0, 0), 1, 1, color=SETUP_COLOR[key]) for key, _ in SETUPS]
-    figure.legend(handles, [label for _, label in SETUPS], loc="upper center", ncol=3, bbox_to_anchor=(0.5, y),
+    figure.legend(handles, [label for _, label in SETUPS], loc="upper center", ncol=min(len(SETUPS), 4), bbox_to_anchor=(0.5, y),
                   handlelength=1, handleheight=1, columnspacing=1.6)
 
 
@@ -243,11 +259,11 @@ def plot_stages(rows, out, table, record):
 
 
 def grouped_bars(axis, groups, values, unit_format, missing="n/a"):
-    width = 0.26
+    width = 0.8 / len(SETUPS)
     for i, (backend, _) in enumerate(SETUPS):
         for g, key in enumerate(groups):
             value = values.get((key, backend))
-            x = g + (i - 1) * width
+            x = g + (i - (len(SETUPS) - 1) / 2) * width
             if value is None:
                 axis.text(x, 0, missing, ha="center", va="bottom", fontsize=6.5, color=MUTED)
                 continue

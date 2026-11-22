@@ -40,7 +40,7 @@ raw runs.
 | `name` | The experiment's name. On the workers, campaigns run in `~/aries-campaigns/<name>/`. |
 | `description` | One line saying what is measured. It opens the report's Setup section. |
 | `harnesses` | The harnesses to measure, `openclaw` and `hermes`. Each gets a worker of its own; with more harnesses than workers, a worker runs them one after another. |
-| `setups` | Where tools run: `docker` (an ARIES Docker sandbox), `k8s` (an ARIES Kubernetes pod) and `native` (the harness's own Docker sandbox). Each repetition runs them in this order. `native` must come after `docker`, because the native baseline reuses an ARIES Docker run's harness configuration. |
+| `setups` | Where tools run: `docker` (an ARIES Docker sandbox), `k8s` (an ARIES Kubernetes pod), its variants `k8s-gvisor` and `k8s-kata` (the pod under a RuntimeClass), `k8s-agent-sandbox[-gvisor\|-kata]` (an agent-sandbox `Sandbox`) and `k8s-warm-pool[-gvisor\|-kata]` (a claim from a warm pool of one), and `native` (the harness's own Docker sandbox). [`scripts/microbench/setups.py`](../scripts/microbench/setups.py) lists them with their `run.sh` options. Each repetition runs them in this order. `native` must come after `docker`, because the native baseline reuses an ARIES Docker run's harness configuration. Reports compare every setup with `native`, or with `k8s` when native was not run. |
 | `tasks` | The microbenchmark tasks each run includes, from `benchmarks/microbench/`. |
 | `repetitions` | How many times each setup runs. |
 | `warm` | `true` runs each task cold on a fresh harness and sandbox, then warm on the same ones, so every run gives both measurements. `false` runs it cold only. |

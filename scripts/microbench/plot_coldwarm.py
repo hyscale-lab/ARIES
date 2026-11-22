@@ -26,7 +26,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plot import (CPU_LIMIT, HARNESSES, INK, INK_2, MUTED, SETUP_COLOR, SETUPS, STAGES, SURFACE, TASKS,  # noqa: E402
-                  cpu_rate, number, parse_time, plt, samples, save, setup_legend, style, task_name)
+                  cpu_rate, number, parse_time, plt, samples, save, setup_legend, style, task_name, use_setups)
 
 E2E_STAGES = [
     ("Sandbox, bridge and harness container", STAGES[0][1]),
@@ -41,6 +41,12 @@ AFTER_STAGES = [
     ("Evaluate", STAGES[2][1]),
     ("Clean up", STAGES[3][1]),
 ]
+
+
+def tall(height):
+    """A figure's height for the setups shown; the layouts were drawn for
+    three."""
+    return height * max(1.0, len(SETUPS) / 3)
 
 
 def mean(values):
@@ -118,7 +124,7 @@ def plot_end_to_end(rows, out, table, record):
                 per[(row["harness"], row["task"], row["backend"], measure)].append(end_to_end_values(row, measure))
     bars = [(backend, measure, "%s · %s" % (name, measure)) for backend, name in SETUPS for measure in ("cold", "warm")]
     positions = [i * 2.4 + j for i in range(len(SETUPS)) for j in (0, 1)]
-    figure, axes = plt.subplots(len(HARNESSES), len(TASKS), figsize=(15, 6.6), sharey=True)
+    figure, axes = plt.subplots(len(HARNESSES), len(TASKS), figsize=(15, tall(6.6)), sharey=True)
     for r, (harness, harness_label) in enumerate(HARNESSES):
         limit = max(sum(mean(column) for column in zip(*runs))
                     for (h, _, _, _), runs in per.items() if h == harness) * 1.22
@@ -157,7 +163,7 @@ def plot_after(rows, out, table, record):
     per = defaultdict(lambda: defaultdict(list))
     for row in rows:
         per[row["harness"]][row["backend"]].append(after_values(row))
-    figure, axes = plt.subplots(1, len(HARNESSES), figsize=(11, 2.4), sharex=True)
+    figure, axes = plt.subplots(1, len(HARNESSES), figsize=(11, tall(2.4)), sharex=True)
     for c, (axis, (harness, label)) in enumerate(zip(axes, HARNESSES)):
         style(axis)
         stacked_rows(axis, per[harness], AFTER_STAGES, table, ["after-answer", harness, "all tasks"])
@@ -209,7 +215,7 @@ def plot_task(rows, task, out, table, record):
     bars = [(i * 2.4 + j, (backend, measure), "%s · %s" % (name, measure))
             for i, (backend, name) in enumerate(SETUPS) for j, measure in enumerate(("cold", "warm"))]
     after_bars = [(i, (backend, "after"), name) for i, (backend, name) in enumerate(SETUPS)]
-    figure, axes = plt.subplots(2, len(HARNESSES), figsize=(13, 6.4), sharey="row",
+    figure, axes = plt.subplots(2, len(HARNESSES), figsize=(13, tall(6.4)), sharey="row",
                                 gridspec_kw={"height_ratios": [2.3, 1]})
     for c, (harness, harness_label) in enumerate(HARNESSES):
         per = defaultdict(list)
@@ -375,6 +381,7 @@ def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     rows = load(sys.argv[1])
+    use_setups({row["backend"] for row in rows})
     entries = load_entries(sys.argv[1])
     out = sys.argv[2]
     os.makedirs(out, exist_ok=True)
