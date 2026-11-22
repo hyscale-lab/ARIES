@@ -1,27 +1,107 @@
 [
   {
-    "trial": "02a77c58-1e9a-4cfb-a332-da5a752e0cfc",
-    "trajectory_sha256": "ec22ca5398af7061a1b51261a7abefdb3775e3422682232fccdaa8494dd22a4f",
-    "rollout_sha256": "8193dbe7464cf2822e736a524689e69c18ca905db0703c8fc0ee2b716d12e818"
+    "task": "fix-git",
+    "workdir": "/app/personal-site",
+    "image": "docker.io/alexgshaw/fix-git@sha256:389b9c8247610c2c5be080b1ac00429007c2c69bf57f7f26c79f0f75ba2d5c74",
+    "effects": [
+      "Inspect Git repository, recover detached commit, merge and run repository tests"
+    ],
+    "trials": [
+      {
+        "trial": "02a77c58-1e9a-4cfb-a332-da5a752e0cfc",
+        "trajectory_sha256": "ec22ca5398af7061a1b51261a7abefdb3775e3422682232fccdaa8494dd22a4f",
+        "rollout_sha256": "8193dbe7464cf2822e736a524689e69c18ca905db0703c8fc0ee2b716d12e818"
+      },
+      {
+        "trial": "1761aadb-1aa4-42aa-a911-a92a07711d38",
+        "trajectory_sha256": "73608b4222f8f0bc9108b568194a8847c0090afd8149283b86586898980c5c29",
+        "rollout_sha256": "6586ecb47c9cf1c161ea053354f165f46b27bfd255092a68eb76f1fe00c015e0"
+      },
+      {
+        "trial": "1966b12e-293a-43f9-b9dd-3f41b18972ed",
+        "trajectory_sha256": "576b34392c6aa9fdbfea03f6f3802f47e83aea26aa4cf333762ac1a19e7d78fe",
+        "rollout_sha256": "4e2331ae4b01c6e41b85f137f855f2683a502f91c366e336af626956c2ff59a1"
+      },
+      {
+        "trial": "db5b8820-57ae-43d3-a0a6-68efc08e3be0",
+        "trajectory_sha256": "a6e1f77a2a804eb8f4d11575a04237785863b3fb4884c76e741e9d227167949b",
+        "rollout_sha256": "a0b4cd59207357552f3e228790aca96cf6d5ca7dd468d62daeb76b69e3a0e8d6"
+      },
+      {
+        "trial": "fd59d5ea-5f2f-4c8f-a9c9-aa0c6e9e7033",
+        "trajectory_sha256": "a580ebc44b2aaf67d8fab14fae0e6c408f7473b8249fc17f042de3e5311ccdd0",
+        "rollout_sha256": "e0e1e2a48d93e36793349acc1f01e995fc05b67f84489a507500e8e2d185e798"
+      }
+    ]
   },
   {
-    "trial": "1761aadb-1aa4-42aa-a911-a92a07711d38",
-    "trajectory_sha256": "73608b4222f8f0bc9108b568194a8847c0090afd8149283b86586898980c5c29",
-    "rollout_sha256": "6586ecb47c9cf1c161ea053354f165f46b27bfd255092a68eb76f1fe00c015e0"
+    "task": "regex-log",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/regex-log@sha256:90101b2e815323a8da20528a1439bebc407eb9761c9c68a3d557730856c878e9",
+    "effects": [
+      "Inspect local environment, write /app/regex.txt and test date/IPv4 matching on local strings"
+    ],
+    "trials": [
+      {
+        "trial": "2a281440-7576-4c31-b496-59dec2841216",
+        "trajectory_sha256": "c2ba4dc995dcd88a6c1dc7c4d9e3f18be2fbde2d48688c401c393b3ca460819d",
+        "rollout_sha256": "80af8957ca43ecf39f839e573b4ffc139a658cb846f3fee637d9e450a9408ba3"
+      },
+      {
+        "trial": "3c332446-a1af-421a-acfa-9ee593f397c5",
+        "trajectory_sha256": "0669cbe9a94f2f170478a4c90376355a6af72611c0b1371e790252b391d5084f",
+        "rollout_sha256": "66081466657bb6935d391ee4b3018b49cff1ce815b13433fddae3e96917e1373"
+      },
+      {
+        "trial": "67ff0bae-15d7-472b-9992-3369770f8508",
+        "trajectory_sha256": "86f6786c6da5021a478f75d4fb39e6f483d82b3d0216e1de606dff237cfa0fd9",
+        "rollout_sha256": "7afb619ffb6b5cb7d234dda00aa8d9e1d611cf134b68d1bb69ba1e96e83ebce6"
+      },
+      {
+        "trial": "b93b80c7-c662-44ec-ae06-b630f43500b8",
+        "trajectory_sha256": "3e8e6f225c1eed37ec5b9d688c0a8e0179b4c35f73f8f394a6c7d29bd4ac2864",
+        "rollout_sha256": "35870037da2171a4e02fb2108a9fec188805bcde444922af93c3b439d26738e7"
+      },
+      {
+        "trial": "bd2dd0ad-ec80-4b91-a5a3-6977768dbc92",
+        "trajectory_sha256": "92d888e9e26ab294bdde346a3b0ac8d8312146aa9f395979d34e673e6806abc2",
+        "rollout_sha256": "3b35dcb6ac42afc43871d8897552b5d01896f6913791d32d3f651d4e122b5eb1"
+      }
+    ]
   },
   {
-    "trial": "1966b12e-293a-43f9-b9dd-3f41b18972ed",
-    "trajectory_sha256": "576b34392c6aa9fdbfea03f6f3802f47e83aea26aa4cf333762ac1a19e7d78fe",
-    "rollout_sha256": "4e2331ae4b01c6e41b85f137f855f2683a502f91c366e336af626956c2ff59a1"
-  },
-  {
-    "trial": "db5b8820-57ae-43d3-a0a6-68efc08e3be0",
-    "trajectory_sha256": "a6e1f77a2a804eb8f4d11575a04237785863b3fb4884c76e741e9d227167949b",
-    "rollout_sha256": "a0b4cd59207357552f3e228790aca96cf6d5ca7dd468d62daeb76b69e3a0e8d6"
-  },
-  {
-    "trial": "fd59d5ea-5f2f-4c8f-a9c9-aa0c6e9e7033",
-    "trajectory_sha256": "a580ebc44b2aaf67d8fab14fae0e6c408f7473b8249fc17f042de3e5311ccdd0",
-    "rollout_sha256": "e0e1e2a48d93e36793349acc1f01e995fc05b67f84489a507500e8e2d185e798"
+    "task": "constraints-scheduling",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/constraints-scheduling@sha256:567ce5a189f8d11ac461790876e934cc7af38391baf89a78f95f4dafc1fec3b0",
+    "effects": [
+      "Read three input calendars, calculate intersection, write /app/meeting_scheduled.ics and check original calendar hashes"
+    ],
+    "trials": [
+      {
+        "trial": "036e7370-cca8-4f39-8b10-07028d86efc1",
+        "trajectory_sha256": "5efc77f0069d41a34e586baccf14e3d03b7ea93d846257fdf3f81cfe63b3b8f3",
+        "rollout_sha256": "ad84c9a37a8876ba2c700bbc56e1bca8c6e0088e110bb5561380e9c0348d2d98"
+      },
+      {
+        "trial": "1058f9a0-b516-49ba-ac6d-76457b35a0a9",
+        "trajectory_sha256": "c9f011660c4eed9e59e316591fa4536f3d61a2826308c2b0db19254ffd7bade9",
+        "rollout_sha256": "dc9966b39136dbd129f49de799429a8d9befa30b300e410ae17682c310b688d2"
+      },
+      {
+        "trial": "b33d2a90-b9ca-46fa-8b11-4ae7ca8fef9a",
+        "trajectory_sha256": "a9e1adf3cfd5697c15e3e35a18e04971369217a345fbd426378c76ab80bfecc0",
+        "rollout_sha256": "ca8c48c6333b99022f8eac800808ec235b4cdc27cb965dd7a34f28914fdec753"
+      },
+      {
+        "trial": "cf3e1d0e-34e5-4daf-8989-d9205bdcd098",
+        "trajectory_sha256": "98614db4fc5d2408684ec24e0abbef6724bfee4b9e4766546e8b62769c3a6cf1",
+        "rollout_sha256": "babd28f26da163722a550e56a01fa6c10d983e5c84b0b73f08b99653463f70fb"
+      },
+      {
+        "trial": "d5428634-2c77-4f43-b723-0af3653669b9",
+        "trajectory_sha256": "ec5178278a446b1ca9a2108fde048e65f2205fd178cc34379699c61782e879a4",
+        "rollout_sha256": "b7fdb788b696b7602785faaa7a91497de3a8110a3fcb74a47cadf0861ddef989"
+      }
+    ]
   }
 ]

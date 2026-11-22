@@ -42,6 +42,8 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
+	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
+	osTools := flag.String("os-tools", "", "pinned task-specific offline Ubuntu package archive")
 	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
 	probe := flag.String("guest-probe", "", "optional guest telemetry executable for diagnostic runs")
 	sampler := flag.String("sampler", "", "host sample_vmm.py")
@@ -76,6 +78,12 @@ func command(ctx context.Context) error {
 	if *image == "" {
 		return json.NewEncoder(os.Stdout).Encode(r)
 	}
+	if *image != r.Image {
+		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
+	}
+	if r.Task != "fix-git" && (*codexTools == "" || *osTools == "") {
+		return errors.New("this task requires -codex-tools and -os-tools for the source guest environment")
+	}
 	if (*sampler == "") != (*samples == "") {
 		return errors.New("provide -sampler and -samples together")
 	}
@@ -84,27 +92,27 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *storage, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *storage, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe string, storage int, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools string, storage int, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
 	}
 	defer func() { retErr = errors.Join(retErr, m.Close()) }()
-	name := fmt.Sprintf("aries-fix-git-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("aries-%s-%d", r.Task, time.Now().UnixNano())
 	lifecycle := func(phase string) error {
 		t, err := harbor.Clock()
 		if err != nil {
 			return err
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
 	}
-	req := deployment.Request{Name: name, Image: image, StorageMB: storage, Workdir: "/app/personal-site", Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": "fix-git"}}
+	req := deployment.Request{Name: name, Image: image, StorageMB: storage, Workdir: r.Workdir, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
@@ -159,12 +167,12 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if err != nil {
 		return err
 	}
-	gitState, err := m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-c", initialGitState}, Dir: "/app/personal-site"})
+	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools)
 	prepEnd, clockErr := harbor.Clock()
-	if err != nil || clockErr != nil || gitState.ExitCode != 0 || !json.Valid([]byte(gitState.Stdout)) {
-		return errors.Join(fmt.Errorf("restore source Git starting state: %s", gitState.Stderr), err, clockErr)
+	if err != nil || clockErr != nil {
+		return errors.Join(err, clockErr)
 	}
-	if err = log.Encode(map[string]any{"event": "source_git_ready", "begin_monotonic_ns": prepBegin, "end_monotonic_ns": prepEnd, "state": json.RawMessage(gitState.Stdout)}); err != nil {
+	if err = log.Encode(map[string]any{"event": event, "begin_monotonic_ns": prepBegin, "end_monotonic_ns": prepEnd, "state": state}); err != nil {
 		return err
 	}
 	if err = m.Start(ctx, id); err != nil {
@@ -233,5 +241,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return nil
 		},
 	}
-	return harbor.Run(ctx, r, h)
+	if err := harbor.Run(ctx, r, h); err != nil {
+		return err
+	}
+	if r.Task != "fix-git" {
+		return captureTaskOutput(ctx, m, id, r, log)
+	}
+	return nil
 }
