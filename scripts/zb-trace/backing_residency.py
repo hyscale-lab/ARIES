@@ -64,6 +64,23 @@ def collect(pid, ticks):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('samples',type=Path)
+    parser.add_argument('--interval',type=float,default=0,help='seconds between observations of this exact VMM')
     args=parser.parse_args()
-    sample=json.loads(args.samples.read_text().splitlines()[-1])
-    print(json.dumps(collect(sample['pid'],int(sample['start_ticks']))))
+    if args.interval<0:
+        parser.error("interval must be nonnegative")
+    deadline=time.monotonic()+360
+    while not args.samples.exists() or not args.samples.stat().st_size:
+        if not args.interval or time.monotonic()>deadline:
+            raise TimeoutError("no VMM sample")
+        time.sleep(.2)
+    sample=json.loads(args.samples.open().readline())
+    pid, ticks=sample['pid'],int(sample['start_ticks'])
+    while True:
+        try:
+            row=collect(pid,ticks)
+        except (FileNotFoundError, ProcessLookupError):
+            if Path('/proc',str(pid)).exists():raise
+            break
+        print(json.dumps(row),flush=True)
+        if not args.interval:break
+        time.sleep(args.interval)

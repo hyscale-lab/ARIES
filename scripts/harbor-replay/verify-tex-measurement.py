@@ -1,4 +1,4 @@
-"""Check source, final task state and measurement lineage against a validated TeX recording."""
+"""Check source, final task state and measurement lineage against a validated original recording."""
 import argparse
 import hashlib
 import json
@@ -9,7 +9,8 @@ def verify(raw, receipt, variant, node, binary, hook):
     ref=json.loads(receipt.read_text())
     ev=[json.loads(line) for line in (raw/'events.jsonl').read_text().splitlines()]
     create,=[e for e in ev if e['event']=='create_start']
-    assert ref['session_completed'] and ref['all_observed_tool_exits_match'] and ref['task']=='overfull-hbox'
+    assert ref['session_completed'] and ref['all_observed_tool_exits_match'] and ref['task'] in ('overfull-hbox','regex-log','constraints-scheduling')
+    assert ref['task']==create['task']
     assert ev[-1]['event']=='removed' and create['trial_id']==ref['trial_id'] and create['job_id']==ref['job_id']
     for k in ('image','trajectory_sha256','rollout_sha256','memory_mib','storage_mib','vcpus'):
         assert ref[k]==create[k],k

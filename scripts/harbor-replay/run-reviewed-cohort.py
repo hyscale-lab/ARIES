@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run a fixed cohort of previously validated regex, calendar and TeX recordings."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -32,7 +33,9 @@ def main():
             raise ValueError('missing successful source-specific fidelity evidence')
         folder=asset/'sources'/task/trial
         direct=['-trajectory',str(folder/'trajectory.json'),'-rollout',str(folder/'rollout.jsonl')]
-        cmd=asset/'aries-tex'
+        cmd=asset/('aries-tex' if task=='overfull-hbox' else 'aries-multitask')
+        if hashlib.sha256(cmd.read_bytes()).hexdigest()!=receipt['adapter_binary_sha256']:
+            raise ValueError(f'adapter differs from validation receipt for {trial}')
         # Adapter enforces both source digests, image identity and resource contract.
         key=trial[:8]+'-'+a.variant+'-cohort'
         first=asset/'runs'/(key+'-01')
