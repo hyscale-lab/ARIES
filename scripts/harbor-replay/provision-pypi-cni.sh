@@ -120,13 +120,22 @@ PYTLS
     # The platform mounts /etc/hosts read-only. Resolve service records on this
     # dedicated bridge and return NXDOMAIN for names outside the approved set.
     test -x /usr/sbin/dnsmasq
+    # The private runtime can be mode 0700. dnsmasq reloads records after
+    # dropping privileges, so expose only these four public DNS records.
+    dns_runtime=/run/$dns_unit
+    sudo -n install -d -m 0755 "$dns_runtime"
+    sudo -n install -m 0644 "$base/dns.hosts" "$dns_runtime/hosts"
+    if sudo -n systemctl is-active --quiet "$dns_unit" &&
+       ! sudo -n systemctl show -p ExecStart --value "$dns_unit" | grep -Fq -- "--addn-hosts=$dns_runtime/hosts"; then
+        sudo -n systemctl stop "$dns_unit"
+    fi
     if sudo -n systemctl is-active --quiet "$dns_unit"; then
         sudo -n systemctl kill --signal=HUP "$dns_unit"
     else
         sudo -n systemd-run --unit="$dns_unit" --property=Restart=no \
             /usr/sbin/dnsmasq --keep-in-foreground --conf-file=/dev/null --no-hosts --no-resolv \
             --bind-dynamic --interface="$bridge" --except-interface=lo --listen-address="$resolver" \
-            --addn-hosts="$base/dns.hosts" --local=/#/ --pid-file="$base/dns.pid"
+            --addn-hosts="$dns_runtime/hosts" --local=/#/ --pid-file="$dns_runtime/dns.pid"
     fi
 fi
 if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
