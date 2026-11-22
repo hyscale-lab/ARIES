@@ -57,6 +57,8 @@ def summarize(events, boundaries):
     for boundary in tool_bounds[1:]:
         window = boundary["window"]
         begin, end = window["arm_end_ns"], window["scan_begin_ns"]
+        if begin > end:
+            raise ValueError("idle window ends before it was armed")
         accessed = set(window["accessed_gpas"])
         sizes = Counter(window["unknown_gpas"].values())
         phase = boundary["phase"]
@@ -92,4 +94,4 @@ if __name__ == "__main__":
     parser.add_argument("run_directory", type=Path)
     args = parser.parse_args()
     root = args.run_directory
-    print(json.dumps(summarize(records(root / "events.jsonl"), records(root / "boundaries.jsonl")), indent=2))
+    print(json.dumps(summarize(records(root / "events.jsonl"), records(root / "idle.jsonl")), indent=2))
