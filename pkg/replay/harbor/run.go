@@ -22,6 +22,9 @@ type Hooks struct {
 }
 
 type Receipt struct {
+	SourceCallID     string `json:"source_call_id,omitempty"`
+	SourceKind       string `json:"source_kind,omitempty"`
+	ParallelSize     int    `json:"parallel_size,omitempty"`
 	Event            string `json:"event"`
 	SessionID        int    `json:"source_process_session_id,omitempty"`
 	Operation        string `json:"operation,omitempty"`
@@ -97,45 +100,31 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 	if err := h.Boundary(ctx, "session-start", 0); err != nil {
 		return err
 	}
-	for _, e := range r.Events {
+	for i := 0; i < len(r.Events); i++ {
+		e := r.Events[i]
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		receipt := Receipt{Event: "source_event", Line: e.Line, Step: e.Step, Sequence: e.Sequence, Basis: e.Basis}
-		if e.Wait > 0 {
-			receipt.Event = "wait_start"
-			receipt.RequestedNS = int64(e.Wait)
-			if err := emit(h, receipt); err != nil {
-				return err
-			}
-			timer := time.NewTimer(e.Wait)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
-			receipt.Event = "wait_end"
-			if err := emit(h, receipt); err != nil {
-				return err
-			}
-			receipt.Event = "source_event"
-		}
-		if err := emit(h, receipt); err != nil {
+		receipt, err := recordSourceEvent(ctx, h, e)
+		if err != nil {
 			return err
+		}
+		if e.ParallelSize > 1 {
+			end := i + 2*e.ParallelSize
+			if end > len(r.Events) {
+				return errors.New("invalid parallel event span")
+			}
+			if err := runParallel(ctx, h, r, r.Events[i:end], receipt); err != nil {
+				return err
+			}
+			i = end - 1
+			continue
 		}
 		if e.Kind != "exec_command" && e.Kind != "view_image" && e.Kind != "write_stdin" {
 			continue
 		}
 		call := r.Plan.Calls[e.Sequence-1]
-		receipt.Operation = call.Operation
-		if call.SessionID != 0 {
-			receipt.SessionID = call.SessionID
-			receipt.StatusBasis = "live_process_status_or_exit"
-		}
-		if call.Operation == "ViewImage" {
-			receipt.StatusBasis = "recorded_high_detail_image_attachment"
-		}
+		receipt = toolReceipt(receipt, call)
 		if err := h.Boundary(ctx, "pre-tool", e.Step); err != nil {
 			return err
 		}
@@ -145,25 +134,71 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		}
 		out, replyTime, err := h.executeTool(ctx, call, receipt)
 		captureErr := h.Boundary(ctx, "post-tool", e.Step)
-		receipt.Event = "tool_reply"
-		receipt.Time = replyTime
-		receipt.OutputComparison = compareOutput(call.ResponseStdout, out)
-		receipt.SourceOutputSHA = digest(call.ResponseStdout)
-		receipt.Exit = &out.ExitCode
-		receipt.Expected = &call.ExitCode
-		receipt.Stdout = out.Stdout
-		receipt.Stderr = out.Stderr
-		receipt.StdoutSHA = digest([]byte(out.Stdout))
-		receipt.StderrSHA = digest([]byte(out.Stderr))
-		if err = errors.Join(err, captureErr, h.Record(receipt)); err != nil {
+		if err := recordReply(h, call, receipt, out, replyTime, errors.Join(err, captureErr)); err != nil {
 			return err
 		}
-		if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
-			return fmt.Errorf("step %d image attachment differs from the source", e.Step)
+	}
+	return nil
+}
+
+func recordSourceEvent(ctx context.Context, h Hooks, e Event) (Receipt, error) {
+	receipt := Receipt{Event: "source_event", SourceKind: e.Kind, SourceCallID: e.CallID, Line: e.Line, Step: e.Step, Sequence: e.Sequence, Basis: e.Basis, ParallelSize: e.ParallelSize}
+	if e.Wait > 0 {
+		receipt.Event = "wait_start"
+		receipt.RequestedNS = int64(e.Wait)
+		if err := emit(h, receipt); err != nil {
+			return receipt, err
 		}
-		if int32(out.ExitCode) != call.ExitCode {
-			return fmt.Errorf("step %d live exit %d, recorded %d", e.Step, out.ExitCode, call.ExitCode)
+		timer := time.NewTimer(e.Wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return receipt, ctx.Err()
+		case <-timer.C:
 		}
+		receipt.Event = "wait_end"
+		if err := emit(h, receipt); err != nil {
+			return receipt, err
+		}
+		receipt.Event = "source_event"
+	}
+	if err := emit(h, receipt); err != nil {
+		return receipt, err
+	}
+
+	return receipt, nil
+}
+func toolReceipt(receipt Receipt, call replay.Call) Receipt {
+	receipt.Operation = call.Operation
+	if call.SessionID != 0 {
+		receipt.SessionID = call.SessionID
+		receipt.StatusBasis = "live_process_status_or_exit"
+	}
+	if call.Operation == "ViewImage" {
+		receipt.StatusBasis = "recorded_high_detail_image_attachment"
+	}
+
+	return receipt
+}
+func recordReply(h Hooks, call replay.Call, receipt Receipt, out core.CommandResult, replyTime int64, callErr error) error {
+	receipt.Event = "tool_reply"
+	receipt.Time = replyTime
+	receipt.OutputComparison = compareOutput(call.ResponseStdout, out)
+	receipt.SourceOutputSHA = digest(call.ResponseStdout)
+	receipt.Exit = &out.ExitCode
+	receipt.Expected = &call.ExitCode
+	receipt.Stdout = out.Stdout
+	receipt.Stderr = out.Stderr
+	receipt.StdoutSHA = digest([]byte(out.Stdout))
+	receipt.StderrSHA = digest([]byte(out.Stderr))
+	if err := errors.Join(callErr, h.Record(receipt)); err != nil {
+		return err
+	}
+	if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
+		return fmt.Errorf("step %d image attachment differs from the source", receipt.Step)
+	}
+	if int32(out.ExitCode) != call.ExitCode {
+		return fmt.Errorf("step %d live exit %d, recorded %d", receipt.Step, out.ExitCode, call.ExitCode)
 	}
 	return nil
 }

@@ -48,6 +48,7 @@ type guestProcess struct {
 // ProcessSessions owns live foreground processes that returned a native
 // session handle. Only empty write_stdin polls are accepted by the parser.
 type ProcessSessions struct {
+	lock   sync.Mutex
 	ctx    context.Context
 	cancel context.CancelFunc
 	run    GuestStream
@@ -63,10 +64,12 @@ func NewProcessSessions(ctx context.Context, run GuestStream) *ProcessSessions {
 func (s *ProcessSessions) Close() { s.cancel(); s.wg.Wait() }
 
 func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	s.lock.Lock()
 	p := s.active[call.SessionID]
 	switch call.Operation {
 	case "StartProcess":
 		if p != nil {
+			s.lock.Unlock()
 			return core.CommandResult{}, fmt.Errorf("duplicate live session %d", call.SessionID)
 		}
 		p = &guestProcess{done: make(chan struct{})}
@@ -79,11 +82,14 @@ func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.C
 		}()
 	case "PollProcess":
 		if p == nil {
+			s.lock.Unlock()
 			return core.CommandResult{}, fmt.Errorf("missing live session %d", call.SessionID)
 		}
 	default:
+		s.lock.Unlock()
 		return core.CommandResult{}, errors.New("unexpected process session operation")
 	}
+	s.lock.Unlock()
 	timer := time.NewTimer(call.YieldTime)
 	defer timer.Stop()
 	select {
@@ -98,7 +104,9 @@ func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.C
 	case <-p.done:
 		out = p.result
 		err = p.err
+		s.lock.Lock()
 		delete(s.active, call.SessionID)
+		s.lock.Unlock()
 	default:
 	}
 	out.Stdout = p.stdout.take()

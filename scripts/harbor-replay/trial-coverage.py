@@ -28,12 +28,21 @@ def make(sources, inventory, reviewed, outputs):
                    "source_status": trial["status"], "reviewed_dispatch": (task, ident) in bound}
             if item:
                 row["source_tool_counts"] = item["tool_counts"]
+            attempts = sorted((outputs / "attempts").glob(f"{task}-{ident}-*.json"))
+            if attempts:
+                row["attempts"] = [str(p.relative_to(outputs)) for p in attempts]
             if path.exists():
                 r = json.loads(path.read_text())
                 row["receipt"] = path.name
                 row["state"] = ("validated_observed_exits" if r["session_completed"] and
                                 r["all_observed_tool_exits_match"] else "partial_or_divergent")
+                if r.get("external_actions"):
+                    row["external_actions"] = r["external_actions"]
+                    if row["state"] == "validated_observed_exits":
+                        row["state"] = "validated_guest_exits_external_response_unavailable"
                 row["live_guest_calls"] = len(r["tools"])
+            elif attempts:
+                row["state"] = "live_attempt_incomplete_or_divergent"
             elif row["reviewed_dispatch"]:
                 row["state"] = "source_bound_awaiting_validation"
             elif task in require_review:

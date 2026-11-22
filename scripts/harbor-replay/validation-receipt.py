@@ -14,7 +14,10 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
         raise ValueError("ATIF input differs from the native diagnostic")
     expected_steps = [step["step_id"] for step in json.loads(original)["steps"]
                       for call in step.get("tool_calls", [])
-                      if call["function_name"] != "update_plan"]
+                      if call["function_name"] not in {"update_plan", "web_search_call"}]
+    external = [{"step_id": s["step_id"], "arguments": t["arguments"], "response_status": "unavailable_in_original_source"}
+                for s in json.loads(original)["steps"] for t in s.get("tool_calls", [])
+                if t["function_name"] == "web_search_call"]
     dispatch = {}
     waits = collections.Counter()
     lifecycle = {}
@@ -52,6 +55,9 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
     exit_match = all(e["exit_code"] == e["expected_exit_code"] for e in replies)
     # Durable outcome and final guest checks appear in the last recorded tool.
     # Keep the final returned streams as evidence of what checks actually ran.
+    final_stdout = last.get("stdout", "")
+    if last.get("operation") == "ViewImage":
+        final_stdout = f"Image attachment of {len(final_stdout)} serialized bytes; digest in tools."
     return {
         "schema": "aries.harbor.replay-validation.v1",
         **{k: first[k] for k in ("row_id", "job_id", "trial_id", "image", "trajectory_sha256",
@@ -59,9 +65,9 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
         "task": task, "host": host, "configuration": "v1", "adapter_revision": revision,
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
         "observer": first["observer"], "session_completed": bool(full),
-        "expected_step_ids": expected_steps, "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
+        "expected_step_ids": expected_steps, "external_actions": external, "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
         "modeled_wait_ns_by_basis": dict(waits), "source_setup_and_final_state": ready, "tools": replies,
-        "final_tool_stdout": last.get("stdout", ""), "final_tool_stderr": last.get("stderr", ""),
+        "final_tool_stdout": final_stdout, "final_tool_stderr": last.get("stderr", ""),
     }
 
 

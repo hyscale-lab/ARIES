@@ -228,6 +228,11 @@
         "trial": "b43d6be8-70d4-44fb-97a6-358b6bb55b3f",
         "trajectory_sha256": "181c06bcdefb2144c887e8aef3fbdad816e80704ef3f4918b7d55fcaf088274b",
         "rollout_sha256": "9f687584373a176a0eb84c079c8cbfd1fd0b60fdaaaec77c923879bb8e3aea15"
+      },
+      {
+        "trial": "f898ee15-878b-4543-88f7-16194404dab9",
+        "trajectory_sha256": "b644dee0d22d954b869c9fe43bd55101a409caa28cd9c8c1a1dbda83b44493a7",
+        "rollout_sha256": "8456d47c438fbbec33803d9e559777eccbf5992c4593606bfbce1deff2205aea"
       }
     ],
     "vcpus": 1,

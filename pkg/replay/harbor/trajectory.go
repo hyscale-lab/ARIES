@@ -52,15 +52,16 @@ type sourceStep struct {
 // Event points into the retained rollout, which preserves original message,
 // reasoning, plan update, and tool payloads without copying them to run logs.
 type Event struct {
-	Line       int           `json:"rollout_line"`
-	SourceTime time.Time     `json:"source_time"`
-	Kind       string        `json:"kind"`
-	Role       string        `json:"role,omitempty"`
-	Step       int           `json:"step_id,omitempty"`
-	CallID     string        `json:"call_id,omitempty"`
-	Sequence   uint64        `json:"guest_sequence,omitempty"`
-	Wait       time.Duration `json:"modeled_wait_ns"`
-	Basis      string        `json:"wait_basis"`
+	ParallelSize int           `json:"parallel_size,omitempty"`
+	Line         int           `json:"rollout_line"`
+	SourceTime   time.Time     `json:"source_time"`
+	Kind         string        `json:"kind"`
+	Role         string        `json:"role,omitempty"`
+	Step         int           `json:"step_id,omitempty"`
+	CallID       string        `json:"call_id,omitempty"`
+	Sequence     uint64        `json:"guest_sequence,omitempty"`
+	Wait         time.Duration `json:"modeled_wait_ns"`
+	Basis        string        `json:"wait_basis"`
 }
 
 type workload struct {
@@ -149,25 +150,40 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 	r := &Recording{NeedsNetwork: w.NeedsNetwork, VCPUs: w.VCPUs, MemoryMiB: w.MemoryMiB, StorageMiB: w.StorageMiB, Task: w.Task, Workdir: w.Workdir, Image: w.Image, ReviewedEffects: w.Effects, Trial: trial, Job: Job, Row: Row, Session: t.Session, Model: t.Agent.Model, TrajectoryHash: digest(atif), RolloutHash: digest(rollout)}
 	r.Plan.SourceRunID = Job
 	r.Plan.SourceTaskID = trial
+	ordinary, web, err := splitWebActions(t.Steps, slices.Contains(w.Tools, "web_search_call"))
+	if err != nil {
+		return nil, err
+	}
 	calls := map[string]indexedCall{}
-	for i, s := range t.Steps {
-		if s.ID != i+1 || s.Timestamp.IsZero() || len(s.Tools) > 1 || len(s.Tools) != len(s.Observation.Results) {
+	batchSizes := map[int]int{}
+	for i, s := range ordinary {
+		if s.ID != i+1 || s.Timestamp.IsZero() || len(s.Tools) > 16 || len(s.Tools) != len(s.Observation.Results) {
 			return nil, fmt.Errorf("unsupported ATIF step %d", s.ID)
 		}
 		r.Steps = append(r.Steps, s.Step)
+		if len(s.Tools) > 1 {
+			batchSizes[s.ID] = len(s.Tools)
+		}
+		results := map[string]string{}
+		for _, result := range s.Observation.Results {
+			if _, exists := results[result.ID]; exists {
+				return nil, errors.New("duplicate ATIF reply")
+			}
+			results[result.ID] = result.Content
+		}
 		for _, c := range s.Tools {
-			result := s.Observation.Results[0]
-			if c.ID == "" || calls[c.ID].step != 0 || c.ID != result.ID || !slices.Contains(w.Tools, c.Name) {
+			output, present := results[c.ID]
+			if c.ID == "" || calls[c.ID].step != 0 || !present || (len(s.Tools) > 1 && c.Name == "update_plan") || !slices.Contains(w.Tools, c.Name) {
 				return nil, fmt.Errorf("unsupported or ambiguous call at step %d", s.ID)
 			}
-			calls[c.ID] = indexedCall{s.ID, c, result.Content}
+			calls[c.ID] = indexedCall{s.ID, c, output}
 		}
 	}
 	sc := bufio.NewScanner(bytes.NewReader(rollout))
 	sc.Buffer(make([]byte, 65536), replay.MaxPlanBytes)
 	var previous time.Time
-	var active, activeTool string
-	var lastStep int
+	active := map[string]uint64{}
+	var activeStep int
 	var cwd string
 	var complete, sessionBound bool
 	started := map[string]bool{}
@@ -225,12 +241,15 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 		switch p.Type {
 		case "function_call":
 			c, ok := calls[p.CallID]
-			if !ok || started[p.CallID] || p.Name != c.call.Name || active != "" || !equalJSON([]byte(p.Arguments), c.call.Args) {
+			if !ok || started[p.CallID] || p.Name != c.call.Name || (len(active) > 0 && activeStep != c.step) || !equalJSON([]byte(p.Arguments), c.call.Args) {
 				return nil, fmt.Errorf("call binding or concurrency mismatch at line %d", line)
 			}
-			active, activeTool = p.CallID, p.Name
-			lastStep = c.step
-			started[active] = true
+			if len(active) > 0 {
+				e.Basis = "parallel_dispatch_spacing"
+			}
+			activeStep = c.step
+			started[p.CallID] = true
+			e.ParallelSize = batchSizes[c.step]
 			e.Step = c.step
 			e.Kind = p.Name
 			if p.Name != "update_plan" {
@@ -241,21 +260,33 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 				r.Plan.Calls = append(r.Plan.Calls, call)
 				e.Sequence = call.Sequence
 			}
+			active[p.CallID] = e.Sequence
 		case "function_call_output":
-			if active == "" || p.CallID != active || !matchesReply(calls[active], p.Output) {
+			seq, present := active[p.CallID]
+			c := calls[p.CallID]
+			if !present || !matchesReply(c, p.Output) {
 				return nil, fmt.Errorf("reply binding mismatch at line %d", line)
 			}
-			e.Step = lastStep
-			if activeTool != "update_plan" {
+			e.Step = c.step
+			e.ParallelSize = batchSizes[c.step]
+			if c.call.Name != "update_plan" {
 				e.Basis = "replaced_by_live_guest_reply"
 				e.Wait = 0
-				e.Sequence = uint64(len(r.Plan.Calls))
+				e.Sequence = seq
 			} else {
 				e.Basis = "recorded_harness_tool_interval"
 			}
-			active, activeTool = "", ""
+			delete(active, p.CallID)
+		case "web_search_call":
+			step, id, err := web.bind(sc.Bytes())
+			if err != nil {
+				return nil, err
+			}
+			e.Step = step
+			e.CallID = id
+			e.Basis = "inferred_inter_event_gap_before_external_completion"
 		case "message", "reasoning", "task_started", "task_complete":
-			if active != "" {
+			if len(active) > 0 {
 				return nil, errors.New("overlapping response items unsupported")
 			}
 		default:
@@ -266,8 +297,11 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	if !sessionBound || !complete || r.Plan.StartedAt.IsZero() || active != "" || len(started) != len(calls) || len(r.Plan.Calls) == 0 {
+	if !sessionBound || !complete || !web.done() || r.Plan.StartedAt.IsZero() || len(active) > 0 || len(started) != len(calls) || len(r.Plan.Calls) == 0 {
 		return nil, errors.New("incomplete or unbound source occurrence")
+	}
+	if err := validateParallelGroups(r); err != nil {
+		return nil, err
 	}
 	pending := map[int]bool{}
 	for _, c := range r.Plan.Calls {
