@@ -15,6 +15,8 @@ import time
 
 from idle import IdleObserver, start_identity
 from vmm_census import census
+from snapshot_probe import sample_live, sample_snapshot
+from guest_sample import snapshot as guest_snapshot
 
 
 PHASES = ("session-start", "pre-tool", "post-tool", "session-end")
@@ -145,6 +147,14 @@ def select_slots(data, pid, start_ticks, tick_ns, mem_bytes):
     return dram, other
 
 
+def snapshot_path(root, runtime):
+    layout = os.environ.get("ZB_SNAPSHOT_LAYOUT", "legacy")
+    if layout not in ("legacy", "native"):
+        raise ValueError("unknown checkpoint layout")
+    directory = Path(root) / runtime
+    return directory / "native" / "memory" if layout == "native" else directory / "memory"
+
+
 def frozen_capture(api, observer, phase, step, event):
     freeze = event["freeze"] = {"pause_request_ns": time.monotonic_ns()}
     try:
@@ -155,7 +165,9 @@ def frozen_capture(api, observer, phase, step, event):
         if os.environ.get("ZB_VMM_CENSUS") == "1":
             snapshot = None
             if root := os.environ.get("ZB_CHECKPOINT_NAMESPACE_DIR"):
-                snapshot = Path(root) / event["runtime"] / "memory"
+                snapshot = snapshot_path(root, event["runtime"])
+            if probe_count := os.environ.get("ZB_CONTENT_SAMPLE"):
+                event["content_sample"] = sample_live(api.identity[0], event["ram_slots"], int(probe_count))
             event["vmm_census"] = census(api.identity[0], event["ram_slots"], event["other_kvm_slots"], snapshot)
         if phase != "session-end":
             event["arm"] = observer.arm(step if phase == "pre-tool" else None)
@@ -235,6 +247,13 @@ def run(args):
             if observer.start != api.identity[1]:
                 raise RuntimeError("VMM identity changed before opening pagemap")
             take_boundary(args.phase, args.step, api, observer, previous, event)
+            if os.environ.get("ZB_GUEST_VSOCK") == "1":
+                # The probe runs after resume. Its work can perturb the following
+                # window, so these runs are admitted as diagnostics only.
+                event["guest_telemetry"] = guest_snapshot(api.path.with_name("firecracker.vsock"))
+            if args.phase == "session-end" and (count := os.environ.get("ZB_CONTENT_SAMPLE")):
+                snap = snapshot_path(os.environ["ZB_CHECKPOINT_NAMESPACE_DIR"], args.runtime)
+                event["original_snapshot_sample"] = sample_snapshot(snap, slots, int(count))
             if observer.armed is None:
                 state_file.unlink()
             else:
