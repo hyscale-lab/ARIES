@@ -438,6 +438,16 @@
         "trial": "d3bd8729-d595-4aa1-86c6-7efbfc31d835",
         "trajectory_sha256": "16655595e3d2fcf09491250b5692aaec0afb2fa6b2782f4985b4bba5fa74655e",
         "rollout_sha256": "39a5ae90b820087be3b614e9df9721662c191fa74945be519f5334b3d19f67c6"
+      },
+      {
+        "trial": "224a4b42-c675-49f5-8240-b3afb871f3a9",
+        "trajectory_sha256": "885fb134e6e9367c60563942cf790e2ea0433dbdc50bfe30d7505803f531144d",
+        "rollout_sha256": "79599dac1a7e9dfa500abe3b83d2324ea11817852f447741f8f323378b9423c6"
+      },
+      {
+        "trial": "dce59078-0f61-4eac-92f9-3b2728e4ef28",
+        "trajectory_sha256": "c8618b291e801bf269e2af996fb96a5a9ea03767d2b2d55807cf4b58b4b863d6",
+        "rollout_sha256": "3f36a57c9a536918cbca4fe2a588ad7142f602617e3feee4284039b7c6a5708e"
       }
     ],
     "vcpus": 1,

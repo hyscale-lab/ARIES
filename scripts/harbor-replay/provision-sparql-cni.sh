@@ -18,6 +18,10 @@ case "$profile" in
         subnet=10.232.$octet.0/28
         hosts=(bootstrap.pypa.io pypi.org files.pythonhosted.org download.pytorch.org download-r2.pytorch.org)
         ;;
+    financeapt)
+        subnet=10.234.$octet.0/28
+        hosts=(snapshot.ubuntu.com pypi.org files.pythonhosted.org)
+        ;;
     pypi)
         subnet=10.233.$octet.0/28
         hosts=(pypi.org files.pythonhosted.org)

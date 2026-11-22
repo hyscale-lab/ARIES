@@ -58,6 +58,9 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
+	if profile, ok := financialAptTrials[r.Trial]; ok {
+		task.initialCheck += financialAptSetup(profile)
+	}
 	if r.Trial == financialMuPDFTrial {
 		task.initialCheck = strings.Replace(task.initialCheck, "21:28:16Z", "22:40:09Z", 1)
 	}
@@ -272,7 +275,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	}
 	if r.Task == financialTask {
 		cmd += financialFinalCheck
-		if r.Trial == financialMuPDFTrial {
+		if profile, ok := financialAptTrials[r.Trial]; ok {
+			cmd += financialAptCheck(profile)
+		} else if r.Trial == financialMuPDFTrial {
 			cmd += "\n/tmp/document-processing-env/bin/python -c 'from importlib.metadata import version; assert version(\"PyMuPDF\") == \"1.28.2\"'\n"
 		} else {
 			cmd += financialPypdfCheck
