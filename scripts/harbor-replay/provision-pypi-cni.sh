@@ -13,7 +13,14 @@ github_addresses=()
 private_dns=false
 dns_unit=
 case "${3:-video}" in
-    video) ;;
+    video|video-amd182|video-amd183|video-amd189|video-amd191|video-amd198|video-amd201|video-amd203)
+        node=183
+        if [[ ${3:-video} == video-amd* ]]; then node=${3#video-amd}; fi
+        bridge=zbvid$node
+        if [[ $node != 183 ]]; then subnet=10.234.$node.0/28; fi
+        chain=ZB${node}PYPI
+        name=zbvideo$node
+        ;;
     dataset|dataset-amd182|dataset-amd183|dataset-amd189|dataset-amd191|dataset-amd198|dataset-amd201|dataset-amd203)
         private_dns=true
         node=189
@@ -175,7 +182,7 @@ if [[ $private_dns == true ]]; then
         fi
     done
 fi
-if [[ ${3:-video} == compcert-opam ]]; then
+if [[ ${3:-video} == compcert-opam* ]]; then
     # Ubuntu APT uses HTTP and verifies signed indices. Use exactly the
     # archive addresses the scoped resolver returns to this private guest.
     mapfile -t archives < <(python3 -c 'import json,sys;h=json.load(open(sys.argv[1]));print(h["archive.ubuntu.com"]);print(h["security.ubuntu.com"])' "$base/conf/dataset-hosts.json")
