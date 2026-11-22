@@ -1,0 +1,44 @@
+// Capture before launching or restoring Firecracker. Use bpftrace 0.20+ -q -B line.
+// bpftrace's bare nsecs is CLOCK_BOOTTIME on supported kernels.
+// The two x86_64 KVM ioctls have the same 32-byte region prefix.
+struct slot_region {
+    uint32_t slot;
+    uint32_t flags;
+    uint64_t guest_phys_addr;
+    uint64_t memory_size;
+    uint64_t userspace_addr;
+};
+
+BEGIN
+{
+    printf("ready %llu\n", nsecs);
+}
+
+tracepoint:syscalls:sys_enter_ioctl
+/args->cmd == 0x4020ae46 || args->cmd == 0x40a0ae49/
+{
+    if (comm == "firecracker") {
+        $region = uptr((struct slot_region *)args->arg);
+        @region[tid] = (args->fd, $region->slot, $region->flags, $region->guest_phys_addr,
+                        $region->memory_size, $region->userspace_addr);
+        @entry[tid] = nsecs;
+    }
+}
+
+tracepoint:syscalls:sys_exit_ioctl
+/@entry[tid]/
+{
+    $region = @region[tid];
+    printf("slot %llu %llu %d %d %u %u %llu %llu %llu %ld\n",
+           @entry[tid], nsecs, pid, $region.0, $region.1, $region.2,
+           $region.3, $region.4, $region.5, args->ret);
+    delete(@region[tid]);
+    delete(@entry[tid]);
+}
+
+END
+{
+    printf("end %llu\n", nsecs);
+    clear(@entry);
+    clear(@region);
+}
