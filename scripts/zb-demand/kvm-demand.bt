@@ -1,0 +1,130 @@
+// Ubuntu 6.8 x86_64 KVM BTF. Run on the dedicated diagnostic host only.
+// All event timestamps use CLOCK_MONOTONIC. Print no guest contents or RIP.
+BEGIN
+{
+    printf("ready %llu\n", nsecs(monotonic));
+}
+
+kfunc:kvm:kvm_tdp_page_fault
+/strncmp(comm, "fc_vcpu", 7) == 0/
+{
+    @begin[tid] = nsecs(monotonic);
+    @major_before[tid] = curtask->maj_flt;
+    @minor_before[tid] = curtask->min_flt;
+}
+
+kfunc:kvm:hva_to_pfn
+/@begin[tid]/
+{
+    if (@lookups[tid]) {
+        if (@hva[tid] != args->addr) {
+            @hva_conflicts[tid] += 1;
+        }
+    } else {
+        @hva[tid] = args->addr;
+    }
+    @lookup_begin[tid] = nsecs(monotonic);
+    @lookups[tid] += 1;
+}
+
+kretfunc:kvm:hva_to_pfn
+/@lookup_begin[tid]/
+{
+    @lookup_ns[tid] += nsecs(monotonic) - @lookup_begin[tid];
+    delete(@lookup_begin[tid]);
+}
+
+kretfunc:handle_mm_fault
+/@lookup_begin[tid]/
+{
+    @mm_faults[tid] += 1;
+    if (retval & 4) {
+        @major_flags[tid] += 1;
+    }
+}
+
+kretfunc:filemap_fault
+/@lookup_begin[tid]/
+{
+    @file_faults[tid] += 1;
+    if (retval & 4) {
+        @file_major[tid] += 1;
+    }
+}
+
+kretfunc:do_swap_page
+/@lookup_begin[tid]/
+{
+    @swap_faults[tid] += 1;
+    if (retval & 4) {
+        @swap_major[tid] += 1;
+    }
+}
+
+kfunc:wp_page_copy
+/@lookup_begin[tid]/
+{
+    @cow_calls[tid] += 1;
+}
+
+tracepoint:sched:sched_switch
+/@lookup_begin[args->prev_pid] || @io_wait_begin[args->next_pid]/
+{
+    if (@lookup_begin[args->prev_pid] && curtask->in_iowait) {
+        @io_wait_begin[args->prev_pid] = nsecs(monotonic);
+    }
+    $from = @io_wait_begin[args->next_pid];
+    if ($from) {
+        @io_wait_ns[args->next_pid] += nsecs(monotonic) - $from;
+        delete(@io_wait_begin[args->next_pid]);
+    }
+}
+
+kretfunc:kvm:kvm_tdp_page_fault
+/@begin[tid]/
+{
+    $fault = args->fault;
+    printf("fault %llu %llu %u %u %u %llu %llu %u %u %u %ld %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n",
+           @begin[tid], nsecs(monotonic), pid, tid, args->vcpu->vcpu_id,
+           $fault->addr, $fault->gfn, $fault->is_tdp, $fault->prefetch, $fault->error_code,
+           retval, @hva[tid], @lookups[tid], @hva_conflicts[tid], @lookup_ns[tid], @mm_faults[tid], @major_flags[tid],
+           @file_faults[tid], @file_major[tid], @swap_faults[tid], @swap_major[tid], @cow_calls[tid],
+           curtask->maj_flt - @major_before[tid], curtask->min_flt - @minor_before[tid], @io_wait_ns[tid]);
+    delete(@begin[tid]);
+    delete(@major_before[tid]);
+    delete(@minor_before[tid]);
+    delete(@hva[tid]);
+    delete(@lookups[tid]);
+    delete(@hva_conflicts[tid]);
+    delete(@lookup_ns[tid]);
+    delete(@mm_faults[tid]);
+    delete(@major_flags[tid]);
+    delete(@file_faults[tid]);
+    delete(@file_major[tid]);
+    delete(@swap_faults[tid]);
+    delete(@swap_major[tid]);
+    delete(@cow_calls[tid]);
+    delete(@io_wait_ns[tid]);
+}
+
+END
+{
+    printf("end %llu %llu\n", nsecs(monotonic), len(@begin));
+    clear(@begin);
+    clear(@major_before);
+    clear(@minor_before);
+    clear(@hva);
+    clear(@lookup_begin);
+    clear(@lookups);
+    clear(@hva_conflicts);
+    clear(@lookup_ns);
+    clear(@mm_faults);
+    clear(@major_flags);
+    clear(@file_faults);
+    clear(@file_major);
+    clear(@swap_faults);
+    clear(@swap_major);
+    clear(@cow_calls);
+    clear(@io_wait_begin);
+    clear(@io_wait_ns);
+}
