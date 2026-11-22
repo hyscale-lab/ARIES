@@ -324,5 +324,30 @@
       "write_stdin"
     ],
     "needs_network": true
+  },
+  {
+    "task": "compile-compcert",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/compile-compcert@sha256:f60236a4fe55bbb3c573210fe0fcd91551f4ee97c417453cd4985be074b35411",
+    "effects": [
+      "Install public Ubuntu toolchain packages, fetch tagged CompCert and Coq releases, build their verified compiler and proof artifacts, then run the upstream functional compiler tests in the guest. Historical external lookup responses are unavailable."
+    ],
+    "trials": [
+      {
+        "trial": "d116000a-0e9f-42a4-945e-71b0a65f12a4",
+        "trajectory_sha256": "88acce0287c691a28db0ee627beb7ae4fde722509ade9b6af806016fd17fdb31",
+        "rollout_sha256": "c1f54b30fa80ad106782292703822e35ed4ee42b9ba321cfdad4ae2073202e75"
+      }
+    ],
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin",
+      "web_search_call"
+    ],
+    "needs_network": true
   }
 ]

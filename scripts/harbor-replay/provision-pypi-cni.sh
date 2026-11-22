@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure only the amd183 private video validation bridge and its DNS/PyPI egress.
+# Configure a private validation bridge with egress for its reviewed dependencies.
 set -euo pipefail
 base=$(realpath "$1")
 action=${2:-install}
@@ -7,6 +7,20 @@ bridge=zbvid183
 subnet=10.231.183.0/28
 chain=ZB183PYPI
 name=zbvideo183
+tls_hosts=(pypi.org files.pythonhosted.org)
+http_hosts=()
+case "${3:-video}" in
+    video) ;;
+    compcert)
+        bridge=zbcc189
+        subnet=10.231.189.0/28
+        chain=ZB189COMP
+        name=zbcomp189
+        tls_hosts=(github.com)
+        http_hosts=(archive.ubuntu.com security.ubuntu.com)
+        ;;
+    *) echo "Unknown validation network profile" >&2; exit 2 ;;
+esac
 ipt=(sudo -n iptables -w -t mangle)
 jump=(-i "$bridge" -s "$subnet" -m comment --comment "$name" -j "$chain")
 if [[ "$action" == remove ]]; then
@@ -44,9 +58,14 @@ PY
 if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     "${ipt[@]}" -N "$chain"
     for protocol in udp tcp; do "${ipt[@]}" -A "$chain" -d "$resolver" -p "$protocol" --dport 53 -j RETURN; done
-    mapfile -t addresses < <(getent ahostsv4 pypi.org files.pythonhosted.org | awk '{print $1}' | sort -u)
+    mapfile -t addresses < <(getent ahostsv4 "${tls_hosts[@]}" | awk '{print $1}' | sort -u)
     (("${#addresses[@]}" > 0))
     for address in "${addresses[@]}"; do "${ipt[@]}" -A "$chain" -d "$address" -p tcp --dport 443 -j RETURN; done
+    if (("${#http_hosts[@]}" > 0)); then
+        mapfile -t archives < <(getent ahostsv4 "${http_hosts[@]}" | awk '{print $1}' | sort -u)
+        (("${#archives[@]}" > 0))
+        for address in "${archives[@]}"; do "${ipt[@]}" -A "$chain" -d "$address" -p tcp --dport 80 -j RETURN; done
+    fi
     "${ipt[@]}" -A "$chain" -j DROP
 fi
 if ! "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
