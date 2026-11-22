@@ -70,8 +70,8 @@ def census(pid, ram, other, snapshot=None):
             for field in ("Rss","Pss","Anonymous","Private_Dirty"):
                 counts[field+"_bytes"]+=m[field]
     return dict(begin_ns=begin,end_ns=time.monotonic_ns(),categories=totals,
-                current_file_backed_snapshot_rss_bytes=snapshot_file_page_count*page if snapshot_key else None,
-                snapshot_inode_verified=bool(snapshot_key))
+                current_file_backed_snapshot_rss_bytes=snapshot_file_page_count*page if "guest_ram_snapshot_vma" in totals else None,
+                snapshot_inode_verified="guest_ram_snapshot_vma" in totals)
 
 
 if __name__=="__main__":
