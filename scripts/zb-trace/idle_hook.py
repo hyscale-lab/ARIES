@@ -148,11 +148,15 @@ def select_slots(data, pid, start_ticks, tick_ns, mem_bytes):
 
 
 def snapshot_path(root, runtime):
-    layout = os.environ.get("ZB_SNAPSHOT_LAYOUT", "legacy")
-    if layout not in ("legacy", "native"):
-        raise ValueError("unknown checkpoint layout")
-    directory = Path(root) / runtime
-    return directory / "native" / "memory" if layout == "native" else directory / "memory"
+    if Path(runtime).name != runtime:
+        raise ValueError("invalid runtime identity")
+    directory = (Path(root) / runtime).resolve(strict=True)
+    state = json.loads((directory / "state.json").read_text())
+    snapshot = Path(state["memory"]).resolve(strict=True)
+    if (state["phase"] != "running" or state["request"].get("VMID") != runtime
+            or snapshot.name != "memory" or not snapshot.is_relative_to(directory)):
+        raise ValueError("checkpoint generation does not match the running sandbox")
+    return snapshot
 
 
 def frozen_capture(api, observer, phase, step, event):
