@@ -85,7 +85,7 @@ def main():
                         "--local","--platform","linux/amd64","--snapshotter","devmapper",IMAGE],env=env,check=True,stdout=subprocess.DEVNULL)
     os.environ.pop("ZB_CHECKPOINT_NAMESPACE_DIR",None)
     for index,(variant,n) in enumerate((("v3",1),("v4",1),("v3",2),("v4",2),("v4",2),("v3",2))):
-        if subprocess.run(["pgrep","-x","firecracker"],stdout=subprocess.DEVNULL).returncode!=1:
+        if subprocess.run(["pgrep","-x","firecracker|[.]firecracker-re"],stdout=subprocess.DEVNULL).returncode!=1:
             raise RuntimeError("worker has another running VMM")
         case=output/f"{index:02d}-{variant}-{n}vm"
         case.mkdir()

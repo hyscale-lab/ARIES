@@ -38,7 +38,7 @@ def main():
                 failed+=1
                 # A crashed driver can leave a VM on this dedicated measurement worker.
                 # Preserve that state for diagnosis before starting another measurement.
-                running=subprocess.run(["pgrep","-x","firecracker"],stdout=subprocess.DEVNULL)
+                running=subprocess.run(["pgrep","-x","firecracker|[.]firecracker-re"],stdout=subprocess.DEVNULL)
                 if running.returncode != 1:
                     raise RuntimeError("cannot establish a clean worker after failed trial "+entry["trial_id"])
     return int(failed!=0)
