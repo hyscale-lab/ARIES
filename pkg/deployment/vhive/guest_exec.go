@@ -41,11 +41,6 @@ func (m *Manager) guestRPC(conn net.Conn) *ttrpc.Client {
 // Use the guest's existing native task service rather than creating its running
 // container again through the host shim.
 func (m *Manager) execGuestStream(ctx context.Context, id string, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
-	// The containerd-v2 integration restores the shim task registry and
-	// reconnects its framed guest streams. Use the native shim's FIFO client.
-	if m.options.GuestTaskV3 {
-		return m.execContainerStream(ctx, id, command, stdin, stdout, stderr)
-	}
 	endCommand := core.TimeCommandStage(ctx, "command.total")
 	defer endCommand()
 	started := time.Now()
@@ -94,6 +89,23 @@ func (m *Manager) execGuestStream(ctx context.Context, id string, command core.C
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return failure(err)
+	}
+	if m.options.GuestTaskV3 {
+		limit := command.OutputLimitBytes
+		if limit == 0 {
+			limit = 16 << 20
+		}
+		bound := func(w io.Writer) io.Writer {
+			if w == nil {
+				w = io.Discard
+			}
+			return &boundedWriter{out: w, limit: limit, cancel: cancel}
+		}
+		exit, err := m.execModernShim(ctx, id, "aries-"+hex.EncodeToString(nonce[:]), processAny, stdin, bound(stdout), bound(stderr))
+		if err != nil {
+			return failure(err)
+		}
+		return core.CommandResult{ExitCode: int(exit), Duration: time.Since(started)}, nil
 	}
 	// Stay above the host shim's sequential allocation and reserve three ports.
 	firstPort := (binary.LittleEndian.Uint32(nonce[:4]) & 0x3fffffff) + 0x40000000

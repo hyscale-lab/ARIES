@@ -40,6 +40,7 @@ func command(ctx context.Context) error {
 	storage := flag.Int("storage-mib", 10240, "devmapper disk capacity")
 	var o vhive.Options
 	o.IdleMode = "checkpoint"
+	flag.BoolVar(&o.GuestTaskV3, "guest-task-v3", true, "containerd-v2 stack with guest task v3 and framed streams")
 	flag.StringVar(&o.Socket, "socket", "", "containerd socket")
 	flag.StringVar(&o.Namespace, "namespace", "aries", "containerd namespace")
 	flag.StringVar(&o.CheckpointDir, "checkpoint-dir", "", "private host checkpoint directory")
@@ -107,8 +108,10 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if err != nil {
 		return err
 	}
-	if err = m.Validate(ctx, id, req, nil); err != nil {
-		return err
+	validateCtx, timings := core.WithCommandTimings(ctx)
+	if err = m.Validate(validateCtx, id, req, nil); err != nil {
+		logErr := log.Encode(map[string]any{"event": "validation_error", "error": err.Error(), "command_timing": timings.Snapshot()})
+		return errors.Join(err, logErr)
 	}
 	if err = m.Start(ctx, id); err != nil {
 		return err
