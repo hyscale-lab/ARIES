@@ -41,6 +41,16 @@ privilege, and limits leave unknown coverage. A 2 GiB guest with 4 KiB pages
 and zero-based contiguous guest RAM can use the sample range above. Use the
 registered RAM spans for layouts with holes.
 
+For the 4 GiB TeX diagnostic, the upper RAM slot ends at guest physical
+address 5 GiB. Build one diagnostic root for both variants and check the
+returned flag intervals against every sampled guest frame after each run.
+
+```sh
+ZB_REGULAR_MAPS=1 ZB_GUEST_PFN_COUNT=1310720 scripts/zb-guest/install-diagnostic-root.sh \
+  common-rootfs.ext4 zb-guest-maps tex-wide-pfn.ext4
+python3 scripts/zb-trace/verify-tex-pfn.py "$raw_run_dir"
+```
+
 Convenience labels report flags that the guest kernel exposes. A buddy or
 slab bit classifies only the PFN that carries the bit. Do not extend a buddy
 head to its unspecified neighbors or treat a missing bit as allocated.
