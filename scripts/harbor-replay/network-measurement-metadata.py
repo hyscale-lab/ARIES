@@ -34,7 +34,7 @@ def metadata(raw, bundle, deployment):
     else:
         reference = entry["reference_receipt"]
         receipt = entry["receipt"]
-        if task == cohort_sparql.TASK:
+        if task in cohort_sparql.PROFILES:
             checks = cohort_sparql.verify(log,receipt)
         elif task == "count-dataset-tokens":
             checks = cohort_dataset.verify(raw,receipt)
