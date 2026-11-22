@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 const kvTask = "kv-store-grpc"
 const kvPythonSHA = "7f8a93c102db3ce25dae68cc485877f8ec9f79edb42a7c4518c96a1153b78682"
 
@@ -20,11 +22,20 @@ test ! -e /etc/pip.conf
 printf '[install]\nconstraint = /etc/aries-kv-constraints.txt\nreport = /tmp/aries-kv-install.json\n' > /etc/pip.conf`,
 }
 
-const kvFinalCheck = `
-sha256sum -c <<'ARTIFACTS'
-e5ceaad1a5f16df21fab4d344e89ceb11dc2b10fbd50431f9ee98a2fed19001d  kv-store.proto
-e868a72bb2e4ca2a9f1ea1acbb6fc06caa48fccee177bbc613026cd6e3af8f7a  server.py
-ARTIFACTS
+var kvArtifactDigests = map[string][2]string{
+	"33193a43-deac-4006-95ee-1c67ea14e3a7": {"6087fc59fbc8bbedc0036fab7fee07c1b3a3b7e2639ed47ec31d24e465563eaa", "d0f3a0821e28da28660c683ab02a02502dd7822d60b6abc1cfca1f74814dbdc1"},
+	"3d65a858-41e6-4886-9882-005b662be181": {"0528d1999180678c58e2c11e0d560671394252303e06ffffe0b2f13da4409b05", "e513b9dc79100d04314caa6635cc34ef8f0b9a4ce826e9e90ab0fce511de3cda"},
+	"69ba9b75-cf5b-4722-94f4-7ce3ea31bbb4": {"822722b9b7e5e1347e18ee18cb9c1b433f35660660d186eea911986fa14067af", "c5d89a5af749a7cfe46eb7326dfc44849911ee40fba8b947fc9b101423abf8f1"},
+	"720d990f-65c3-4e3a-8613-c813937dd7d4": {"e5ceaad1a5f16df21fab4d344e89ceb11dc2b10fbd50431f9ee98a2fed19001d", "e868a72bb2e4ca2a9f1ea1acbb6fc06caa48fccee177bbc613026cd6e3af8f7a"},
+	"7e4b1493-d5d7-4b67-a013-07fd0fb6172c": {"0f6cf51d7b35811773f78008475e09d719be6be54c501df94b74ef5c61e8116c", "1db282117b6cea713b6f24b89f4ae14388691ad4284607f3b109469c68c0326b"},
+}
+
+func kvFinalCheck(trial string) string {
+	hashes := kvArtifactDigests[trial]
+	return fmt.Sprintf("\necho '%s  kv-store.proto' | sha256sum -c -\necho '%s  server.py' | sha256sum -c -\n", hashes[0], hashes[1]) + kvServiceCheck
+}
+
+const kvServiceCheck = `
 python3 - <<'PYREPORT'
 import json
 from pathlib import Path

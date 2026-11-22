@@ -243,7 +243,7 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += financialFinalCheck
 	}
 	if r.Task == kvTask {
-		cmd += kvFinalCheck
+		cmd += kvFinalCheck(r.Trial)
 	}
 	if r.Task == sparqlTask {
 		check, err := sparqlOutputCheck(r.Trial)
