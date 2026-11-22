@@ -95,12 +95,18 @@ func (e *RunEnvironment) validate() error {
 	return nil
 }
 
-// Stop removes only the policy this run created, after its runtimes are gone.
+// Stop removes only the policy and warm pools this run created, after its
+// runtimes are gone.
 func (e *RunEnvironment) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.stopped {
 		return nil
+	}
+	if e.started && e.manager.options.WarmPool > 0 {
+		if err := e.manager.deletePools(ctx, e.runID); err != nil {
+			return err
+		}
 	}
 	if e.policyOwned {
 		if err := e.manager.deletePolicy(ctx, e.policy); err != nil {

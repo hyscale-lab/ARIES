@@ -326,6 +326,9 @@ all select this backend and the same namespace; mixed compositions are rejected.
 | `pod_cidr`, `service_cidr` | sandbox | Cluster networks a network-allowed sandbox is kept off. Unset leaves that egress open. |
 | `prometheus_url` | sandbox | Prometheus server that pod resource measurements are read from, reachable from where ARIES runs. Unset records measurements as unsupported. |
 | `service_account` | bridge | Account the bridge pod uses to exec into sandbox pods. Defaults to `aries-bridge`. |
+| `runtime_class` | sandbox | RuntimeClass sandbox pods run under, such as `gvisor` or `kata`, which `k8s/create-cluster.sh --sandbox-runtimes` installs. Unset keeps the node's default runtime (runc). Harness and bridge pods always use the default. |
+| `agent_sandbox` | sandbox | `true` creates each sandbox as an [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox`, whose controller creates the pod, instead of creating the pod directly. Needs the agent-sandbox controller on the cluster. |
+| `warm_pool` | sandbox | With `agent_sandbox`, the number of ready pods a run-owned warm pool keeps per distinct sandbox pod spec; each sandbox is then claimed from it. Pooled pods exist before their task and get its identity afterwards, a weaker isolation described in the [Kubernetes implementation](implementation/kubernetes.md#warm-pools-and-their-weaker-isolation). Unset or 0 creates each sandbox. |
 | `image_pull_secret` | all | Registry credential Secret in the namespace. |
 | `images` | all | Maps an image ARIES builds locally to the reference the cluster pulls. A key without a tag maps the repository and keeps the requested tag. |
 

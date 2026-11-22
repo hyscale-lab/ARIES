@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -50,7 +51,24 @@ type KubernetesDeploymentConfig struct {
 	// Images maps an image ARIES builds locally, such as versions.bridge.image,
 	// to the reference the cluster pulls it by.
 	Images map[string]string `json:"images,omitempty"`
+	// RuntimeClass names the RuntimeClass sandbox pods run under, such as
+	// gvisor or kata, which k8s/install-sandbox-runtimes.sh installs. Empty
+	// keeps the node's default runtime. It applies to sandbox.deployment.
+	RuntimeClass string `json:"runtime_class,omitempty"`
+	// AgentSandbox creates each sandbox as an agent-sandbox Sandbox object,
+	// whose controller creates the pod, instead of creating the pod directly.
+	// It applies to sandbox.deployment.
+	AgentSandbox bool `json:"agent_sandbox,omitempty"`
+	// WarmPool, with AgentSandbox, claims each sandbox from a warm pool the
+	// run creates, holding this many ready pods per distinct pod spec. Pooled
+	// pods exist before their task and are named by the pool; see
+	// docs/implementation/kubernetes.md. Zero creates each sandbox. It applies
+	// to sandbox.deployment.
+	WarmPool int `json:"warm_pool,omitempty"`
 }
+
+// runtimeClassName is the DNS-subdomain grammar RuntimeClass names follow.
+var runtimeClassName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
 
 // NormalizeDeployment applies compatibility defaults and validates placement.
 // It does no I/O and also supports configurations constructed by command callers.
@@ -137,6 +155,15 @@ func (c *Config) normalizeKubernetes() error {
 		if placement.cfg != &c.Bridge.Deployment && k.ServiceAccount != "" {
 			return fmt.Errorf("%s.kubernetes: service_account applies only to bridge.deployment", placement.path)
 		}
+		if placement.cfg != &c.Sandbox.Deployment && (k.RuntimeClass != "" || k.AgentSandbox || k.WarmPool != 0) {
+			return fmt.Errorf("%s.kubernetes: runtime_class, agent_sandbox and warm_pool apply only to sandbox.deployment", placement.path)
+		}
+	}
+	if k := c.Sandbox.Deployment.Kubernetes; k.WarmPool < 0 || k.WarmPool > 0 && !k.AgentSandbox {
+		return fmt.Errorf("sandbox.deployment.kubernetes.warm_pool must be nonnegative and needs agent_sandbox")
+	}
+	if class := c.Sandbox.Deployment.Kubernetes.RuntimeClass; class != "" && !runtimeClassName.MatchString(class) {
+		return fmt.Errorf("sandbox.deployment.kubernetes.runtime_class %q is not a Kubernetes object name", class)
 	}
 	if c.Bridge.Deployment.Kubernetes.ServiceAccount == "" {
 		c.Bridge.Deployment.Kubernetes.ServiceAccount = "aries-bridge"

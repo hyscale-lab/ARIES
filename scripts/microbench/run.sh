@@ -14,6 +14,11 @@
 # in DEEPSEEK_API_KEY or DEEPSEEK_API.key. Kubernetes runs use $KUBECONFIG.
 # --bridge-repository maps the Kubernetes bridge image to another repository,
 # such as one loaded onto the node, keeping the commit tag ARIES requests.
+# --runtime-class runs Kubernetes sandbox pods under a RuntimeClass, such as
+# gvisor or kata, and --agent-sandbox creates them as agent-sandbox Sandboxes;
+# --warm-pool N claims them from a run-owned pool of N ready pods instead. The
+# setup is then named k8s[-agent-sandbox|-warm-pool][-CLASS] in runs and the
+# manifest.
 #
 # Each harness is created while its sandbox starts, as ARIES does by default;
 # --sequential creates it after the bridge registers the sandbox. --warm runs
@@ -24,8 +29,8 @@
 set -euo pipefail
 
 harness="" backend="" mode="" runs=1 address="" prometheus="" pace=recorded port=8090 bridge_repository=""
-parallel=true warm=false tasks=""
-usage() { sed -n '2,24s/^# \{0,1\}//p' "$0"; }
+parallel=true warm=false tasks="" runtime_class="" agent_sandbox=false warm_pool=0
+usage() { sed -n '2,29s/^# \{0,1\}//p' "$0"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --harness) harness=$2; shift 2 ;;
@@ -37,6 +42,9 @@ while [ $# -gt 0 ]; do
     --pace) pace=$2; shift 2 ;;
     --port) port=$2; shift 2 ;;
     --bridge-repository) bridge_repository=$2; shift 2 ;;
+    --runtime-class) runtime_class=$2; shift 2 ;;
+    --agent-sandbox) agent_sandbox=true; shift ;;
+    --warm-pool) warm_pool=$2; agent_sandbox=true; shift 2 ;;
     --sequential) parallel=false; shift ;;
     --warm) warm=true; shift ;;
     --tasks) tasks=$2; shift 2 ;;
@@ -50,6 +58,14 @@ case "$mode" in record|replay) ;; *) echo "--mode must be record or replay" >&2;
 case "$runs" in ''|*[!0-9]*|0) echo "--runs must be a positive number" >&2; exit 2 ;; esac
 [ -n "$address" ] || { echo "--address is required: this node's IP, which harness containers and pods reach aries-replay at" >&2; exit 2; }
 [ -n "$prometheus" ] || { echo "--prometheus is required" >&2; exit 2; }
+setup=$backend
+if [ -n "$runtime_class" ] || [ "$agent_sandbox" = true ]; then
+  [ "$backend" = k8s ] || { echo "--runtime-class and --agent-sandbox apply only to --backend k8s" >&2; exit 2; }
+  case "$runtime_class" in ""|[a-z0-9]|[a-z0-9]*[a-z0-9]) ;; *) echo "--runtime-class must be a RuntimeClass name" >&2; exit 2 ;; esac
+  case "$warm_pool" in ''|*[!0-9]*) echo "--warm-pool must be a number" >&2; exit 2 ;; esac
+  if [ "$warm_pool" -gt 0 ]; then setup=$setup-warm-pool; elif [ "$agent_sandbox" = true ]; then setup=$setup-agent-sandbox; fi
+  [ -z "$runtime_class" ] || setup=$setup-$runtime_class
+fi
 [ "$mode" = replay ] || [ "$runs" -eq 1 ] || { echo "record mode makes one run; replay the recording for repetitions" >&2; exit 2; }
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -73,11 +89,11 @@ fi
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 variant=$([ "$warm" = true ] && echo warm || echo cold)-$([ "$parallel" = true ] && echo parallel || echo sequential)
-name=$harness-microbench-$backend-$mode-$variant
+name=$harness-microbench-$setup-$mode-$variant
 profile=.cache/microbench-runs/$name.json
-python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" "$bridge_repository" "$parallel" "$warm" "$(hostname)" "$tasks" <<'PY'
+python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" "$bridge_repository" "$parallel" "$warm" "$(hostname)" "$tasks" "$runtime_class" "$agent_sandbox" "$warm_pool" <<'PY'
 import json, sys
-source, target, name, address, prometheus, root, bridge_repository, parallel, warm, node, tasks = sys.argv[1:]
+source, target, name, address, prometheus, root, bridge_repository, parallel, warm, node, tasks, runtime_class, agent_sandbox, warm_pool = sys.argv[1:]
 profile = json.load(open(source))
 profile["name"] = name
 # The written profile lives elsewhere, so its relative paths become absolute.
@@ -86,6 +102,12 @@ profile["overrides_file"] = root + "/profiles/comparison/" + profile["overrides_
 profile["model"]["base_url"] = "http://%s/v1" % address
 placement = profile["sandbox"]["deployment"]
 placement[placement["backend"]]["prometheus_url"] = prometheus
+if runtime_class:
+    placement["kubernetes"]["runtime_class"] = runtime_class
+if agent_sandbox == "true":
+    placement["kubernetes"]["agent_sandbox"] = True
+if int(warm_pool) > 0:
+    placement["kubernetes"]["warm_pool"] = int(warm_pool)
 if bridge_repository:
     bridge = profile["bridge"]["deployment"]
     if bridge["backend"] != "kubernetes":
@@ -114,7 +136,7 @@ fi
 # In replay mode the key is never sent anywhere; ARIES only requires one.
 export DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-unused}
 
-requests=$store_dir/requests-$backend-$mode-$stamp.jsonl
+requests=$store_dir/requests-$setup-$mode-$stamp.jsonl
 # Another server on the port would answer the readiness check below in place
 # of this one, and its recordings and request log are not this run's.
 if curl -s -o /dev/null "http://127.0.0.1:$port/v1/models"; then
@@ -141,6 +163,6 @@ for repetition in $(seq "$runs"); do
   status=0
   ./bin/aries "$profile" >"$log" 2>&1 || status=$?
   run_dir=$(sed -n 's/.*"output_dir":"\([^"]*\)".*/\1/p' "$log" | head -1)
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$harness" "$backend" "$mode" "$repetition" "$run_dir" "$requests" "$variant" >>"$manifest"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$harness" "$setup" "$mode" "$repetition" "$run_dir" "$requests" "$variant" >>"$manifest"
   echo "    ${run_dir:-no run directory} (exit $status)"
 done

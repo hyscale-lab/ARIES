@@ -1,0 +1,20 @@
+# RuntimeClasses for sandbox.deployment.kubernetes.runtime_class. Their
+# handlers are the containerd runtimes scripts/testbed/install-sandbox-runtimes.sh
+# adds to the workers; create-cluster.sh applies this with sandbox_runtimes.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+scheduling:
+  nodeSelector:
+    aries/sandbox-runtimes: "true"
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata
+handler: kata
+scheduling:
+  nodeSelector:
+    aries/sandbox-runtimes: "true"

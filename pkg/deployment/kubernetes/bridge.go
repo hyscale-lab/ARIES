@@ -12,12 +12,11 @@ func (manager *Manager) BridgeBackend() string { return "kubernetes" }
 
 // ValidateBridgeTarget confirms the pod is this run's live sandbox before the
 // bridge executes in it. Pod names carry a random nonce and are never reused.
+// The pod is the runtime; the sandbox is the runtime name ARIES chose, which
+// it labels the pod with. They differ for a pod claimed from a warm pool.
 func (manager *Manager) ValidateBridgeTarget(ctx context.Context, d core.BridgeTarget) error {
 	if d.Backend != "kubernetes" {
 		return errors.New("Kubernetes cannot execute another target backend")
-	}
-	if d.RuntimeID != d.SandboxID {
-		return errors.New("borrowed sandbox identity differs from its runtime")
 	}
 	pod, found, err := manager.pod(ctx, d.RuntimeID)
 	if err != nil {

@@ -8,6 +8,11 @@
 // stage private files between Create and Start. Every runtime therefore starts
 // behind a gate: its container waits on a marker file that Start writes, and
 // only then execs the requested command. The gate needs /bin/sh in the image.
+//
+// With AgentSandbox the provider creates an agent-sandbox Sandbox object
+// instead, carrying the same pod template. Its controller creates a pod of the
+// same name, which every other operation then uses as it would a pod ARIES
+// created itself.
 package kubernetes
 
 import (
@@ -70,6 +75,15 @@ type Options struct {
 	// starts, so a non-root image can receive its private archive there.
 	StagingDirs  []string
 	StagingOwner string
+	// RuntimeClass names the RuntimeClass every created pod runs under, such
+	// as gvisor or kata. Empty keeps the node's default runtime.
+	RuntimeClass string
+	// AgentSandbox creates each runtime as an agent-sandbox Sandbox, whose
+	// controller creates the pod.
+	AgentSandbox bool
+	// WarmPool, with AgentSandbox, claims each runtime from a run-owned warm
+	// pool holding this many ready pods per pod spec. Zero creates each one.
+	WarmPool int
 
 	KubectlPath    string
 	ReadyTimeout   time.Duration
@@ -106,7 +120,7 @@ func New(options Options) (*Manager, error) {
 	if err := validateNodeSelector(options.NodeSelector); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{options.ServiceAccount, options.ImagePullSecret} {
+	for _, name := range []string{options.ServiceAccount, options.ImagePullSecret, options.RuntimeClass} {
 		if name != "" && !validSubdomain(name) {
 			return nil, fmt.Errorf("Kubernetes object name %q is invalid", name)
 		}
@@ -120,6 +134,9 @@ func New(options Options) (*Manager, error) {
 		if err := validateNumericUser(options.StagingOwner); err != nil {
 			return nil, fmt.Errorf("Kubernetes staging owner: %w", err)
 		}
+	}
+	if options.WarmPool < 0 || options.WarmPool > 0 && !options.AgentSandbox {
+		return nil, errors.New("Kubernetes warm pool needs agent-sandbox and a nonnegative size")
 	}
 	if options.KubectlPath == "" {
 		options.KubectlPath = defaultKubectl
@@ -167,20 +184,42 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	if err := manager.validateRequest(request); err != nil {
 		return "", err
 	}
+	if manager.options.WarmPool > 0 {
+		return manager.claimCreate(ctx, request)
+	}
 	manifest, err := manager.podManifest(request)
 	if err != nil {
 		return "", err
 	}
 	if _, err := manager.run(ctx, manifest, "create", "-n", manager.options.Namespace, "-f", "-"); err != nil {
-		return manager.recoverCreate(ctx, request, fmt.Errorf("create Kubernetes pod: %w", err))
+		return manager.recoverCreate(ctx, request, fmt.Errorf("create Kubernetes %s: %w", manager.created(), err))
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, manager.options.ReadyTimeout)
 	defer cancel()
 	timeout := strconv.Itoa(int(manager.options.ReadyTimeout.Seconds())) + "s"
-	if _, err := manager.run(readyCtx, nil, "wait", "-n", manager.options.Namespace, "--for=jsonpath={.status.phase}=Running", "pod/"+request.Name, "--timeout="+timeout); err != nil {
+	// The controller creates a Sandbox's pod after the Sandbox exists, so
+	// waiting on the pod could find nothing yet. Its Ready condition follows
+	// the pod's, which a container waiting at the gate satisfies.
+	condition, target := "--for=jsonpath={.status.phase}=Running", "pod/"+request.Name
+	if manager.options.AgentSandbox {
+		condition, target = "--for=condition=Ready", sandboxResource+"/"+request.Name
+	}
+	if _, err := manager.run(readyCtx, nil, "wait", "-n", manager.options.Namespace, condition, target, "--timeout="+timeout); err != nil {
 		return request.Name, fmt.Errorf("wait for Kubernetes pod %s to run: %w%s", request.Name, err, manager.waitingReason(ctx, request.Name))
 	}
 	return request.Name, nil
+}
+
+// created names the resource Create makes: the pod itself, or the Sandbox
+// whose controller makes it.
+func (manager *Manager) created() string {
+	if manager.options.WarmPool > 0 {
+		return claimResource
+	}
+	if manager.options.AgentSandbox {
+		return sandboxResource
+	}
+	return "pod"
 }
 
 // recoverCreate resolves a failed create. A lost response can hide an allocated
@@ -188,7 +227,7 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 func (manager *Manager) recoverCreate(ctx context.Context, request deployment.Request, cause error) (string, error) {
 	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.options.CleanupTimeout)
 	defer cancel()
-	pod, found, err := manager.pod(recoveryCtx, request.Name)
+	pod, found, err := manager.object(recoveryCtx, manager.created(), request.Name)
 	if err != nil {
 		return "", errors.Join(cause, fmt.Errorf("%w: %w", deployment.ErrAllocationUnconfirmed, err))
 	}
@@ -251,7 +290,12 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	if err := json.Unmarshal(raw, &pod); err != nil {
 		return fmt.Errorf("decode Kubernetes pod: %w", err)
 	}
-	if pod.Metadata.Name != id || request.Name != "" && id != request.Name || pod.Metadata.Namespace != manager.options.Namespace {
+	if pod.Metadata.Name != id || pod.Metadata.Namespace != manager.options.Namespace {
+		return errors.New("deployment name differs from request")
+	}
+	// A pooled pod keeps the pool's name; the runtime name ARIES chose is
+	// the label the claim gave it.
+	if manager.options.WarmPool > 0 && pod.Metadata.Labels[runtimeLabel] != request.Name || manager.options.WarmPool == 0 && request.Name != "" && id != request.Name {
 		return errors.New("deployment name differs from request")
 	}
 	for key, value := range request.Labels {
@@ -278,6 +322,12 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	}
 	if container.SecurityContext != nil && container.SecurityContext.Privileged != nil && *container.SecurityContext.Privileged {
 		return errors.New("deployment must not be privileged")
+	}
+	if pod.Spec.RuntimeClassName != manager.options.RuntimeClass {
+		return errors.New("deployment runtime class differs from configuration")
+	}
+	if manager.options.AgentSandbox != ownedBySandbox(pod, id) {
+		return errors.New("deployment owner differs from configuration")
 	}
 	if pod.Spec.HostNetwork || pod.Spec.HostPID || pod.Spec.HostIPC {
 		return errors.New("deployment must not share host namespaces")
@@ -400,7 +450,25 @@ func (manager *Manager) Stop(ctx context.Context, id string) error {
 		}
 	}
 	manager.mu.Unlock()
-	if _, err := manager.run(ctx, nil, "delete", "pod", "-n", manager.options.Namespace, id, "--ignore-not-found", "--grace-period=1", "--wait=true"); err != nil {
+	if manager.options.WarmPool > 0 {
+		return manager.stopClaimed(ctx, id)
+	}
+	if manager.options.AgentSandbox {
+		// The default background cascade returns as soon as the Sandbox is
+		// gone, while its pod is still terminating. Foreground deletion keeps
+		// the Sandbox until the garbage collector has removed the pod, which
+		// the kubelet allows only once its containers have stopped.
+		if _, err := manager.run(ctx, nil, "delete", sandboxResource, "-n", manager.options.Namespace, id, "--ignore-not-found", "--cascade=foreground", "--wait=true"); err != nil {
+			return fmt.Errorf("delete agent-sandbox Sandbox: %w", err)
+		}
+		_, found, err := manager.object(ctx, sandboxResource, id)
+		if err != nil {
+			return fmt.Errorf("verify agent-sandbox Sandbox removal: %w", err)
+		}
+		if found {
+			return errors.New("deployment Sandbox remains after removal")
+		}
+	} else if _, err := manager.run(ctx, nil, "delete", "pod", "-n", manager.options.Namespace, id, "--ignore-not-found", "--grace-period=1", "--wait=true"); err != nil {
 		return fmt.Errorf("delete Kubernetes pod: %w", err)
 	}
 	_, found, err := manager.pod(ctx, id)
@@ -415,18 +483,24 @@ func (manager *Manager) Stop(ctx context.Context, id string) error {
 
 // pod reads one pod, reporting absence without an error.
 func (manager *Manager) pod(ctx context.Context, id string) (podObject, bool, error) {
-	raw, err := manager.run(ctx, nil, "get", "pod", "-n", manager.options.Namespace, id, "--ignore-not-found", "-o", "json")
+	return manager.object(ctx, "pod", id)
+}
+
+// object reads one pod or Sandbox. A Sandbox decodes into the same metadata
+// fields; its pod-only fields stay empty.
+func (manager *Manager) object(ctx context.Context, resource, id string) (podObject, bool, error) {
+	raw, err := manager.run(ctx, nil, "get", resource, "-n", manager.options.Namespace, id, "--ignore-not-found", "-o", "json")
 	if err != nil {
-		return podObject{}, false, fmt.Errorf("inspect Kubernetes pod: %w", err)
+		return podObject{}, false, fmt.Errorf("inspect Kubernetes %s: %w", resource, err)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return podObject{}, false, nil
 	}
-	var pod podObject
-	if err := json.Unmarshal(raw, &pod); err != nil {
-		return podObject{}, false, fmt.Errorf("decode Kubernetes pod: %w", err)
+	var object podObject
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return podObject{}, false, fmt.Errorf("decode Kubernetes %s: %w", resource, err)
 	}
-	return pod, pod.Metadata.Name == id, nil
+	return object, object.Metadata.Name == id, nil
 }
 
 // run executes kubectl and returns its stdout. Failures carry kubectl's stderr.

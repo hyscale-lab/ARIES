@@ -2,11 +2,13 @@
   "master": "username@master-node",
   "runner": "username@runner-node",
   "workers": ["username@worker-1", "username@worker-2"],
+  "standalone": ["username@standalone-1"],
   "runner_dir": "aries",
   "ssh_key": "",
   "ssh_options": ["-o", "ConnectTimeout=15"],
   "deploy_prometheus": true,
   "kubelet_housekeeping_interval": "1s",
   "testbed": true,
+  "sandbox_runtimes": true,
   "vhive_dir": ""
 }

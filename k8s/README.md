@@ -48,12 +48,14 @@ k8s/create-cluster.sh
 | Key | Meaning |
 | --- | --- |
 | `master`, `runner`, `workers` | SSH targets |
+| `standalone` | SSH targets kept out of the cluster, for a sandbox service that needs a whole host, such as CubeSandbox; the script only checks the list |
 | `runner_dir` | Directory under the runner's home that receives ARIES; default `aries` |
 | `ssh_key`, `ssh_options` | Identity file and extra `ssh` options, applied to every connection |
 | `deploy_prometheus` | Same as `--prometheus` |
 | `kubelet_housekeeping_interval` | Same as `--housekeeping`; `1s` gives one-second pod measurements |
 | `testbed` | Same as `--testbed` |
 | `vhive_dir` | Same as `--vhive-dir` |
+| `sandbox_runtimes` | Same as `--sandbox-runtimes` |
 
 `--config FILE` names another file, and command-line options win over the file.
 
@@ -89,6 +91,7 @@ run again.
 | `--prometheus` | Installs kube-prometheus-stack with ARIES's values, on the runner |
 | `--housekeeping DUR` | Sets the kubelet's `--housekeeping-interval` on every node and restarts it. The kubelet's 10-second default caps how fine pod measurements can be |
 | `--testbed` | Pins the CPU clock on the runner and workers and installs Docker on the workers |
+| `--sandbox-runtimes` | Installs gVisor and Kata on the workers ([`install-sandbox-runtimes.sh`](../scripts/testbed/install-sandbox-runtimes.sh)) and labels them `aries/sandbox-runtimes=true`, then applies the `gvisor` and `kata` RuntimeClasses ([`sandbox-runtimes.yaml`](sandbox-runtimes.yaml)) and the agent-sandbox controller (`AGENT_SANDBOX_VERSION`, default v1.0.12). Kata needs `/dev/kvm` on the workers |
 | `--vhive-dir DIR` | Installs vHive from this local checkout's `HEAD`, copied to the nodes, instead of fetching the pinned commit |
 | `--skip-cluster` | The cluster exists already; only apply ARIES and restage the runner |
 | `--no-runner` | Do not build or stage the runner |

@@ -253,6 +253,87 @@ live sandbox pod of its own run and task.
 There is no controller. A Runner that is killed leaves its pods and policies
 behind; remove them by label as shown in [`k8s/`](../../k8s/README.md).
 
+## Sandbox runtimes and agent-sandbox
+
+Two `sandbox.deployment.kubernetes` settings change how sandbox pods are made,
+and nothing else: exec, transfer, the gate, network policy and the bridge's
+target checks are the same.
+
+- **`runtime_class`** sets the pod's `runtimeClassName`. `k8s/create-cluster.sh
+  --sandbox-runtimes` installs gVisor (`runsc`) and Kata Containers 4.x (the
+  Rust shim with QEMU) as containerd handlers on the workers, labels them
+  `aries/sandbox-runtimes=true`, and applies the `gvisor` and `kata`
+  RuntimeClasses, which schedule only onto those nodes. `Validate` rejects a pod
+  whose runtime class differs from the configuration. Kata needs `/dev/kvm` and
+  gives the guest two vCPUs for a one-CPU limit; gVisor hides the cgroup limit
+  files inside the sandbox.
+- **`agent_sandbox`** creates an [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox)
+  `Sandbox` (`agents.x-k8s.io/v1beta1`) whose pod template is exactly the pod
+  ARIES would otherwise create. The controller names the pod after the Sandbox
+  and copies the template's labels and annotations to it, so the pod carries
+  the same identity. The Sandbox sets `service: false`, because the controller's
+  Service would take the name of the task's Service, and `failedPodPolicy:
+  Retain`, so a failed pod stays failed rather than being replaced under the
+  same name. `Create` waits on the Sandbox's `Ready` condition, since its pod
+  does not exist yet when the Sandbox does; a lost create response is resolved
+  from the Sandbox. `Validate` also requires the pod to be controlled by the
+  Sandbox of its name.
+
+  `Stop` deletes the Sandbox with `--cascade=foreground`. kubectl's default
+  background cascade returns as soon as the Sandbox object is gone, while its
+  pod is still terminating; foreground deletion keeps the Sandbox until the
+  garbage collector has removed the pod, which the kubelet allows only once the
+  containers have stopped. On the test cluster the containers were gone from
+  the node 0.8–1.0 s before the delete returned. `Stop` then confirms that both
+  the Sandbox and the pod are absent. The runner's Role allows
+  `sandboxes.agents.x-k8s.io`.
+- **`warm_pool`**, with `agent_sandbox`, claims each sandbox from a warm pool
+  instead of creating it. See below.
+
+### Warm pools and their weaker isolation
+
+With `warm_pool: N`, the first sandbox of a given pod spec in a run creates a
+`SandboxTemplate` holding that spec and a `SandboxWarmPool` that keeps `N` of
+its pods running. Each sandbox then creates a `SandboxClaim`, named with the
+runtime name ARIES chose, and agent-sandbox hands it one of the pool's ready
+pods. ARIES labels and annotates that pod with the task's identity, and the
+pool starts a replacement. Deleting the claim (`shutdownPolicy:
+DeleteForeground`, deleted with `--cascade=foreground`) removes its Sandbox and
+pod, and `Stop` confirms the claim, Sandbox and pod are gone. The run
+environment's `Stop` removes the run's pools and templates, and with them the
+pods still waiting and the templates' policies, then confirms none remain.
+
+A pooled pod is weaker than one ARIES creates for its task, and runs using it
+must say so:
+
+- **It exists before its task.** It was started from a template and has been
+  running idle, so its creation is not part of the task, and the gate it waits
+  behind was set up before any task named it.
+- **Its identity is added after it runs.** The pod keeps the pool's generated
+  name. The labels and annotations that the bridge, the task's NetworkPolicy
+  and Service, and resource measurement rely on are patched onto it after the
+  claim, rather than fixed at creation. The runtime ID is therefore the pod's
+  name and differs from the sandbox ID, the runtime name; the bridge's target
+  check matches the pod by its own name and the sandbox by the label.
+- **Its network isolation is the template's until then.** The template's own
+  policy denies the pod all ingress and egress from the moment it exists.
+  The task's policy, created before the claim, selects the pod once it is
+  labelled; NetworkPolicies add up, so the task's rules then apply on top of
+  the deny-all.
+- **The pool costs capacity and interferes.** Every waiting pod holds its CPU
+  and memory requests. Claiming a pod starts its replacement on the same node
+  while the task runs, and that pod is not measured as part of any task. The
+  first sandbox of a spec in a run waits for the pool's first pod, so it is a
+  cold start. A pod spec differs by image, resources, working directory and
+  environment, so tasks that share them share a pool; the container ARIES
+  starts once per run to resolve an image's working directory has no limits or
+  working directory of its own, and gets a pool of its own.
+
+The claim cannot set ARIES's labels itself: agent-sandbox only accepts
+additional pod labels from allow-listed domains. The runner's Role allows
+`sandboxtemplates`, `sandboxwarmpools` and `sandboxclaims`, and `patch` on
+pods.
+
 ## Images
 
 The cluster pulls images; ARIES cannot build into it. Image preparation is
@@ -305,6 +386,15 @@ it copies from containerd, `container_label_io_kubernetes_pod_name` and
 `container_label_io_kubernetes_pod_namespace`, which the kubelet's lack. Only
 those identity labels and ARIES's own `aries.*` labels are kept, so a series
 carries no task content.
+
+A sandbox pod under `runtime_class` is read from its pod sandbox cgroup, the
+series whose container label is empty, instead of its container's. gVisor runs
+the Sentry and Kata runs the VM there, and cAdvisor reports zero or nothing for
+the container itself, which would otherwise read as an idle sandbox. That
+reading includes the runtime's own overhead: under a one-core busy loop, gVisor
+read 1.00 cores against runc's 0.98, and Kata held about 490 MiB against
+runc's 305 MiB for the same 300 MiB process. Harness and bridge pods keep the
+container series.
 
 Prometheus identifies a pod by name only, while the run and task it belongs to
 are in its annotations. The source therefore lists pods through `kubectl`, but

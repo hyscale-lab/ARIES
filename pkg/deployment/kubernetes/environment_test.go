@@ -234,6 +234,8 @@ type fakePrometheus struct {
 	cpu     map[string]float64
 	memory  map[string]float64
 	scraped map[string]float64
+	// sandbox holds the pod sandbox cgroup's series, served for that selector.
+	sandbox *fakePrometheus
 	queries int
 	status  int
 }
@@ -247,17 +249,26 @@ func (f *fakePrometheus) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expression := r.URL.Query().Get("query")
-	if r.URL.Path != "/api/v1/query" || !strings.Contains(expression, `{container_label_io_kubernetes_pod_namespace="aries",container_label_io_kubernetes_container_name!="",container_label_io_kubernetes_container_name!="POD"}`) ||
-		!strings.Contains(expression, "by (container_label_io_kubernetes_pod_name)") {
+	series := f
+	switch {
+	case r.URL.Path != "/api/v1/query" || !strings.Contains(expression, "by (container_label_io_kubernetes_pod_name)"):
+		series = nil
+	case strings.Contains(expression, `{container_label_io_kubernetes_pod_namespace="aries",container_label_io_kubernetes_container_name!="",container_label_io_kubernetes_container_name!="POD"}`):
+	case f.sandbox != nil && strings.Contains(expression, `{container_label_io_kubernetes_pod_namespace="aries",container_label_io_kubernetes_pod_name!="",container_label_io_kubernetes_container_name=~"|POD"}`):
+		series = f.sandbox
+	default:
+		series = nil
+	}
+	if series == nil {
 		http.Error(w, "unexpected query "+r.URL.String(), http.StatusBadRequest)
 		return
 	}
-	values := f.cpu
+	values := series.cpu
 	switch {
 	case strings.Contains(expression, "timestamp("):
-		values = f.scraped
+		values = series.scraped
 	case strings.Contains(expression, "container_memory_working_set_bytes"):
-		values = f.memory
+		values = series.memory
 	}
 	var result []map[string]any
 	for pod, value := range values {
@@ -333,6 +344,57 @@ func TestResourceSourceReadsPodCountersFromPrometheus(t *testing.T) {
 	// A pod without a memory limit reports none rather than a guess.
 	if r := readings[0]; r.Scope != "run" || r.TaskID != "" || r.Component != "bridge" || r.RuntimeID != "aries-bridge-1" || r.MemoryLimitBytes != 0 {
 		t.Fatalf("run reading = %+v", r)
+	}
+}
+
+// gVisor and Kata run the whole sandbox in the pod sandbox cgroup and leave
+// the container's empty, so pods of the configured class are read from there
+// while the run's other pods keep their container series.
+func TestResourceSourceReadsRuntimeClassPodsFromTheSandboxCgroup(t *testing.T) {
+	manager, _ := newTestManager(t, Options{RuntimeClass: "gvisor"})
+	sandbox := testRequest()
+	harnessManager, _ := newTestManager(t, Options{})
+	harness := testRequest()
+	harness.Name = "aries-harness-1"
+	harness.Labels = map[string]string{"aries.managed": "true", "aries.kind": "harness", "aries.component": "harness", "aries.run": "run-1", "aries.task": "task-1"}
+	list := `{"items":[` + podJSON(t, manager, sandbox, nil) + `,` + podJSON(t, harnessManager, harness, nil) + `]}`
+	prometheus := &fakePrometheus{
+		// cAdvisor reports a zero container series for gVisor and none for Kata.
+		cpu:     map[string]float64{"aries-sandbox-abc123": 0, "aries-harness-1": 4},
+		memory:  map[string]float64{"aries-sandbox-abc123": 0, "aries-harness-1": 2048},
+		scraped: map[string]float64{"aries-sandbox-abc123": 1000, "aries-harness-1": 1000},
+		sandbox: &fakePrometheus{
+			cpu:     map[string]float64{"aries-sandbox-abc123": 7, "aries-harness-1": 0.01},
+			memory:  map[string]float64{"aries-sandbox-abc123": 8192, "aries-harness-1": 100},
+			scraped: map[string]float64{"aries-sandbox-abc123": 1001, "aries-harness-1": 1001},
+		},
+	}
+	server := httptest.NewServer(prometheus)
+	defer server.Close()
+	source, err := NewResourceSource(ResourceOptions{RunID: "run-1", TaskIDs: []string{"task-1"}, PrometheusURL: server.URL, RuntimeClass: "gvisor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.kubectl = &fakeKubectl{respond: func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, list)
+		return nil
+	}}
+	readings, err := source.Sample(context.Background())
+	if err != nil || len(readings) != 2 {
+		t.Fatalf("readings = %+v, %v", readings, err)
+	}
+	harnessReading, sandboxReading := readings[0], readings[1]
+	if harnessReading.RuntimeID != "aries-harness-1" || harnessReading.CPUUsageNanoseconds != 4e9 || harnessReading.MemoryUsageBytes != 2048 {
+		t.Fatalf("harness reading = %+v", harnessReading)
+	}
+	if sandboxReading.RuntimeID != "aries-sandbox-abc123" || sandboxReading.CPUUsageNanoseconds != 7e9 || sandboxReading.MemoryUsageBytes != 8192 || !sandboxReading.ObservedAt.Equal(time.Unix(1001, 0)) {
+		t.Fatalf("sandbox reading = %+v", sandboxReading)
+	}
+	// A Kata pod has no container series at all and is still found.
+	delete(prometheus.cpu, "aries-sandbox-abc123")
+	prometheus.sandbox.scraped["aries-sandbox-abc123"] = 1002
+	if readings, err := source.Sample(context.Background()); err != nil || len(readings) != 1 || readings[0].RuntimeID != "aries-sandbox-abc123" {
+		t.Fatalf("readings without a container series = %+v, %v", readings, err)
 	}
 }
 

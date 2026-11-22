@@ -20,6 +20,10 @@ const (
 	// the 63-byte label-value limit, so they are stored as annotations and this
 	// label is what a NetworkPolicy selects exactly one pod with.
 	runtimeLabel = "aries.dev/runtime"
+	// sandboxAPIVersion and sandboxResource name agent-sandbox's Sandbox, the
+	// version v1.0 serves.
+	sandboxAPIVersion = "agents.x-k8s.io/v1beta1"
+	sandboxResource   = "sandboxes.agents.x-k8s.io"
 )
 
 var (
@@ -138,11 +142,45 @@ func gatedCommand(request deployment.Request) ([]string, error) {
 }
 
 func (manager *Manager) podManifest(request deployment.Request) ([]byte, error) {
-	command, err := gatedCommand(request)
+	labels, spec, err := manager.podParts(request)
 	if err != nil {
 		return nil, err
 	}
-	labels := map[string]string{managedByLabel: "aries", runtimeLabel: request.Name}
+	labels[runtimeLabel] = request.Name
+	metadata := map[string]any{"name": request.Name, "namespace": manager.options.Namespace, "labels": labels}
+	if len(request.Labels) != 0 {
+		metadata["annotations"] = request.Labels
+	}
+	if !manager.options.AgentSandbox {
+		return json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata, "spec": spec})
+	}
+	// The controller names the pod after the Sandbox and copies the template's
+	// labels and annotations to it, so the pod carries the identity a pod ARIES
+	// created would. Its own Service would take the name of the task's
+	// Service, and a failed pod must stay failed rather than be replaced under
+	// the same name.
+	template := map[string]any{"labels": labels}
+	if len(request.Labels) != 0 {
+		template["annotations"] = request.Labels
+	}
+	return json.Marshal(map[string]any{
+		"apiVersion": sandboxAPIVersion, "kind": "Sandbox", "metadata": metadata,
+		"spec": map[string]any{
+			"service": false, "failedPodPolicy": "Retain",
+			"podTemplate": map[string]any{"metadata": template, "spec": spec},
+		},
+	})
+}
+
+// podParts builds the labels and spec every pod of this request shares. The
+// runtime's own name and the request's ownership annotations are added by the
+// caller, since a warm pool's pods are made before any request names them.
+func (manager *Manager) podParts(request deployment.Request) (map[string]string, map[string]any, error) {
+	command, err := gatedCommand(request)
+	if err != nil {
+		return nil, nil, err
+	}
+	labels := map[string]string{managedByLabel: "aries"}
 	if component := request.Labels["aries.component"]; labelValue.MatchString(component) {
 		labels[componentLabel] = component
 	}
@@ -215,11 +253,21 @@ func (manager *Manager) podManifest(request deployment.Request) ([]byte, error) 
 	if len(manager.options.NodeSelector) != 0 {
 		spec["nodeSelector"] = manager.options.NodeSelector
 	}
-	metadata := map[string]any{"name": request.Name, "namespace": manager.options.Namespace, "labels": labels}
-	if len(request.Labels) != 0 {
-		metadata["annotations"] = request.Labels
+	if manager.options.RuntimeClass != "" {
+		spec["runtimeClassName"] = manager.options.RuntimeClass
 	}
-	return json.Marshal(map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata, "spec": spec})
+	return labels, spec, nil
+}
+
+// ownedBySandbox reports whether the agent-sandbox Sandbox of the same name
+// controls the pod.
+func ownedBySandbox(pod podObject, name string) bool {
+	for _, owner := range pod.Metadata.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == "Sandbox" && owner.Name == name && strings.HasPrefix(owner.APIVersion, "agents.x-k8s.io/") {
+			return true
+		}
+	}
+	return false
 }
 
 func resourceLimits(request deployment.Request) map[string]string {
@@ -247,9 +295,16 @@ type podObject struct {
 		Labels            map[string]string `json:"labels"`
 		Annotations       map[string]string `json:"annotations"`
 		DeletionTimestamp string            `json:"deletionTimestamp"`
+		OwnerReferences   []struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Name       string `json:"name"`
+			Controller *bool  `json:"controller"`
+		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
 		NodeName                     string `json:"nodeName"`
+		RuntimeClassName             string `json:"runtimeClassName"`
 		HostNetwork                  bool   `json:"hostNetwork"`
 		HostPID                      bool   `json:"hostPID"`
 		HostIPC                      bool   `json:"hostIPC"`

@@ -103,7 +103,7 @@ func TestKubernetesDeploymentNormalization(t *testing.T) {
 	}
 	cfg := Config{}
 	cfg.Harness.Deployment = DeploymentConfig{Backend: "kubernetes"}
-	cfg.Sandbox.Deployment = kubernetes(KubernetesDeploymentConfig{PodCIDR: "192.168.0.0/16", ServiceCIDR: "10.96.0.0/12", PrometheusURL: "http://10.96.1.2:9090"})
+	cfg.Sandbox.Deployment = kubernetes(KubernetesDeploymentConfig{PodCIDR: "192.168.0.0/16", ServiceCIDR: "10.96.0.0/12", PrometheusURL: "http://10.96.1.2:9090", RuntimeClass: "gvisor", AgentSandbox: true})
 	cfg.Bridge.Deployment = kubernetes(KubernetesDeploymentConfig{Images: map[string]string{"aries-bridge": "registry.test/aries-bridge"}})
 	if err := cfg.NormalizeDeployment(); err != nil {
 		t.Fatal(err)
@@ -128,8 +128,13 @@ func TestKubernetesDeploymentNormalization(t *testing.T) {
 		"malformed Prometheus": {func(c *Config) {
 			c.Sandbox.Deployment = kubernetes(KubernetesDeploymentConfig{PrometheusURL: "10.96.1.2:9090"})
 		}, "prometheus_url must be an http or https URL"},
-		"malformed CIDR": {func(c *Config) { c.Sandbox.Deployment = kubernetes(KubernetesDeploymentConfig{PodCIDR: "not-a-cidr"}) }, "is not a CIDR"},
-		"docker options": {func(c *Config) { c.Sandbox.Deployment.Docker = &DockerDeploymentConfig{} }, "does not apply to backend kubernetes"},
+		"harness runtime class":           {func(c *Config) { c.Harness.Deployment = kubernetes(KubernetesDeploymentConfig{RuntimeClass: "gvisor"}) }, "apply only to sandbox.deployment"},
+		"bridge agent-sandbox":            {func(c *Config) { c.Bridge.Deployment = kubernetes(KubernetesDeploymentConfig{AgentSandbox: true}) }, "apply only to sandbox.deployment"},
+		"warm pool without agent-sandbox": {func(c *Config) { c.Sandbox.Deployment = kubernetes(KubernetesDeploymentConfig{WarmPool: 2}) }, "needs agent_sandbox"},
+		"bridge warm pool":                {func(c *Config) { c.Bridge.Deployment = kubernetes(KubernetesDeploymentConfig{WarmPool: 1}) }, "apply only to sandbox.deployment"},
+		"runtime class name":              {func(c *Config) { c.Sandbox.Deployment = kubernetes(KubernetesDeploymentConfig{RuntimeClass: "gVisor"}) }, "is not a Kubernetes object name"},
+		"malformed CIDR":                  {func(c *Config) { c.Sandbox.Deployment = kubernetes(KubernetesDeploymentConfig{PodCIDR: "not-a-cidr"}) }, "is not a CIDR"},
+		"docker options":                  {func(c *Config) { c.Sandbox.Deployment.Docker = &DockerDeploymentConfig{} }, "does not apply to backend kubernetes"},
 		"kubernetes on docker": {func(c *Config) {
 			c.Harness.Deployment, c.Bridge.Deployment = DeploymentConfig{}, DeploymentConfig{}
 			c.Sandbox.Deployment = DeploymentConfig{Backend: "docker", Kubernetes: &KubernetesDeploymentConfig{}}

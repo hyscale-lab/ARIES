@@ -15,7 +15,8 @@ func kubernetesOptions(cfg config.DeploymentConfig, logger *logrus.Logger) kuber
 	k := cfg.Kubernetes
 	return kubernetesdeployment.Options{
 		Namespace: k.Namespace, NodeSelector: k.NodeSelector, PodCIDR: k.PodCIDR, ServiceCIDR: k.ServiceCIDR,
-		ServiceAccount: k.ServiceAccount, ImagePullSecret: k.ImagePullSecret, Images: k.Images, Logger: logger,
+		ServiceAccount: k.ServiceAccount, ImagePullSecret: k.ImagePullSecret, Images: k.Images,
+		RuntimeClass: k.RuntimeClass, AgentSandbox: k.AgentSandbox, WarmPool: k.WarmPool, Logger: logger,
 	}
 }
 
@@ -64,6 +65,7 @@ func newKubernetesResources(sandbox config.DeploymentConfig, options kubernetesd
 	}
 	options.Namespace = sandbox.Kubernetes.Namespace
 	options.PrometheusURL = sandbox.Kubernetes.PrometheusURL
+	options.RuntimeClass = sandbox.Kubernetes.RuntimeClass
 	return kubernetesdeployment.NewResourceSource(options)
 }
 

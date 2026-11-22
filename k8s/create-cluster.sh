@@ -16,10 +16,13 @@ VHIVE_REPO=${VHIVE_REPO:-https://github.com/vhive-serverless/vHive.git}
 VHIVE_REVISION=${VHIVE_REVISION:-9826bb9c2af97d6478498df64879e8c30b21d31d}
 # The Helm that installs the charts, checked against its published checksum.
 HELM_VERSION=${HELM_VERSION:-v3.17.3}
+# The agent-sandbox controller --sandbox-runtimes installs.
+AGENT_SANDBOX_VERSION=${AGENT_SANDBOX_VERSION:-v1.0.12}
 
 config=""
 prometheus=false
 testbed=false
+sandbox_runtimes=false
 vhive_dir=""
 skip_cluster=false
 stage_runner=true
@@ -46,13 +49,16 @@ k8s/cluster.json.example. Command-line options win over the file.
                       such as 1s; the kubelet's default is 10s
   --testbed           prepare the workers for measurements: pin the CPU clock
                       on the runner and workers, install Docker on the workers
+  --sandbox-runtimes  install gVisor and Kata on the workers, their
+                      RuntimeClasses, and the agent-sandbox controller
   --vhive-dir DIR     install vHive from this local checkout's HEAD instead of
                       fetching VHIVE_REVISION from VHIVE_REPO
   --skip-cluster      the cluster already exists; only apply ARIES
   --no-runner         do not build and stage the runner on the runner node
   -h, --help          show this help
 
-VHIVE_REPO and VHIVE_REVISION override the pinned vHive, HELM_VERSION the Helm.
+VHIVE_REPO and VHIVE_REVISION override the pinned vHive, HELM_VERSION the Helm,
+AGENT_SANDBOX_VERSION the agent-sandbox release.
 USAGE
 }
 
@@ -63,6 +69,7 @@ while [ $# -gt 0 ]; do
     --prometheus) prometheus=true; shift ;;
     --housekeeping) housekeeping=$2; shift 2 ;;
     --testbed) testbed=true; shift ;;
+    --sandbox-runtimes) sandbox_runtimes=true; shift ;;
     --vhive-dir) vhive_dir=$2; shift 2 ;;
     --skip-cluster) skip_cluster=true; shift ;;
     --no-runner) stage_runner=false; shift ;;
@@ -115,12 +122,14 @@ for retired in ("node_setup", "prune_invitro"):
 if not text("master") or not text("runner"):
     sys.exit('cluster config needs "master" and "runner"')
 nodes = [text("master"), text("runner")] + strings("workers")
+strings("standalone")  # kept out of the cluster; only checked here
 print("file_nodes=(" + " ".join(shlex.quote(node) for node in nodes) + ")")
 print("file_ssh_options=(" + " ".join(shlex.quote(option) for option in strings("ssh_options")) + ")")
 for key in ("runner_dir", "ssh_key", "kubelet_housekeeping_interval", "vhive_dir"):
     print(f"file_{key}={shlex.quote(text(key))}")
 print("file_prometheus=" + flag("deploy_prometheus"))
 print("file_testbed=" + flag("testbed"))
+print("file_sandbox_runtimes=" + flag("sandbox_runtimes"))
 PY
   ) || exit 1
   eval "$parsed"
@@ -130,6 +139,7 @@ PY
   ssh_key=$file_ssh_key
   [ "$prometheus" = true ] || prometheus=$file_prometheus
   [ "$testbed" = true ] || testbed=$file_testbed
+  [ "$sandbox_runtimes" = true ] || sandbox_runtimes=$file_sandbox_runtimes
   [ -n "$vhive_dir" ] || vhive_dir=$file_vhive_dir
   [ -n "$housekeeping" ] || housekeeping=$file_kubelet_housekeeping_interval
 fi
@@ -302,6 +312,24 @@ if [ -n "$housekeeping" ]; then
       sudo systemctl restart kubelet
     " </dev/null
   done
+fi
+
+if [ "$sandbox_runtimes" = true ] && [ ${#workers[@]} -gt 0 ]; then
+  # The RuntimeClasses schedule only onto nodes labelled as having the
+  # runtimes, so a kata pod never lands on the runner.
+  echo "==> Installing gVisor and Kata on the workers"
+  ship_testbed "${workers[@]}"
+  on_each "sudo ~/aries-testbed/scripts/testbed/install-sandbox-runtimes.sh" "${workers[@]}"
+  for node in "${workers[@]}"; do
+    remote "$master" "kubectl label node $(printf %q "$(remote "$node" hostname </dev/null)") aries/sandbox-runtimes=true --overwrite >/dev/null" </dev/null
+  done
+  echo "==> Applying the RuntimeClasses and agent-sandbox $AGENT_SANDBOX_VERSION"
+  git -C "$root" show HEAD:k8s/sandbox-runtimes.yaml | remote "$master" "kubectl apply -f - | sed 's/^/    /'"
+  remote "$master" "
+    set -e
+    kubectl apply --server-side -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$AGENT_SANDBOX_VERSION/sandbox-with-extensions.yaml >/dev/null
+    kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller --timeout=180s | sed 's/^/    /'
+  " </dev/null
 fi
 
 echo "==> Applying ARIES on $master"

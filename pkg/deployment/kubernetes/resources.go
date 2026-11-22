@@ -24,6 +24,11 @@ import (
 // told apart by the container labels it copies from containerd, which the
 // kubelet's lack.
 //
+// A pod under a RuntimeClass such as gvisor or kata is read from its pod
+// sandbox cgroup instead of its container's. Both runtimes run the whole
+// sandbox there, gVisor's Sentry or Kata's VM, and cAdvisor reports nothing or
+// zero for the container itself.
+//
 // Prometheus knows a pod by name only. Which run and task a pod belongs to is
 // held in its annotations, so the source lists pods through kubectl, but only
 // when Prometheus reports a pod name it has not classified. Annotations never
@@ -60,6 +65,9 @@ type ResourceOptions struct {
 	PrometheusURL string
 	Namespace     string
 	KubectlPath   string
+	// RuntimeClass is the class sandbox pods run under. Pods of that class are
+	// read from their pod sandbox cgroup.
+	RuntimeClass string
 }
 
 // ResourceSource collects raw cumulative counters for one run's pods. Rate
@@ -71,6 +79,8 @@ type ResourceSource struct {
 	scope      string
 	runID      string
 	tasks      map[string]struct{}
+	// runtimeClass, when set, adds the pod sandbox series to every sample.
+	runtimeClass string
 
 	mu sync.Mutex
 	// lastObserved is the newest scrape time already emitted per pod.
@@ -126,6 +136,7 @@ func NewResourceSource(options ResourceOptions) (*ResourceSource, error) {
 	return &ResourceSource{
 		kubectl: execKubectl{path: options.KubectlPath}, prometheus: prometheus,
 		namespace: options.Namespace, scope: options.Scope, runID: options.RunID, tasks: tasks,
+		runtimeClass: options.RuntimeClass,
 		lastObserved: make(map[string]time.Time),
 		known:        make(map[string]resourceTarget), unknownUntil: make(map[string]time.Time),
 	}, nil
@@ -149,20 +160,40 @@ type resourceTarget struct {
 	taskID    string
 	component string
 	limit     uint64
+	// sandboxCgroup selects the pod sandbox series over the container's.
+	sandboxCgroup bool
 }
+
+// podSeries holds one sample's counters keyed by pod name.
+type podSeries struct{ cpu, memory, scraped map[string]float64 }
 
 // Sample reads every pod in the namespace from Prometheus and keeps the ones
 // that belong to this source's run and tasks.
 func (source *ResourceSource) Sample(ctx context.Context) ([]core.ResourceReading, error) {
 	// The container-name matchers drop the pod-level cgroup and the pause
-	// container, leaving the containers that were started in the pod.
-	selector := fmt.Sprintf(`{%s=%q,%s!="",%s!="POD"}`, namespaceLabel, source.namespace, containerLabel, containerLabel)
+	// container, leaving the containers that were started in the pod. The pod
+	// sandbox selector keeps only the pause container's cgroup, which is where a
+	// RuntimeClass runtime runs the sandbox.
+	containers := fmt.Sprintf(`{%s=%q,%s!="",%s!="POD"}`, namespaceLabel, source.namespace, containerLabel, containerLabel)
+	sandboxes := fmt.Sprintf(`{%s=%q,%s!="",%s=~"|POD"}`, namespaceLabel, source.namespace, podLabel, containerLabel)
 	byPod := "sum by (" + podLabel + ") "
-	cpu, err := source.query(ctx, byPod+"(container_cpu_usage_seconds_total"+selector+")")
-	if err != nil {
-		return nil, err
+	var series [2]podSeries
+	selectors := []string{containers}
+	if source.runtimeClass != "" {
+		selectors = append(selectors, sandboxes)
 	}
-	if len(cpu) == 0 {
+	reported := map[string]float64{}
+	for index, selector := range selectors {
+		cpu, err := source.query(ctx, byPod+"(container_cpu_usage_seconds_total"+selector+")")
+		if err != nil {
+			return nil, err
+		}
+		series[index].cpu = cpu
+		for name, value := range cpu {
+			reported[name] = value
+		}
+	}
+	if len(reported) == 0 {
 		// The chart's cAdvisor pods live in this namespace, so no series at
 		// all means nothing is collecting, which must not read as idle pods.
 		source.mu.Lock()
@@ -176,27 +207,38 @@ func (source *ResourceSource) Sample(ctx context.Context) ([]core.ResourceReadin
 	source.mu.Lock()
 	source.collectorSeen = true
 	source.mu.Unlock()
-	if err := source.identify(ctx, cpu); err != nil {
+	if err := source.identify(ctx, reported); err != nil {
 		return nil, err
 	}
-	memory, err := source.query(ctx, byPod+"(container_memory_working_set_bytes"+selector+")")
-	if err != nil {
-		return nil, err
+	for index, selector := range selectors {
+		memory, err := source.query(ctx, byPod+"(container_memory_working_set_bytes"+selector+")")
+		if err != nil {
+			return nil, err
+		}
+		// An instant query is stamped with its evaluation time. The time the
+		// counter was scraped is what the rate arithmetic needs.
+		scraped, err := source.query(ctx, "max by ("+podLabel+") (timestamp(container_cpu_usage_seconds_total"+selector+"))")
+		if err != nil {
+			return nil, err
+		}
+		series[index].memory, series[index].scraped = memory, scraped
 	}
-	// An instant query is stamped with its evaluation time. The time the
-	// counter was scraped is what the rate arithmetic needs.
-	scraped, err := source.query(ctx, "max by ("+podLabel+") (timestamp(container_cpu_usage_seconds_total"+selector+"))")
-	if err != nil {
-		return nil, err
-	}
-	readings := make([]core.ResourceReading, 0, len(cpu))
-	for name, seconds := range cpu {
+	readings := make([]core.ResourceReading, 0, len(reported))
+	for name := range reported {
 		source.mu.Lock()
 		target, owned := source.known[name]
 		source.mu.Unlock()
-		usage, hasMemory := memory[name]
-		stamp, hasStamp := scraped[name]
-		if !owned || !hasMemory || !hasStamp || seconds < 0 || usage < 0 || stamp <= 0 {
+		if !owned {
+			continue
+		}
+		chosen := series[0]
+		if target.sandboxCgroup {
+			chosen = series[1]
+		}
+		seconds, hasCPU := chosen.cpu[name]
+		usage, hasMemory := chosen.memory[name]
+		stamp, hasStamp := chosen.scraped[name]
+		if !hasCPU || !hasMemory || !hasStamp || seconds < 0 || usage < 0 || stamp <= 0 {
 			continue
 		}
 		observed := time.Unix(0, int64(stamp*float64(time.Second))).UTC()
@@ -319,7 +361,8 @@ func (source *ResourceSource) discover(ctx context.Context) ([]resourceTarget, e
 		if len(pod.Spec.Containers) > 0 {
 			limit = parseMemoryQuantity(pod.Spec.Containers[0].Resources.Limits["memory"])
 		}
-		targets = append(targets, resourceTarget{podName: pod.Metadata.Name, taskID: taskID, component: component, limit: limit})
+		sandboxCgroup := source.runtimeClass != "" && pod.Spec.RuntimeClassName == source.runtimeClass
+		targets = append(targets, resourceTarget{podName: pod.Metadata.Name, taskID: taskID, component: component, limit: limit, sandboxCgroup: sandboxCgroup})
 	}
 	return targets, nil
 }

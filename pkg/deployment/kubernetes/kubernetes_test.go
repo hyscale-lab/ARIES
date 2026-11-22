@@ -327,6 +327,193 @@ func TestStartRunningAddressAndStop(t *testing.T) {
 	}
 }
 
+func TestRuntimeClassReachesThePodAndIsValidated(t *testing.T) {
+	manager, fake := newTestManager(t, Options{RuntimeClass: "kata"})
+	request := testRequest()
+	raw, err := manager.podManifest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec := decodeManifest(t, raw)["spec"].(map[string]any); spec["runtimeClassName"] != "kata" {
+		t.Fatalf("spec = %v", spec)
+	}
+	for name, test := range map[string]struct {
+		edit func(map[string]any)
+		ok   bool
+	}{
+		"same class":    {nil, true},
+		"default class": {func(m map[string]any) { delete(m["spec"].(map[string]any), "runtimeClassName") }, false},
+		"other class":   {func(m map[string]any) { m["spec"].(map[string]any)["runtimeClassName"] = "gvisor" }, false},
+	} {
+		pod := podJSON(t, manager, request, test.edit)
+		fake.respond = func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+			_, _ = io.WriteString(stdout, pod)
+			return nil
+		}
+		if err := manager.Validate(context.Background(), request.Name, request, nil); (err == nil) != test.ok {
+			t.Errorf("%s: Validate = %v", name, err)
+		}
+	}
+	if _, err := New(Options{RuntimeClass: "Kata"}); err == nil {
+		t.Fatal("invalid runtime class accepted")
+	}
+}
+
+// sandboxPodJSON is the pod agent-sandbox's controller creates from a Sandbox:
+// the template's spec, labels and annotations under the Sandbox's name.
+func sandboxPodJSON(t *testing.T, manager *Manager, request deployment.Request, edit func(map[string]any)) string {
+	t.Helper()
+	raw, err := manager.podManifest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := decodeManifest(t, raw)
+	template := sandbox["spec"].(map[string]any)["podTemplate"].(map[string]any)
+	metadata := template["metadata"].(map[string]any)
+	metadata["name"], metadata["namespace"] = request.Name, manager.options.Namespace
+	metadata["ownerReferences"] = []any{map[string]any{"apiVersion": sandboxAPIVersion, "kind": "Sandbox", "name": request.Name, "controller": true}}
+	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata, "spec": template["spec"], "status": map[string]any{"phase": "Running", "podIP": "10.0.0.7"}}
+	if edit != nil {
+		edit(pod)
+	}
+	out, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+func TestAgentSandboxCarriesThePodTemplate(t *testing.T) {
+	manager, _ := newTestManager(t, Options{AgentSandbox: true, RuntimeClass: "gvisor"})
+	plain, _ := newTestManager(t, Options{RuntimeClass: "gvisor"})
+	request := testRequest()
+	raw, err := manager.podManifest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := decodeManifest(t, raw)
+	if sandbox["apiVersion"] != sandboxAPIVersion || sandbox["kind"] != "Sandbox" {
+		t.Fatalf("object = %v %v", sandbox["apiVersion"], sandbox["kind"])
+	}
+	metadata := sandbox["metadata"].(map[string]any)
+	if metadata["name"] != request.Name || metadata["annotations"].(map[string]any)["aries.run"] != "run-1" {
+		t.Fatalf("metadata = %v", metadata)
+	}
+	spec := sandbox["spec"].(map[string]any)
+	if spec["service"] != false || spec["failedPodPolicy"] != "Retain" {
+		t.Fatalf("Sandbox spec = %v", spec)
+	}
+	// The template is exactly the pod ARIES would otherwise create.
+	podRaw, err := plain.podManifest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := decodeManifest(t, podRaw)
+	template := spec["podTemplate"].(map[string]any)
+	wantMetadata := pod["metadata"].(map[string]any)
+	delete(wantMetadata, "name")
+	delete(wantMetadata, "namespace")
+	if got, want := mustJSON(t, template["metadata"]), mustJSON(t, wantMetadata); got != want {
+		t.Fatalf("template metadata = %s, want %s", got, want)
+	}
+	if got, want := mustJSON(t, template["spec"]), mustJSON(t, pod["spec"]); got != want {
+		t.Fatalf("template spec = %s, want %s", got, want)
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	out, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+func TestAgentSandboxLifecycle(t *testing.T) {
+	manager, fake := newTestManager(t, Options{AgentSandbox: true})
+	request := testRequest()
+	if _, err := manager.Create(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(fake.inputs[0], []byte(`"kind":"Sandbox"`)) {
+		t.Fatalf("create input = %s", fake.inputs[0])
+	}
+	// The pod does not exist until the controller makes it, so Create waits
+	// on the Sandbox.
+	if wait := fake.calls[1]; wait[0] != "wait" || !slices.Contains(wait, "--for=condition=Ready") || !slices.Contains(wait, sandboxResource+"/"+request.Name) {
+		t.Fatalf("wait = %v", wait)
+	}
+
+	// A lost create response is resolved from the Sandbox, not the pod.
+	fake.calls = nil
+	fake.respond = func(_ context.Context, args []string, _ []byte, stdout, _ io.Writer) error {
+		if args[0] == "create" {
+			return errors.New("connection reset")
+		}
+		if args[0] == "get" && args[1] == sandboxResource {
+			_, _ = io.WriteString(stdout, `{"metadata":{"name":"aries-sandbox-abc123","annotations":{"aries.managed":"true","aries.kind":"task-container","aries.component":"sandbox","aries.run":"run-1","aries.task":"task-1"}}}`)
+		}
+		return nil
+	}
+	if id, err := manager.Create(context.Background(), request); err == nil || id != request.Name {
+		t.Fatalf("recovered Create = %q, %v", id, err)
+	}
+
+	// Validate requires the pod to be the Sandbox's; a plain provider rejects one.
+	plain, plainFake := newTestManager(t, Options{})
+	for name, test := range map[string]struct {
+		manager *Manager
+		fake    *fakeKubectl
+		pod     string
+		ok      bool
+	}{
+		"controlled": {manager, fake, sandboxPodJSON(t, manager, request, nil), true},
+		"no owner":   {manager, fake, sandboxPodJSON(t, manager, request, func(m map[string]any) { delete(m["metadata"].(map[string]any), "ownerReferences") }), false},
+		"other Sandbox": {manager, fake, sandboxPodJSON(t, manager, request, func(m map[string]any) {
+			m["metadata"].(map[string]any)["ownerReferences"].([]any)[0].(map[string]any)["name"] = "other"
+		}), false},
+		"plain provider": {plain, plainFake, sandboxPodJSON(t, manager, request, nil), false},
+	} {
+		test.fake.respond = func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+			_, _ = io.WriteString(stdout, test.pod)
+			return nil
+		}
+		if err := test.manager.Validate(context.Background(), request.Name, request, nil); (err == nil) != test.ok {
+			t.Errorf("%s: Validate = %v", name, err)
+		}
+	}
+
+	// Stop deletes the Sandbox in the foreground, then confirms that both the
+	// Sandbox and its pod are gone.
+	for name, test := range map[string]struct {
+		remaining string
+		ok        bool
+	}{
+		"both gone":       {"", true},
+		"Sandbox remains": {sandboxResource, false},
+		"pod remains":     {"pod", false},
+	} {
+		fake.calls = nil
+		fake.respond = func(_ context.Context, args []string, _ []byte, stdout, _ io.Writer) error {
+			if args[0] == "get" && args[1] == test.remaining {
+				_, _ = io.WriteString(stdout, `{"metadata":{"name":"aries-sandbox-abc123"}}`)
+			}
+			return nil
+		}
+		err := manager.Stop(context.Background(), request.Name)
+		if (err == nil) != test.ok {
+			t.Errorf("%s: Stop = %v", name, err)
+		}
+		if remove := fake.calls[0]; remove[0] != "delete" || remove[1] != sandboxResource || !slices.Contains(remove, "--cascade=foreground") || !slices.Contains(remove, "--wait=true") {
+			t.Errorf("%s: delete = %v", name, remove)
+		}
+		if test.ok && !slices.Equal(fake.verbs(), []string{"delete " + sandboxResource, "get " + sandboxResource, "get pod"}) {
+			t.Errorf("%s: calls = %v", name, fake.verbs())
+		}
+	}
+}
+
 func TestAddressForwardsOutsideTheCluster(t *testing.T) {
 	manager, _ := newTestManager(t, Options{})
 	manager.inCluster = false

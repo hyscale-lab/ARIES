@@ -15,7 +15,7 @@ rules:
   # the runner. `watch` backs `kubectl wait`.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "get", "list", "watch", "delete"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch"]
   # exec stages files and runs commands; portforward reaches the harness
   # gateway and the bridge's control port from outside the cluster.
   - apiGroups: [""]
@@ -33,6 +33,16 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["create", "get", "list", "delete"]
+  # agent-sandbox Sandboxes, when sandbox.deployment.kubernetes.agent_sandbox
+  # creates sandbox pods through its controller. `watch` backs `kubectl wait`.
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # With warm_pool, the run's templates and pools, and one claim per sandbox;
+  # `patch` on pods gives a claimed pod its task's identity.
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates", "sandboxwarmpools", "sandboxclaims"]
+    verbs: ["create", "get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
