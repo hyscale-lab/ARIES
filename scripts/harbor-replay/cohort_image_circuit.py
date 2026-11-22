@@ -53,15 +53,16 @@ def verify(run, receipt, *, sorted_final=False):
     for key in ("task", "trial_id", "job_id", "row_id", "image", "trajectory_sha256", "rollout_sha256", "memory_mib", "storage_mib", "vcpus"):
         if first[key] != receipt[key]:
             raise ValueError(f"run identity mismatch for {key}")
-    actual = {e["sequence"]: e for e in events if e["event"] == "tool_reply"}
+    replies = [e for e in events if e["event"] == "tool_reply"]
+    actual = {e["sequence"]: e for e in replies}
     expected = {e["sequence"]: e for e in receipt["tools"]}
-    if actual.keys() != expected.keys():
+    if len(actual) != len(replies) or len(expected) != len(receipt["tools"]) or actual.keys() != expected.keys():
         raise ValueError("measured calls differ from validated set")
     images = 0
     for seq, e in actual.items():
         original = expected[seq]
-        if (e["step_id"], e["exit_code"], e["expected_exit_code"]) != (original["step_id"], original["exit_code"], original["expected_exit_code"]):
-            raise ValueError(f"step or process status mismatch for occurrence {seq}")
+        if any(e[k] != original[k] for k in ("step_id", "rollout_line", "exit_code", "expected_exit_code")):
+            raise ValueError(f"source position or process status mismatch for occurrence {seq}")
         if e.get("operation", "Exec") != original["operation"]:
             raise ValueError(f"operation mismatch for occurrence {seq}")
         if original["operation"] == "ViewImage":
