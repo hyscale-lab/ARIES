@@ -53,9 +53,36 @@ def cross_tab(e, absent):
              pfn_scan_state=scan.get("state"),probe_source_errors=g["source_errors"],
              collection_skew_ns=host["host_end_ns"]-e["freeze"]["resume_request_ns"])
     ends=[r["end_pfn_exclusive"] for r in runs]
+    regular = g.get("regular_files")
+    verified = set()
+    if regular:
+        # Each extent was present and file-backed in an inode-checked ordinary
+        # guest mapping. Deduplicate alias mappings of the same file offset.
+        identities = {}
+        conflicts = set()
+        for extent in regular["extents"] or []:
+            for index in range(extent["count"]):
+                gfn = extent["pfn"]+index
+                identity = (extent["device"],extent["inode"],extent["file_page"]+index)
+                if identities.setdefault(gfn,identity)!=identity:
+                    conflicts.add(gfn)
+        verified = identities.keys()-conflicts
+        present_ends = [b for _,b in present]
+        resident_by_class = Counter()
+        for gfn in verified:
+            address = gfn*p
+            i = bisect_right(present_ends,address)
+            if i>=len(present) or address<present[i][0]:
+                continue
+            j = bisect_right(ends,gfn)
+            label = runs[j]["class"] if j<len(runs) and runs[j]["start_pfn"]<=gfn else "outside_guest_scan"
+            resident_by_class[label]+=p
+        out["mapped_regular"] = dict(guest_mapped_pages=len(verified),conflicting_pages=len(conflicts),
+                    resident_bytes_by_flag_class=dict(resident_by_class),skipped=regular["skipped"],
+                    processes=regular["processes"],scan_duration_ns=regular["end_ns"]-regular["begin_ns"])
     tagged=[]
     for s in e.get("content_sample",[]):
         ix=bisect_right(ends,s["gfn"])
         label=runs[ix]["class"] if ix<len(runs) and runs[ix]["start_pfn"]<=s["gfn"] else "outside_guest_scan"
-        tagged.append(dict(s,guest_flag_class=label))
+        tagged.append(dict(s,guest_flag_class=label,regular_mapped=s["gfn"] in verified))
     return out,tagged

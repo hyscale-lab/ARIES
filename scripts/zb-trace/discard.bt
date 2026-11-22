@@ -1,0 +1,15 @@
+// Match a restored PID and its captured RAM slot during offline analysis.
+// Only fixed private anonymous mmap replacements >= one base page are recorded.
+BEGIN { printf("ready %llu\n", nsecs); }
+tracepoint:syscalls:sys_enter_mmap
+/(args->flags & 0x32) == 0x32 && args->len >= 4096/
+{
+    @addr[tid]=args->addr; @len[tid]=args->len;
+}
+tracepoint:syscalls:sys_exit_mmap
+/@len[tid]/
+{
+    printf("fixed %llu %d %llu %llu %lld\n",nsecs,pid,@addr[tid],@len[tid],args->ret);
+    delete(@addr[tid]); delete(@len[tid]);
+}
+END { clear(@addr); clear(@len); }

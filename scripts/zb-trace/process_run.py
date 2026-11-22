@@ -118,9 +118,9 @@ def reconcile(raw, output, meta):
                        "matches_snapshot" if row["digest"]==originals[row["gfn"]] else "differs_from_snapshot")
             key=(row["guest_flag_class"],state)
             cross[key]+=1
-            by_state.setdefault(key,[]).append(row["gfn"])
-        for (label,state),gfns in sorted(by_state.items()):
-            sample_rows.append(dict(monotonic_ns=receipt["monotonic_ns"],guest_class=label,state=state,gfns=gfns))
+            by_state.setdefault((*key,row.get("regular_mapped",False)),[]).append(row["gfn"])
+        for (label,state,regular),gfns in sorted(by_state.items()):
+            sample_rows.append(dict(monotonic_ns=receipt["monotonic_ns"],guest_class=label,state=state,gfns=gfns,regular_mapped=regular))
         receipt["sample_cross_tab"]=[dict(guest_flag_class=k[0],state=k[1],pages=v) for k,v in sorted(cross.items())]
     if output.exists():
         raise FileExistsError(output)
