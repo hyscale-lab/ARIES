@@ -52,6 +52,8 @@ const (
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 type Options struct {
+	// GuestTaskV3 selects the guest agent on the containerd-v2 integration stack.
+	GuestTaskV3                                       bool
 	Socket, Namespace, Snapshotter, IODir, CNINetwork string
 	CNIBinPaths                                       []string
 	CNIConfDir, CNICacheDir                           string

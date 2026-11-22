@@ -21,10 +21,31 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
+// The pinned containerd API's v2 and v3 task schemas differ only in service
+// and Go package names. Select the wire service explicitly, before executing
+// any command. Legacy vHive profiles keep their original v2 agent contract.
+func (m *Manager) guestRPC(conn net.Conn) *ttrpc.Client {
+	if !m.options.GuestTaskV3 {
+		return ttrpc.NewClient(conn)
+	}
+	return ttrpc.NewClient(conn, ttrpc.WithUnaryClientInterceptor(func(ctx context.Context, req *ttrpc.Request, res *ttrpc.Response, _ *ttrpc.UnaryClientInfo, invoke ttrpc.Invoker) error {
+		if req.Service != "containerd.task.v2.Task" {
+			return fmt.Errorf("unexpected guest task service %q", req.Service)
+		}
+		req.Service = "containerd.task.v3.Task"
+		return invoke(ctx, req, res)
+	}))
+}
+
 // A restored guest retains its task manager; a replacement host shim does not.
 // Use the guest's existing native task service rather than creating its running
 // container again through the host shim.
 func (m *Manager) execGuestStream(ctx context.Context, id string, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	// The containerd-v2 integration restores the shim task registry and
+	// reconnects its framed guest streams. Use the native shim's FIFO client.
+	if m.options.GuestTaskV3 {
+		return m.execContainerStream(ctx, id, command, stdin, stdout, stderr)
+	}
 	endCommand := core.TimeCommandStage(ctx, "command.total")
 	defer endCommand()
 	started := time.Now()
@@ -111,7 +132,7 @@ func (m *Manager) execGuestStream(ctx context.Context, id string, command core.C
 	if err != nil {
 		return failure(fmt.Errorf("connect vHive guest agent: %w", err))
 	}
-	client := ttrpc.NewClient(conn)
+	client := m.guestRPC(conn)
 	defer client.Close()
 	stopClose := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stopClose()
@@ -294,7 +315,7 @@ func (m *Manager) guestTaskRunning(ctx context.Context, id string) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	client := ttrpc.NewClient(conn)
+	client := m.guestRPC(conn)
 	defer client.Close()
 	stopClose := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stopClose()
