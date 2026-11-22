@@ -61,8 +61,11 @@ The fixture verifies the host mapping has no present PTE before either run.
 
 ```sh
 cc -Wall -Wextra -Werror -O2 -o /tmp/zb-demand-test-vm scripts/zb-demand/test_vm.c
-sudo /tmp/zb-demand-test-vm warm
-sudo /tmp/zb-demand-test-vm cold
+sudo /tmp/zb-demand-test-vm warm > calibration-actions.jsonl
+sudo /tmp/zb-demand-test-vm cold >> calibration-actions.jsonl
+# Stop the calibration listener with SIGINT before checking its output.
+python3 scripts/zb-demand/verify_calibration.py calibration-actions.jsonl \
+  demand.events demand.stderr > calibration-summary.json
 ```
 
 The cold run requests per-file cache discard and reports whether it worked.

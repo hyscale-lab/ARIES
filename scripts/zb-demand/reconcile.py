@@ -162,9 +162,13 @@ def reconcile(readiness, termination, faults, steps, boundaries):
     matches = []
     idx = 0
     first = set()
+    preceding_scan = 0
     for w in sorted(windows, key=lambda x: x["window"]["arm_end_ns"]):
         obs = w["window"]
         begin, end = obs["arm_end_ns"], obs["scan_begin_ns"]
+        if begin < preceding_scan or end < begin:
+            raise ValueError("observed idle windows overlap or run backwards")
+        preceding_scan = end
         ranges = sorted(tuple(x) for x in obs["not_resident_at_arm_gpa_ranges"])
         end_ranges = sorted(tuple(x) for x in obs["not_resident_at_end_gpa_ranges"])
         step = w["step"] if w["window_kind"] == "tool" else None
