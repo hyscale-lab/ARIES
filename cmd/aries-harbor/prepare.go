@@ -112,8 +112,9 @@ ARIESPATH`}})
 		initial = "test ! -e " + task.output
 	}
 	allocation := ""
-	if r.Trial == "337f0b12-666b-4f8f-bd8e-1eec7ab2de7f" {
-		out, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", installRecordedTempAllocation}})
+	if allocationNames, ok := recordedTempDirectories[r.Trial]; ok {
+		install := strings.NewReplacer("SOURCE_TEMPLATE", allocationNames[0], "SOURCE_DIR", allocationNames[1]).Replace(installRecordedTempAllocation)
+		out, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", install}})
 		if err != nil {
 			return "", nil, err
 		}
@@ -155,22 +156,28 @@ rmdir aries-guest-offline-packages`
 
 // This source session refers to the original random name literally in four
 // later steps. Allocate its recorded unused directory on the original call.
+var recordedTempDirectories = map[string][2]string{
+	"337f0b12-666b-4f8f-bd8e-1eec7ab2de7f": {"/tmp/latex-synonyms.XXXXXX", "/tmp/latex-synonyms.eqOYqu"},
+	"18bb015b-80fc-4347-9743-2c11bacc0bcc": {"/tmp/latex-synonyms.XXXXXX", "/tmp/latex-synonyms.5bqpU2"},
+	"0ddfe8fb-e4d8-44f5-970e-27dcb8ec2999": {"/tmp/latex-synonyms.XXXXXXXX", "/tmp/latex-synonyms.RFhrThu1"},
+}
+
 const installRecordedTempAllocation = `set -eu
-test ! -e /tmp/latex-synonyms.eqOYqu
+test ! -e SOURCE_DIR
 test ! -e /usr/local/bin/mktemp
 cat > /usr/local/bin/mktemp <<'ARIESMKTEMP'
 #!/bin/sh
-if [ "$#" -eq 2 ] && [ "$1" = "-d" ] && [ "$2" = "/tmp/latex-synonyms.XXXXXX" ]; then
+if [ "$#" -eq 2 ] && [ "$1" = "-d" ] && [ "$2" = "SOURCE_TEMPLATE" ]; then
     umask 077
-    mkdir -m 700 -- /tmp/latex-synonyms.eqOYqu || exit 1
-    printf '%s\n' /tmp/latex-synonyms.eqOYqu
+    mkdir -m 700 -- SOURCE_DIR || exit 1
+    printf '%s\n' SOURCE_DIR
 else
     exec /usr/bin/mktemp "$@"
 fi
 ARIESMKTEMP
 chmod 0755 /usr/local/bin/mktemp
 sha256sum /usr/local/bin/mktemp
-printf '%s\n' '/tmp/latex-synonyms.XXXXXX -> /tmp/latex-synonyms.eqOYqu'`
+printf '%s\n' 'SOURCE_TEMPLATE -> SOURCE_DIR'`
 
 func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder) error {
 	task := taskSetups[r.Task]

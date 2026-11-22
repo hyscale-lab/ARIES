@@ -153,7 +153,7 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 		r.Steps = append(r.Steps, s.Step)
 		for _, c := range s.Tools {
 			result := s.Observation.Results[0]
-			if c.ID == "" || calls[c.ID].step != 0 || c.ID != result.ID || (c.Name != "exec_command" && c.Name != "update_plan" && (w.Task != "code-from-image" || c.Name != "view_image") && (w.Task != "circuit-fibsqrt" || c.Name != "write_stdin")) {
+			if c.ID == "" || calls[c.ID].step != 0 || c.ID != result.ID || (c.Name != "exec_command" && c.Name != "update_plan" && (w.Task != "code-from-image" || c.Name != "view_image") && ((w.Task != "circuit-fibsqrt" && w.Task != "overfull-hbox") || c.Name != "write_stdin")) {
 				return nil, fmt.Errorf("unsupported or ambiguous call at step %d", s.ID)
 			}
 			calls[c.ID] = indexedCall{s.ID, c, result.Content}
