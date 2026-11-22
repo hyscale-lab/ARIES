@@ -112,6 +112,13 @@ ARIESPATH`}})
 			return "", nil, err
 		}
 	}
+	if r.Trial == "b43d6be8-70d4-44fb-97a6-358b6bb55b3f" {
+		// This recorded ls requires the harness directory. Its transient logs
+		// and credential-bearing state are deliberately absent from the fixture.
+		if _, err := checked(ctx, m, id, core.Command{Path: "/bin/mkdir", Args: []string{"-m", "0700", "-p", "/tmp/codex-home"}}); err != nil {
+			return "", nil, err
+		}
+	}
 	initial := task.initialCheck
 	if initial == "" {
 		initial = "test ! -e " + task.output
