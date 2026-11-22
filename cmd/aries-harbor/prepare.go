@@ -23,6 +23,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	sparqlTask: sparqlSetup,
 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
@@ -140,7 +141,15 @@ rg --version | head -1`
 	if err != nil {
 		return "", nil, err
 	}
-	return "source_task_ready", map[string]string{"codex_prefix_sha256": codexPrefixSHA, "ubuntu_packages_sha256": task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}, nil
+	details := map[string]string{"codex_prefix_sha256": codexPrefixSHA, "ubuntu_packages_sha256": task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}
+	if r.Task == sparqlTask {
+		pip, err := prepareSparql(ctx, m, id, r.Trial)
+		if err != nil {
+			return "", nil, err
+		}
+		details["pip_configuration"] = strings.TrimSpace(pip)
+	}
+	return "source_task_ready", details, nil
 }
 
 func installPackages(ctx context.Context, m *vhive.Manager, id, packages, sha string) error {
@@ -169,6 +178,8 @@ var recordedTempDirectories = map[string][2]string{
 	"337f0b12-666b-4f8f-bd8e-1eec7ab2de7f": {"/tmp/latex-synonyms.XXXXXX", "/tmp/latex-synonyms.eqOYqu"},
 	"18bb015b-80fc-4347-9743-2c11bacc0bcc": {"/tmp/latex-synonyms.XXXXXX", "/tmp/latex-synonyms.5bqpU2"},
 	"0ddfe8fb-e4d8-44f5-970e-27dcb8ec2999": {"/tmp/latex-synonyms.XXXXXXXX", "/tmp/latex-synonyms.RFhrThu1"},
+	"786300a5-e689-4b20-ada9-edd20999f11e": {"/tmp/university-sparql-validation.XXXXXX", "/tmp/university-sparql-validation.7tKi8V"},
+	"f2d28757-76b8-423d-8f9b-e64b5fb61aa7": {"/tmp/sparql-tools.XXXXXX", "/tmp/sparql-tools.zyCf5e"},
 }
 
 const installRecordedTempAllocation = `set -eu
@@ -195,6 +206,13 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		return err
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
+	if r.Task == sparqlTask {
+		check, err := sparqlOutputCheck(r.Trial)
+		if err != nil {
+			return err
+		}
+		cmd += check
+	}
 	if r.Task == "video-processing" {
 		cmd += `
 python - <<'PYREPORT'
@@ -213,8 +231,8 @@ PYREPORT`
 	return log.Encode(map[string]any{"event": "final_task_state", "checks": strings.TrimSpace(out), "begin_monotonic_ns": begin, "end_monotonic_ns": end})
 }
 
-func networkEvidence(ctx context.Context, m *vhive.Manager, id, phase string, log *json.Encoder) error {
-	const probe = `import json, socket, urllib.request
+func networkEvidence(ctx context.Context, m *vhive.Manager, id, phase, task string, log *json.Encoder) error {
+	const pypiProbe = `import json, socket, urllib.request
 from pathlib import Path
 with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as response:
     print(json.dumps({"route":Path("/proc/net/route").read_text(),"resolv_conf":Path("/etc/resolv.conf").read_text(),"pypi_addresses":sorted({a[4][0] for a in socket.getaddrinfo("pypi.org",443)}),"pypi_status":response.status}))`
@@ -222,7 +240,11 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 	if err != nil {
 		return err
 	}
-	out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", probe}})
+	python, probe := "/usr/local/bin/python", pypiProbe
+	if task == sparqlTask {
+		python, probe = "/usr/bin/python3", sparqlNetworkProbe
+	}
+	out, err := checked(ctx, m, id, core.Command{Path: python, Args: []string{"-c", probe}})
 	end, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil || !json.Valid([]byte(out)) {
 		return errors.Join(errors.New("public dependency route/DNS/TLS readback failed"), err, clockErr)

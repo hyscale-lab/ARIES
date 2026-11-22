@@ -268,5 +268,50 @@
       "write_stdin"
     ],
     "needs_network": true
+  },
+  {
+    "task": "sparql-university",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/sparql-university@sha256:92fa4304e51167f9fb4466144eba33ef9272a7df0ac1cab9fc3986bccd1ab708",
+    "effects": [
+      "Inspect the supplied university RDF graph, write and test an original SPARQL query, look up EU membership in external source events and download public query validation dependencies"
+    ],
+    "trials": [
+      {
+        "trial": "11f94696-6ae2-414f-9d90-e5bf611cf364",
+        "trajectory_sha256": "51d30670061ec9bd7c5fd1eea1796a4f72c1f2455ec3734ef251dd70ec429efc",
+        "rollout_sha256": "4ae780e747a65038a52d8b61a488654c45d74fbf04955f70a930a8146ea99b99"
+      },
+      {
+        "trial": "28b314c3-2ea7-47d2-983b-9ea71befe578",
+        "trajectory_sha256": "99cf5bbccecc479df9b0f595cff9668a26b55aaa27b84bb2899e8bea5b335195",
+        "rollout_sha256": "df56b324638a78a5e701f908dc6c5518404855438f8f5c976910c5e906ed7d85"
+      },
+      {
+        "trial": "786300a5-e689-4b20-ada9-edd20999f11e",
+        "trajectory_sha256": "1258c7fd7edb2e3a76c23f3309a63dbd104cf7307ef91e4daf24fb81bb66581c",
+        "rollout_sha256": "b07ceb16798736c95ef37ffbe3c5c6b1d7d32414e2f5c2c51acb7c869770f80e"
+      },
+      {
+        "trial": "ec088b8c-b4e4-49e4-8107-6228c0690a21",
+        "trajectory_sha256": "b18db6a536b009d6e502c5e731cec889ac184ecf7c3018f0819838a5c1dcc0da",
+        "rollout_sha256": "615bb06ddf4abc475ae25fafd78017d02bb914a76e0122c85a7364939d5fb6e1"
+      },
+      {
+        "trial": "f2d28757-76b8-423d-8f9b-e64b5fb61aa7",
+        "trajectory_sha256": "8b3445c4173d24022dc677235373f38c863f423d6c895d6173bd54418926fef1",
+        "rollout_sha256": "2ec68598aac10e9e8fbf260e15c9fc4a3472a76bc519534d02680817d0e5ae0b"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "needs_network": true
   }
 ]

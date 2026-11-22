@@ -224,7 +224,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.NeedsNetwork {
-		if err = networkEvidence(ctx, m, id, "before_snapshot", log); err != nil {
+		if err = networkEvidence(ctx, m, id, "before_snapshot", r.Task, log); err != nil {
 			return err
 		}
 	}
@@ -250,7 +250,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.NeedsNetwork {
-		if err = networkEvidence(ctx, m, id, "after_restore", log); err != nil {
+		if err = networkEvidence(ctx, m, id, "after_restore", r.Task, log); err != nil {
 			return err
 		}
 	}
