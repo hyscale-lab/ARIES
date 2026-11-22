@@ -31,7 +31,9 @@ def metadata(raw, bundle, deployment):
     if task in cohort_pypi.TASKS:
         reference = cohort_pypi.receipt_path(task,trial)
         receipt = cohort_pypi.load_receipt(bundle,entry)
-        checks = cohort_pypi.verify(log,receipt,entry["reference_boundaries"],"zbpypi"+lineage["node"].removeprefix("amd"))
+        apt = entry.get("financial_apt")
+        network = ("zbfinanceapt" if apt else "zbpypi")+lineage["node"].removeprefix("amd")
+        checks = cohort_pypi.verify(log,receipt,entry["reference_boundaries"],network,apt)
     else:
         reference = entry["reference_receipt"]
         receipt = entry["receipt"]
