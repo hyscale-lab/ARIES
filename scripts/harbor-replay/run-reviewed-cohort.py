@@ -37,7 +37,12 @@ def main():
             raise ValueError('missing successful source-specific fidelity evidence')
         folder=asset/'sources'/task/trial
         direct=['-trajectory',str(folder/'trajectory.json'),'-rollout',str(folder/'rollout.jsonl')]
-        cmd=asset/('aries-tex' if task=='overfull-hbox' else 'aries-multitask')
+        digest=receipt['adapter_binary_sha256']
+        if not re.fullmatch(r'[0-9a-f]{64}',digest):
+            raise ValueError(f'invalid adapter digest for {trial}')
+        cmd=asset/'adapters'/digest
+        if not cmd.exists():
+            cmd=asset/('aries-tex' if task=='overfull-hbox' else 'aries-multitask')
         if hashlib.sha256(cmd.read_bytes()).hexdigest()!=receipt['adapter_binary_sha256']:
             raise ValueError(f'adapter differs from validation receipt for {trial}')
         # Adapter enforces both source digests, image identity and resource contract.
