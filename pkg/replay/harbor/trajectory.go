@@ -340,6 +340,7 @@ func equalJSON(a, b []byte) bool {
 }
 
 var interceptedPatchDirs = map[string]string{
+	"call_mhxbOXNUtUl9kxLCaRYVVK3E": "/app",
 	"call_5ZxflhqiRQR6xuFjOuy848zb": "/app",
 	"call_uTYuir3bN0AdKxSPlTUoVpLc": "/tmp",
 	"call_pzdaK5lgqxXR6Rddv4QXXCi6": "/tmp",
@@ -353,6 +354,7 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		return imageCall(c, origin, ts, sequence)
 	}
 	var args struct {
+		Login        *bool   `json:"login"`
 		Cmd          string  `json:"cmd"`
 		Workdir      string  `json:"workdir"`
 		OutputTokens int     `json:"max_output_tokens"`
@@ -378,6 +380,7 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		}
 		return replay.Call{Operation: "ApplyPatch", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Body: []byte(patch), ResponseStdout: []byte(body)}, nil
 	}
+	login := args.Login == nil || *args.Login
 	header, body, found := strings.Cut(c.output, "\nOutput:\n")
 	if state := runningHeader.FindStringSubmatch(header); len(state) == 2 && found && args.Cmd != "" && path.IsAbs(args.Workdir) {
 		id, err := strconv.Atoi(state[1])
@@ -389,7 +392,7 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		if args.YieldMs != nil {
 			yield = min(30000, max(250, *args.YieldMs))
 		}
-		return replay.Call{Operation: "StartProcess", SessionID: id, YieldTime: time.Duration(yield) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: true, ExitCode: ProcessRunning, ResponseStdout: []byte(body)}, nil
+		return replay.Call{Operation: "StartProcess", SessionID: id, YieldTime: time.Duration(yield) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: login, ExitCode: ProcessRunning, ResponseStdout: []byte(body)}, nil
 	}
 	match := exitHeader.FindStringSubmatch(header)
 	if !found || len(match) != 2 || args.Cmd == "" || !path.IsAbs(args.Workdir) {
@@ -399,7 +402,7 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 	if err != nil {
 		return replay.Call{}, err
 	}
-	return replay.Call{Operation: "Exec", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: true, ExitCode: int32(exit), ResponseStdout: []byte(body)}, nil
+	return replay.Call{Operation: "Exec", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: login, ExitCode: int32(exit), ResponseStdout: []byte(body)}, nil
 }
 
 func processPoll(c indexedCall, origin, ts time.Time, sequence uint64) (replay.Call, error) {

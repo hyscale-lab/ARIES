@@ -29,6 +29,18 @@ import (
 //go:embed fix_git_ready.py
 var initialGitState string
 
+func sourceShellCommand(trial string, call replay.Call) core.Command {
+	cmd := core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir}
+	if !call.Login {
+		cmd.Args[0] = "-c"
+		if trial == "85e3b0db-f1cb-43b5-9f8a-a2333db196c1" || trial == "f0d5e4b5-b20d-40bf-89ec-6483b65525dc" {
+			// Both original non-login shells explicitly printed this inherited path.
+			cmd.Env = map[string]string{"PATH": "/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/root/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+		}
+	}
+	return cmd
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -286,7 +298,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	sessions := harbor.NewProcessSessions(ctx, func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
-		return m.ExecStream(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir}, nil, stdout, stderr)
+		return m.ExecStream(ctx, id, sourceShellCommand(r.Trial, call), nil, stdout, stderr)
 	})
 	defer sessions.Close()
 	h := harbor.Hooks{
@@ -307,7 +319,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			if call.Operation == "ViewImage" {
 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
 			}
-			return m.Exec(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir})
+			return m.Exec(ctx, id, sourceShellCommand(r.Trial, call))
 		},
 		Boundary: func(ctx context.Context, phase string, step int) error {
 			if observer != "" {
