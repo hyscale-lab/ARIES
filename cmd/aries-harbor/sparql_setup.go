@@ -60,7 +60,8 @@ var sparqlTrialStates = map[string]sparqlTrialState{
 		downloads: []string{"/tmp/university-query-pip.pyz"},
 	},
 	"f2d28757-76b8-423d-8f9b-e64b5fb61aa7": {
-		querySHA: "811e0e56250e898ed4a7210fb4d3f762828238e232fbc9e6221b2c6906f7de2c", installed: sparqlRDFLibAndPydantic,
+		// The source's downloaded GPT-OSS apply_patch joins lines without a final LF.
+		querySHA: "e7ca3891f5b51e107394ffe1bce6ba1e0b04a11a28708e78a219ee9859134dd2", installed: sparqlRDFLibAndPydantic,
 		downloads: []string{"/tmp/sparql-tools.zyCf5e/pip.pyz", "/tmp/sparql-tools.zyCf5e/apply_patch.py"},
 	},
 }
