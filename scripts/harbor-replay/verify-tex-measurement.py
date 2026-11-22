@@ -10,7 +10,7 @@ def verify(raw, receipt, variant, node, binary, hook):
     ref=json.loads(receipt.read_text())
     ev=[json.loads(line) for line in (raw/'events.jsonl').read_text().splitlines()]
     create,=[e for e in ev if e['event']=='create_start']
-    assert ref['session_completed'] and ref['all_observed_tool_exits_match'] and ref['task'] in ('overfull-hbox','regex-log','constraints-scheduling','code-from-image','circuit-fibsqrt')
+    assert ref['session_completed'] and ref['all_observed_tool_exits_match'] and ref['task'] in ('overfull-hbox','regex-log','constraints-scheduling','code-from-image','circuit-fibsqrt','count-dataset-tokens')
     assert ref['task']==create['task']
     assert ev[-1]['event']=='removed' and create['trial_id']==ref['trial_id'] and create['job_id']==ref['job_id']
     for k in ('image','trajectory_sha256','rollout_sha256','memory_mib','storage_mib','vcpus'):
@@ -19,12 +19,17 @@ def verify(raw, receipt, variant, node, binary, hook):
     if ref['task'] in {'code-from-image','circuit-fibsqrt'}:
         from cohort_image_circuit import verify as verify_guest_evidence
         verify_guest_evidence(raw,ref)
+    elif ref['task'] == 'count-dataset-tokens':
+        from cohort_dataset import verify as verify_dataset
+        verify_dataset(raw,ref)
     else:
         assert [(e['step_id'],e['exit_code']) for e in observed]==[(e['step_id'],e['exit_code']) for e in ref['tools']]
     final,=[e for e in ev if e['event']=='final_task_state']
     expected,=[e for e in ref['source_setup_and_final_state'] if e['event']=='final_task_state']
     validation = "exact_final_checks"
-    if ref["task"] == "constraints-scheduling":
+    if ref["task"] == "count-dataset-tokens":
+        validation = "source_answer_wheel_hashes_live_service_revisions"
+    elif ref["task"] == "constraints-scheduling":
         # All five source writers generate a live DTSTAMP, and some generate a UUID.
         # Their final guest command validates the resulting event against all inputs.
         reply = observed[-1]

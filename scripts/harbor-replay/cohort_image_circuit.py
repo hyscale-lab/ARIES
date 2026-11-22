@@ -43,7 +43,7 @@ def boundaries(trajectory):
     return rows
 
 
-def verify(run, receipt):
+def verify(run, receipt, *, sorted_final=False):
     events = [json.loads(line) for line in (run / "events.jsonl").read_bytes().splitlines()]
     if not events or events[-1]["event"] != "removed" or not any(e["event"] == "session_end" for e in events):
         raise ValueError("incomplete native session")
@@ -72,6 +72,7 @@ def verify(run, receipt):
             raise ValueError("guest codec identity or image call unavailable")
     final, = [e["checks"] for e in events if e["event"] == "final_task_state"]
     reference, = [e["checks"] for e in receipt["source_setup_and_final_state"] if e["event"] == "final_task_state"]
-    if final != reference:
+    final_matches = sorted(final.splitlines()) == sorted(reference.splitlines()) if sorted_final else final == reference
+    if not final_matches:
         raise ValueError("final input/output hashes differ from validated state")
     return {"trial": receipt["trial_id"], "guest_calls": len(actual), "wire_identical_images": images, "final_checks": final}

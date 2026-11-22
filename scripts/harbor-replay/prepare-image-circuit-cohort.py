@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package source-matched image/circuit recordings with their exact validated native runners."""
+"""Package source-matched image/circuit or token-count recordings with validated native runners."""
 import argparse
 import json
 import os
@@ -23,7 +23,9 @@ def main():
     cli.add_argument("receipts", type=Path)
     cli.add_argument("output", type=Path)
     cli.add_argument("--exclude-manifest", type=Path, help="omit earlier published trial IDs")
+    cli.add_argument("--dataset", action="store_true", help="package validated token-count recordings and the exact CNI binaries")
     a = cli.parse_args()
+    selected = {"count-dataset-tokens"} if a.dataset else TASKS
     prior = {r["trial_id"] for r in json.loads(a.exclude_manifest.read_bytes())} if a.exclude_manifest else set()
     repo = Path(__file__).resolve().parents[2]
     replay = repo / "scripts/harbor-replay"
@@ -40,8 +42,18 @@ def main():
     install(replay / "run-traced.sh", output / "tracer/run-traced.sh")
     for name in ["run-reviewed-cohort.py", "cohort_image_circuit.py"]:
         install(replay / name, output / name)
-    for name, expected in [("aries-harbor-image", IMAGE_HELPER),
-                           ("codex-harbor-tools.tar.gz", "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab")]:
+    helpers = [("codex-harbor-tools.tar.gz", "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab")]
+    if a.dataset:
+        from cohort_dataset import CNI_SHA, verify as verify_dataset
+        for name in ("cohort_dataset.py", "provision-pypi-cni.sh"):
+            install(replay / name, output / name)
+        helpers.append(("cni/SHA256SUMS", CNI_SHA))
+        for line in (a.cache / "cni/SHA256SUMS").read_text().splitlines():
+            sha, plugin = line.split()
+            helpers.append(("cni/bin/" + plugin, sha))
+    else:
+        helpers.append(("aries-harbor-image", IMAGE_HELPER))
+    for name, expected in helpers:
         if digest(a.cache / name) != expected:
             raise ValueError(f"incorrect source helper {name}")
         install(a.cache / name, output / name)
@@ -49,7 +61,7 @@ def main():
     pending = []
     for spec in bound:
         task = spec["task"]
-        if task not in TASKS:
+        if task not in selected:
             continue
         for item in spec["trials"]:
             trial = item["trial"]
@@ -70,6 +82,11 @@ def main():
                 if digest(pkg) != patch_sha:
                     raise ValueError("reviewed Debian patch archive digest mismatch")
                 install(pkg,output / pkg.name)
+            if curl_sha := ready.get("debian_curl_archive_sha256"):
+                pkg = a.cache / "dataset-apt/curl-debs.tar.gz"
+                if digest(pkg) != curl_sha:
+                    raise ValueError("Debian curl archive differs from the native validation")
+                install(pkg, output / pkg.name)
             binary_sha = receipt["adapter_binary_sha256"]
             adapter = output / "adapters" / binary_sha
             if not adapter.exists():
@@ -87,7 +104,7 @@ def main():
             with tempfile.TemporaryDirectory() as folder_name:
                 temporary = Path(folder_name)
                 os.symlink(raw.resolve(), temporary/"events.jsonl")
-                checks = verify(temporary,receipt)
+                checks = verify_dataset(temporary,receipt) if a.dataset else verify(temporary,receipt)
             entries.append({"task":task, "trial_id":trial, "receipt":receipt,
                             "reference_receipt":str(Path("receipts")/reference.name),
                             "unobserved_external_actions":receipt.get("external_actions",[]),

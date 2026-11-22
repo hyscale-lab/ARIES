@@ -14,10 +14,10 @@ dataset_profile=false
 dns_unit=
 case "${3:-video}" in
     video) ;;
-    dataset|dataset-amd183)
+    dataset|dataset-amd182|dataset-amd183|dataset-amd189|dataset-amd191|dataset-amd198|dataset-amd201|dataset-amd203)
         dataset_profile=true
         node=189
-        if [[ ${3:-video} == dataset-amd183 ]]; then node=183; fi
+        if [[ ${3:-video} == dataset-amd* ]]; then node=${3#dataset-amd}; fi
         bridge=zbtok$node
         subnet=10.232.$node.0/28
         chain=ZB${node}TOK
