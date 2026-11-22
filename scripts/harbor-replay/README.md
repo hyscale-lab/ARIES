@@ -176,3 +176,14 @@ terminal poll finds a still-running process, the original reply records
 that disagreement. The runner separately joins the process and records the
 actual terminal status and remaining stream bytes. The primary cohort
 verifier rejects these diagnostic receipts.
+
+Two compiler recordings read OPAM progress files by historical process ID
+and random suffix. The BF3 recording accepts `-diagnostic-opam-log` together
+with `-diagnostic-process-drift`. It binds five progress reads after both
+the original and current guest list one matching Coq output, metadata and
+environment file. The 921 recording accepts `-diagnostic-opam-pid` in
+process diagnostic mode. It additionally binds the original signal-zero
+liveness check to the unique live installer with the same full command
+line and validates its Coq file listing. These modes record each source
+and executable script digest and its observed operand. Their runs are
+eligible for diagnostic comparisons only.
