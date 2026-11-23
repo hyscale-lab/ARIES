@@ -39,7 +39,7 @@ set -euo pipefail
 cd "$1"
 shopt -s nullglob
 files=(preflight.json [0-9][0-9]-*/result.json [0-9][0-9]-*/host.jsonl)
-for f in events.jsonl samples.jsonl stderr driver.exit; do
+for f in events.jsonl samples.jsonl stderr driver.exit restored-backing.json; do
     files+=([0-9][0-9]-*/[ab]/"$f")
 done
 nice -n 10 ionice -c 3 tar -czf - -- "${files[@]}"
@@ -55,7 +55,8 @@ def verify_case(case, closure, verify):
     if results['source'] != TRIAL or results['warmup']:
         raise ValueError('expected the original two-VM PyTorch trial')
     roles = results['roles']
-    independent(roles)
+    if independent(roles)!=results['shared_effective_root_inode']:
+        raise ValueError('reported sharing differs from the actual backing identities')
     for name, role, stamps in zip(('a','b'),roles,results['session_events'],strict=True):
         directory = case/name
         log = directory/'events.jsonl'
@@ -65,6 +66,8 @@ def verify_case(case, closure, verify):
         events = [json.loads(line) for line in log.read_text().splitlines()]
         sample_rows = [json.loads(line) for line in (directory/'samples.jsonl').read_text().splitlines()]
         who = role['root_readback']
+        if json.loads((directory/'restored-backing.json').read_text()) != who:
+            raise ValueError('captured live backing evidence differs from the period receipt')
         if {(s['pid'],s['start_ticks']) for s in sample_rows} != {(who['pid'],who['start_ticks'])}:
             raise ValueError('PSS sample identity differs from live socket readback')
         if events[0]['runtime_id'] != who['runtime_id'] or stamps != {
@@ -115,7 +118,7 @@ def publish(archive, assets, target):
             raw = staging/name
             observations = publication/name
             meta = verify_case(raw,closure,verify)
-            if meta['variant'] != variant or any(r['root_readback']['root'] !=
+            if meta['variant'] != variant or any(r['root_readback']['root_input'] !=
                     preflight['configurations'][variant]['shared_root'] for r in meta['roles']):
                 raise ValueError('period backing or shared root inode differs')
             observations.mkdir()

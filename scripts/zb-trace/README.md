@@ -81,7 +81,9 @@ launcher checks disk, RAM and thin-pool capacity, and verifies the installed
 root bytes. It uses the Git 20-second baseline, 40-second stagger and 15-second
 tail in v3, v4, v4, v3 order. The two roles have separate checkpoint and I/O
 directories, CNI identities and writable backing. Each live readback verifies
-that both restores use the same immutable root inode for that period.
+the common configured immutable root input and records the inode actually
+open or mapped inside each private restore namespace. The report can identify
+private block copies and shared DAX backing independently of API path text.
 
 Retain the launcher output in a sibling `.log` file and the exit code in a
 sibling `.exit` file. `collect_colocated_torch.py` retrieves the raw receipts

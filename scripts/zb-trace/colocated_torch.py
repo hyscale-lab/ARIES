@@ -41,6 +41,39 @@ def identity(path):
     return row
 
 
+def open_backing(proc, configured):
+    configured = Path(configured)
+    alias = proc/'root'/str(configured).lstrip('/') if configured.is_absolute() else proc/'cwd'/configured
+    # The API path is relative to Firecracker's private restore root. Its
+    # effective mount may expose a different inode from the worker pathname.
+    aliases = {os.path.normpath(str(configured)), os.path.normpath(str(alias.resolve(strict=False)))}
+    aliases.add(os.path.normpath(str(Path(os.readlink(proc/'root'))/str(configured).lstrip('/'))))
+    opened = []
+    for descriptor in (proc/'fd').iterdir():
+        try:
+            target = os.readlink(descriptor)
+            if os.path.normpath(target.removesuffix(' (deleted)')) not in aliases:
+                continue
+            opened.append((descriptor.name, target, descriptor.stat()))
+        except FileNotFoundError:
+            continue
+    if opened:
+        if len({(s.st_dev,s.st_ino) for _,_,s in opened}) != 1:
+            raise ValueError(f'ambiguous open backing for {configured}')
+        _, target, info = opened[0]
+        return dict(configured_path=str(configured), opened_path=target, device=info.st_dev, inode=info.st_ino,
+                    size=info.st_size, block_rdev=info.st_rdev if stat.S_ISBLK(info.st_mode) else None,
+                    evidence='open-fd', descriptors=[n for n,_,_ in opened])
+    for line in (proc/'maps').read_text().splitlines():
+        fields = line.split(None,5)
+        if len(fields) == 6 and os.path.normpath(fields[-1].removesuffix(' (deleted)')) in aliases:
+            backing = proc/'map_files'/fields[0]
+            info = backing.stat()
+            return dict(configured_path=str(configured), opened_path=fields[-1], device=info.st_dev,
+                        inode=info.st_ino,size=info.st_size,block_rdev=None,evidence='mapped-file',mapping=fields[0])
+    raise ValueError(f'active VMM has no observable backing for {configured}')
+
+
 def measured_root(runtime):
     profile = json.loads((runtime/'runtime.json').read_text())
     expected = runtime/'shim/.pmem-images'/(ROOT_SHA+'.img')
@@ -139,14 +172,18 @@ def live_vm(output, runtime, variant, expected):
         root, = [d for d in cfg['drives'] if d['is_root_device']]
         if not root['is_read_only'] or cfg['pmem']:
             raise ValueError('block guest lacks the expected read-only root drive')
-    actual = identity(shim/Path(root['path_on_host']))
-    if actual != expected:
-        raise ValueError('restored VM root inode differs from preflight')
-    writable = [identity(shim/Path(d['path_on_host'])) for d in cfg['drives'] if not d['is_read_only']]
+    if root['path_on_host'] != expected['path']:
+        raise ValueError('restored VM uses an unexpected configured root input')
+    actual = open_backing(proc,root['path_on_host'])
+    if actual['size'] != expected['size']:
+        raise ValueError('effective root size differs from the verified immutable input')
+    writable = [open_backing(proc,d['path_on_host']) for d in cfg['drives'] if not d['is_read_only']]
     if len(writable) < 2:
         raise ValueError('guest workload disk and overlay identities are missing')
+    memory = open_backing(proc,shim/'native-restore/memory')
     return dict(runtime_id=first['runtime_id'], pid=sample['pid'], start_ticks=task_start,
-                root=actual, writable=writable, netns=os.readlink(proc/'ns/net'), shape=shape,
+                root_input=expected, root=actual, writable=writable, memory=memory,
+                netns=os.readlink(proc/'ns/net'), shape=shape,
                 socket_inode=(shim/'firecracker.sock').stat().st_ino)
 
 
@@ -171,6 +208,7 @@ def run_vm(assets, receipt, cli, runtime, unit, variant, root, output, replay_ar
                 with samples.open() as stream:
                     if stream.readline().endswith('\n'):
                         lineage = live_vm(output,runtime,variant,root)
+                        (output/'restored-backing.json').write_text(json.dumps(lineage,indent=2)+'\n')
                         break
             time.sleep(.1)
         rc = proc.wait()
@@ -195,10 +233,16 @@ def independent(roles):
             raise ValueError(f'colocated restores share writable {name}')
     drives = []
     for row in roles:
-        drives.append({('block',d['block_rdev']) if 'block_rdev' in d else ('file',d['device'],d['inode'])
+        drives.append({('block',d['block_rdev']) if d['block_rdev'] is not None else ('file',d['device'],d['inode'])
                       for d in row['root_readback']['writable']})
-    if drives[0] & drives[1] or roles[0]['root_readback']['root'] != roles[1]['root_readback']['root']:
-        raise ValueError('restored roots or private writable disks differ from the placement contract')
+    if drives[0] & drives[1]:
+        raise ValueError('restored guests share an effective writable backing')
+    first, second = [r['root_readback'] for r in roles]
+    if (first['memory']['device'],first['memory']['inode']) == (second['memory']['device'],second['memory']['inode']):
+        raise ValueError('restored guests share a checkpoint memory inode')
+    if first['root_input'] != second['root_input']:
+        raise ValueError('colocated restores have different immutable root inputs')
+    return (first['root']['device'],first['root']['inode']) == (second['root']['device'],second['root']['inode'])
 
 
 def run_period(index, variant, output, launch, groups, roots):
@@ -218,7 +262,7 @@ def run_period(index, variant, output, launch, groups, roots):
                 raise ValueError('first replay ended before the second launch')
             second = pool.submit(launch,variant,roots[variant],case/'b')
             sessions, roles = zip(first.result(),second.result(),strict=True)
-            independent(roles)
+            shared_root_inode = independent(roles)
             time.sleep(15)
         finally:
             stop.set()
@@ -234,6 +278,7 @@ def run_period(index, variant, output, launch, groups, roots):
             {(p['pid'],p['start_ticks']) for p in row['vmms']}!=pids for row in overlap):
         raise RuntimeError('worker-wide samples do not establish the exclusive two-VM overlap')
     config = dict(variant=variant, source=TRIAL, warmup=False, session_events=sessions, roles=roles,
+                  shared_effective_root_inode=shared_root_inode,
                   worker_frames=len(host), worker_joint_frames=len(overlap), worker_max_vmms=2,
                   service_cgroups={key:str(value) for key,value in groups.items()})
     (case/'result.json').write_text(json.dumps(config,indent=2)+'\n')
