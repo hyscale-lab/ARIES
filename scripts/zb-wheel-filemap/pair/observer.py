@@ -22,7 +22,7 @@ def start_ticks(pid):
 
 def present(stage,out,name,pid,ticks,slots):
     begin=now()
-    assert start_ticks(pid)==ticks
+    assert start_ticks(pid)==int(ticks)
     layout=[]
     packed=bytearray()
     for slot in sorted(slots,key=lambda r:r['guest_phys_addr']):
@@ -36,7 +36,7 @@ def present(stage,out,name,pid,ticks,slots):
         layout.append(dict(slot=slot['slot'],gpa=gpa,hva=addr,pages=pages,byte_offset=len(packed),begin_ns=lo,end_ns=hi))
         packed.extend(data)
     end=now()
-    assert start_ticks(pid)==ticks and len(packed)==(8<<30)//(PAGE*8)
+    assert start_ticks(pid)==int(ticks) and len(packed)==(8<<30)//(PAGE*8)
     filename=f'{name}.bits'
     (out/'presence'/filename).write_bytes(packed)
     return dict(file=filename,sha256=hashlib.sha256(packed).hexdigest(),begin_ns=begin,end_ns=end,

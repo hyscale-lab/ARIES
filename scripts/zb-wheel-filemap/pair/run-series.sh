@@ -10,7 +10,13 @@ unit=fcmod-zepbound-wheel-pair-v3
 donor=/local/zb-torch-deep-v3/runtime
 assets=/local/zb-corpus-torch-cohort-4b58-v3
 image=docker.io/alexgshaw/torch-tensor-parallelism@sha256:c50ac169e11465f41b49749fe87e4487f24d31a0c39c0906cd3242cc5499c690
-mkdir runtime periods
+mkdir periods
+if [[ ${2:-} == reuse ]]; then
+    test -L runtime
+    (cd runtime && sha256sum -c "$d/runtime-source.sha256")
+    systemctl is-active --quiet "$unit"
+else
+mkdir runtime
 cp -a --reflink=auto "$donor/bin" "$donor/jailer.json" runtime/
 cp tracing.vmlinux runtime/common-vmlinux.bin
 cp tracing.config runtime/common-vmlinux.config
@@ -18,6 +24,7 @@ gzip -dc diagnostic.ext4.gz | dd of=runtime/common-rootfs.ext4 conv=sparse statu
 chmod 0444 runtime/common-rootfs.ext4
 (cd runtime && sha256sum -c ../runtime-source.sha256)
 bash provision_baseline.sh "$d" "$unit" "$donor/runtime.json" v3 "$image"
+fi
 mapfile -t arms < <(python3 -c 'import json; p=json.load(open("protocol.json")); assert p["order"]==["treated","sham","sham","treated"]; print(*p["order"],sep="\n")')
 test "${#arms[@]}" = 4
 for ix in 0 1 2 3; do
