@@ -56,9 +56,9 @@ esac
 test "$(cat /sys/devices/system/cpu/smt/active)" = 0
 ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'
 attempt=${stage##*-}
-if [[ $attempt == 07 || $attempt == 08 || $attempt == 09 ]]; then
+if [[ $attempt == 07 || $attempt == 08 || $attempt == 09 || $attempt == 10 ]]; then
     test -s "$stage/placement-release.json"
-    if [[ $kind == deep || $attempt == 08 ]]; then
+    if [[ $kind == deep || $attempt == 08 || $attempt == 10 ]]; then
         python3 -B - "$stage/ordinary-admission.json" <<'PY_GATE'
 import json
 import sys
@@ -76,7 +76,7 @@ else
     sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
 fi
 test "$(sudo -n systemctl show -p ActiveState --value "$unit")" = active
-[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 || $attempt == 07 || $attempt == 08 || $attempt == 09 ]]
+[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 || $attempt == 07 || $attempt == 08 || $attempt == 09 || $attempt == 10 ]]
 if [[ $attempt == 05 ]]; then
     [[ "$node:$variant:$kind" == amd198:v4:ordinary ]]
 fi
@@ -104,6 +104,24 @@ if [[ $attempt == 08 ]]; then
         amd183:v2:ordinary|amd183:v3:ordinary|amd198:v4:ordinary|amd201:v4:ordinary) ;;
         *) exit 2 ;;
     esac
+    diagnostic=(-diagnostic-process-drift)
+fi
+if [[ $attempt == 10 ]]; then
+    case "$node:$variant:$kind" in
+        amd183:v2:ordinary|amd183:v3:ordinary|amd198:v4:ordinary|amd201:v4:ordinary) ;;
+        *) exit 2 ;;
+    esac
+    python3 -B - "$stage/previous-exec-boundary.json" "$variant" <<'PY_ADMISSION'
+import json
+import sys
+with open(sys.argv[1]) as stream:
+    prior=json.load(stream)[sys.argv[2]]
+assert prior["source_trial"]=="93c2fb63-9bd5-4e9d-9024-06fbbc0c1087"
+assert prior["variant"]==sys.argv[2] and prior["source_observed_tool_replies"]==11
+assert prior["status"]=="partial_fidelity" and prior["driver_exit"]==1
+assert prior["new_step16"]=={"step_id":16,"sequence":11,"exit_code":-1,"expected_exit_code":0}
+assert prior["removed"] and len(prior["archive_sha256"])==64
+PY_ADMISSION
     diagnostic=(-diagnostic-process-drift)
 fi
 if [[ $attempt == 04 ]]; then
