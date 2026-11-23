@@ -4,6 +4,7 @@ set -euo pipefail
 stage=$(realpath "$1")
 variant=$2
 kind=$3
+retry_source=${4:-}
 node=$(cat /var/emulab/boot/nodeid)
 case "$node:$variant:$kind" in
     amd201:v1:ordinary)
@@ -35,13 +36,20 @@ esac
 (cd "$stage" && sha256sum --quiet -c SHA256SUMS)
 test "$(cat /sys/devices/system/cpu/smt/active)" = 0
 if pgrep -x 'firecracker|[.]firecracker-re' >/dev/null; then exit 1; fi
-python3 -B - "$stage/source-contract.json" "$kind" <<'PYTHON' > "$stage/$variant-$kind.sources"
+python3 -B - "$stage/source-contract.json" "$kind" "$retry_source" <<'PYTHON' > "$stage/$variant-$kind.sources"
 import json, sys
 with open(sys.argv[1]) as stream:
     cohort = json.load(stream)
 sources = sorted(t["trial"] for t in cohort["trials"])
 if sys.argv[2] == "deep":
     sources = [cohort["deep_source"]]
+selected = sys.argv[3]
+if selected:
+    assert cohort["diagnostic"] and sys.argv[2] == "ordinary"
+    assert selected.startswith(("b4e5be65-", "f265ccca-")) and selected in sources
+    sources = [selected]
+else:
+    assert not cohort.get("diagnostic")
 print(*sources, sep="\n")
 PYTHON
 source_stage=/local/zb-relaxed-ml-01
@@ -96,7 +104,9 @@ codex="$assets/codex-harbor-tools.tar.gz"
 echo "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab  $codex" | sha256sum --quiet -c -
 mkdir -p "$stage/runs"
 while IFS= read -r trial; do
-    run="$stage/runs/${trial:0:8}-$variant-cancel-async-$kind-01"
+    attempt=01
+    if [[ -n $retry_source ]]; then attempt=02; fi
+    run="$stage/runs/${trial:0:8}-$variant-cancel-async-$kind-$attempt"
     mkdir "$run"
     source="$stage/sources/$trial"
     sudo -n python3 -B "$source_stage/audit-idle-runtime.py" "$unit" "$runtime" > "$run/deployment-before.json"

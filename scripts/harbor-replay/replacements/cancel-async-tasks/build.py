@@ -113,6 +113,7 @@ def main():
     cli.add_argument("--sources", type=Path, required=True)
     cli.add_argument("--image", type=Path, required=True)
     cli.add_argument("--package-archive", type=Path, required=True)
+    cli.add_argument("--diagnostic", action="store_true")
     args = cli.parse_args()
     out = args.output.resolve()
     out.mkdir()
@@ -136,8 +137,12 @@ def main():
         insert = "var taskSetups = map[string]taskSetup{"
         setup = f'\n\t"{TASK}": {{packagesSHA: "{tools}", packagesField: "debian_task_tools_sha256", output: "run.py", initialCheck: `{INITIAL}`}},'
         checked_edit(tree/"cmd/aries-harbor/prepare.go", insert, insert+setup)
+        if args.diagnostic:
+            from diagnostic_overlay import apply
+            apply(tree, checked_edit)
         subprocess.run(["go", "build", "-trimpath", "-buildvcs=false", "-o", out/"aries-cancel-async-tasks",
                         "./cmd/aries-harbor"], cwd=tree, check=True)
+    spec["diagnostic"] = args.diagnostic
     spec["adapter_sha256"] = sha(out/"aries-cancel-async-tasks")
     spec["image_metadata"] = image
     (out/"source-contract.json").write_text(json.dumps(spec, indent=2)+"\n")
