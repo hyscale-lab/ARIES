@@ -15,6 +15,12 @@ case "$node:$variant:$kind" in
         runtime=/local/zb-v2/runtime
         unit=fcmod-zepbound-amd200
         ;;
+    amd183:v2:ordinary)
+        [[ "$retry_source" == f265ccca-0b2f-47e1-aaa5-b5e17e5e2950 ]]
+        test -s "$stage/amd183-accepted.tsv"
+        runtime=/local/zb-stock183-v2/runtime
+        unit=fcmod-zepbound-amd183-stockv2
+        ;;
     amd201:v3:ordinary)
         runtime=/local/zb-texpilot/v3/runtime
         unit=fcmod-zepbound-tex-v3
@@ -65,6 +71,7 @@ else:
 print(*sources, sep="\n")
 PYTHON
 source_stage=/local/zb-relaxed-ml-01
+if [[ $node == amd183 ]]; then source_stage=$stage; fi
 (cd "$source_stage" && sha256sum --quiet -c SHA256SUMS)
 if [[ "$variant:$kind" == v1:deep && ! -f "$runtime/runtime.json" ]]; then
     donor="$source_stage/stack-v1/runtime"
@@ -112,6 +119,7 @@ if [[ "$kind" == deep || "$variant" == v1 || "$variant" == v2 ]]; then
 fi
 assets=/local/zb-corpus-torch-cohort-4b58-v3
 if [[ $node == amd200 ]]; then assets=/local/zb-corpus-torch-cohort-4b58-v2; fi
+if [[ $node == amd183 ]]; then assets=$stage; fi
 codex="$assets/codex-harbor-tools.tar.gz"
 echo "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab  $codex" | sha256sum --quiet -c -
 mkdir -p "$stage/runs"
