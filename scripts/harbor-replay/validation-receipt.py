@@ -58,7 +58,8 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
                    "expected_exit_code", "stdout_sha256", "stderr_sha256", "source_output_sha256",
                    "output_comparison")}
             row["operation"] = e.get("operation", "Exec")
-            for key in ("status_basis", "source_call_id", "source_process_session_id"):
+            for key in ("status_basis", "source_call_id", "source_process_session_id",
+                        "source_yield_ms", "guest_process_timing"):
                 if key in e:
                     row[key] = e[key]
             row["dispatch_monotonic_ns"] = dispatch[e["sequence"]]["monotonic_ns"]
