@@ -16,7 +16,7 @@ case "$node" in
         ;;
     *) exit 2 ;;
 esac
-test -s "/tmp/zb-timing17-01/b615a3ec-$gate/driver.exit"
+sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$gate/driver.exit"
 test "$(systemctl show -p ActiveState --value zb-timing17-hf.service)" = inactive
 ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'
 (cd "$stage" && sha256sum --quiet -c SHA256SUMS)

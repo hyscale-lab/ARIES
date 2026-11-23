@@ -12,7 +12,7 @@ host=nehalem@$node.utah.cloudlab.us
 remote=/local/zb-protein-assembly-93c2-01
 ssh_cmd=(ssh -o BatchMode=yes -o ConnectTimeout=6 "$host")
 until ! systemctl is-active --quiet "zb-timing17-hf-$node.service" &&
-      "${ssh_cmd[@]}" "test -s /tmp/zb-timing17-01/b615a3ec-$gate/driver.exit &&
+      "${ssh_cmd[@]}" "sudo -n test -s /tmp/zb-timing17-01/b615a3ec-$gate/driver.exit &&
       test \"\$(systemctl show -p ActiveState --value zb-timing17-hf.service)\" = inactive &&
       ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'"; do
     sleep 30
