@@ -94,6 +94,9 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
         **({"video_opencv_runtime": [e for e in events if e["event"] == "video_opencv_runtime"]}
            if any(e["event"] == "video_opencv_runtime" for e in events) else {}),
         "observer": first["observer"], "session_completed": bool(full),
+        **({"source_guest_network_profile": "ipv4-addresses-only", "source_guest_network_readback":[
+            e for e in events if e["event"]=="source_grpc_network"
+        ]} if any(e["event"]=="source_grpc_network" for e in events) else {}),
         "diagnostic_process_drift": first.get("diagnostic_process_drift",False),
         **({"diagnostic_grpc_loopback": True, "diagnostic_grpc_ipv4_addresses_only": first.get("diagnostic_grpc_ipv4_addresses_only",False), "diagnostic_guest_network_readback": [
             e for e in events if e["event"]=="diagnostic_grpc_network"

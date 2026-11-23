@@ -17,7 +17,7 @@ var grpcRouteProbe string
 
 // The private guest OS changes only its own loopback address. This reads that
 // state in the task's network namespace, outside the recorded tool intervals.
-func readGRPCLoopback(ctx context.Context, guest groupCommand, phase string, log *json.Encoder, ipv4Addrs bool) error {
+func readGRPCLoopback(ctx context.Context, guest groupCommand, phase string, log *json.Encoder, ipv4Addrs, diagnostic bool) error {
 	profile := "--require-omitted"
 	if ipv4Addrs {
 		profile = "--require-ipv4-addresses"
@@ -30,7 +30,11 @@ func readGRPCLoopback(ctx context.Context, guest groupCommand, phase string, log
 	if err := json.Unmarshal([]byte(out.Stdout), &readback); err != nil {
 		return fmt.Errorf("decode loopback readback: %w", err)
 	}
-	if err := log.Encode(map[string]any{"event": "diagnostic_grpc_network", "phase": phase, "readback": readback, "exit_code": out.ExitCode}); err != nil {
+	event := "source_grpc_network"
+	if diagnostic {
+		event = "diagnostic_grpc_network"
+	}
+	if err := log.Encode(map[string]any{"event": event, "phase": phase, "readback": readback, "exit_code": out.ExitCode}); err != nil {
 		return err
 	}
 	if out.ExitCode != 0 {

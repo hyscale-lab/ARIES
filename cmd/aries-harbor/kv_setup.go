@@ -2,6 +2,17 @@ package main
 
 import "fmt"
 
+const grpcSystemToolsSHA = "7c8865278b830ee7155fe18acf5c369734d3fe3f8413c5f5b4be863a7c5e7f2c"
+const grpcReportPath = "/var/lib/aries-replay/kv-install.json"
+const grpcToolsReady = `
+test "$(command -v git)" = "/usr/bin/git"
+test "$(command -v patch)" = "/usr/bin/patch"
+git --version
+patch --version | head -1
+printf 'PATH=%s\n' "$PATH"
+dpkg-query -W git patch
+`
+
 const kvTask = "kv-store-grpc"
 const kvPythonSHA = "7f8a93c102db3ce25dae68cc485877f8ec9f79edb42a7c4518c96a1153b78682"
 

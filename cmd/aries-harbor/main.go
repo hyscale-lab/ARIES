@@ -58,6 +58,7 @@ func command(ctx context.Context) error {
 	intraStep := flag.Int("intra-tool-step", 0, "recorded step for experimental intra-tool tracing")
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
+	grpcTools := flag.String("grpc-tools", "", "signed, date-matched Debian git/patch package bundle for the 69ba source")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
 	opamPID := flag.Bool("diagnostic-opam-pid", false, "bind the recorded compiler signal-zero check and progress reads to the observed guest installer")
 	opamLog := flag.Bool("diagnostic-opam-log", false, "bind the original compiler progress-log name to its observed OPAM file in a diagnostic")
@@ -123,6 +124,9 @@ func command(ctx context.Context) error {
 	// Both sources explicitly exercise nohup and a separate-session replacement.
 	// Every original shell in these trials receives the same backend.
 	useGroups := *groupMode || r.Trial == hfLoopbackTrial || r.Trial == grpcLoopbackTrial
+	if (r.Trial == grpcLoopbackTrial && !*grpcNetDiag) != (*grpcTools != "") {
+		return errors.New("normal 69ba replay must provide its signed -grpc-tools fixture")
+	}
 	if (*routeOnly || *ipv4Addrs) && !*grpcNetDiag {
 		return errors.New("69ba network-only readback requires -diagnostic-grpc-loopback")
 	}
@@ -195,10 +199,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -297,7 +301,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
-	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools, curlPackages)
+	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools, curlPackages, grpcTools)
 	prepEnd, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil {
 		return errors.Join(err, clockErr)
@@ -306,11 +310,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.NeedsNetwork {
-		if grpcNetDiag {
+		if grpcNetDiag || grpcTools != "" {
 			guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
 				return m.Exec(ctx, id, command)
 			}
-			if err := readGRPCLoopback(ctx, guest, "before_snapshot", log, ipv4Addrs); err != nil {
+			if err := readGRPCLoopback(ctx, guest, "before_snapshot", log, ipv4Addrs || grpcTools != "", grpcNetDiag); err != nil {
 				return err
 			}
 		}
@@ -340,11 +344,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.NeedsNetwork {
-		if grpcNetDiag {
+		if grpcNetDiag || grpcTools != "" {
 			guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
 				return m.Exec(ctx, id, command)
 			}
-			if err := readGRPCLoopback(ctx, guest, "after_restore", log, ipv4Addrs); err != nil {
+			if err := readGRPCLoopback(ctx, guest, "after_restore", log, ipv4Addrs || grpcTools != "", grpcNetDiag); err != nil {
 				return err
 			}
 		}
@@ -448,7 +452,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.Task != "fix-git" {
-		return captureTaskOutput(ctx, m, id, r, log)
+		return captureTaskOutput(ctx, m, id, r, log, grpcTools != "")
 	}
 	return nil
 }

@@ -135,7 +135,7 @@ func uploadPinned(ctx context.Context, m *vhive.Manager, id, file, expected, dir
 	return m.UploadArchive(ctx, id, dir, r)
 }
 
-func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages, curlPackages string) (string, any, error) {
+func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages, curlPackages, grpcTools string) (string, any, error) {
 	if r.Task == "fix-git" {
 		out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-c", initialGitState}, Dir: r.Workdir})
 		if err != nil || !json.Valid([]byte(out)) {
@@ -176,7 +176,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	if err := uploadPinned(ctx, m, id, tools, codexPrefixSHA, "/"); err != nil {
 		return "", nil, err
 	}
-	if r.Task == hfTask || r.Task == datasetTask || r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" || r.Task == "video-processing" {
+	if grpcTools != "" || r.Task == hfTask || r.Task == datasetTask || r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" || r.Task == "video-processing" {
 		// This Python base image has only one copy of codex-path in its recorded PATH.
 		_, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", `set -eu
 cat > /etc/profile.d/zz-aries-image-path.sh <<'ARIESPATH'
@@ -196,6 +196,12 @@ ARIESPATH`}})
 		}
 	}
 	initial := task.initialCheck
+	if grpcTools != "" {
+		if err := installPackages(ctx, m, id, grpcTools, grpcSystemToolsSHA); err != nil {
+			return "", nil, err
+		}
+		initial = "mkdir -p /var/lib/aries-replay\n" + strings.ReplaceAll(initial, "/tmp/aries-kv-install.json", grpcReportPath) + grpcToolsReady
+	}
 	if initial == "" {
 		initial = "test ! -e " + task.output
 	}
@@ -226,6 +232,10 @@ rg --version | head -1`
 	details := map[string]string{"codex_prefix_sha256": codexPrefixSHA, pkgField: task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}
 	if r.Task == hfTask {
 		details["inference_environment_sha256"] = hfEnvironmentSHA
+	}
+	if grpcTools != "" {
+		details["system_tools_archive_sha256"] = grpcSystemToolsSHA
+		details["network_profile"] = "ipv4-addresses-only"
 	}
 	if r.Task == sparqlTask {
 		pip, err := prepareSparql(ctx, m, id, r.Trial)
@@ -300,7 +310,7 @@ chmod 0755 /usr/local/bin/mktemp
 sha256sum /usr/local/bin/mktemp
 printf '%s\n' 'SOURCE_TEMPLATE -> SOURCE_DIR'`
 
-func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder) error {
+func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools bool) error {
 	task := taskSetups[r.Task]
 	begin, err := harbor.Clock()
 	if err != nil {
@@ -324,7 +334,11 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		}
 	}
 	if r.Task == kvTask {
-		cmd += kvFinalCheck(r.Trial)
+		check := kvFinalCheck(r.Trial)
+		if grpcTools {
+			check = strings.ReplaceAll(check, "/tmp/aries-kv-install.json", grpcReportPath)
+		}
+		cmd += check
 	}
 	if r.Task == sparqlTask {
 		check, err := sparqlOutputCheck(r.Trial)
