@@ -25,6 +25,18 @@ affinity = sorted(os.sched_getaffinity(0))
 data = {"guest_logical_cpus":cpus, "guest_allowed_cpus":affinity,
         "guest_cpu_online": Path("/sys/devices/system/cpu/online").read_text().strip()}
 assert cpus == len(affinity) == 2 and "PYTHON_CPU_COUNT" not in os.environ
+if sys.argv[2] == "f0d5e4b5-b20d-40bf-89ec-6483b65525dc":
+ data["guest_topology"]={p.name:(p/"topology/thread_siblings_list").read_text().strip() for p in Path("/sys/devices/system/cpu").glob("cpu[0-9]*")}
+ assert set(data["guest_topology"].values())=={"0-1"}
+ data["guest_clocksource"]=Path("/sys/devices/system/clocksource/clocksource0/current_clocksource").read_text().strip()
+ data["root_mountinfo"]=[line for line in Path("/proc/self/mountinfo").read_text().splitlines() if line.split()[4] in ("/","/app")]
+ data["thread_environment"]={k:os.environ.get(k) for k in ("OMP_NUM_THREADS","MKL_NUM_THREADS","PYTHON_CPU_COUNT")}
+ assert not any(data["thread_environment"].values()) and "torch" not in sys.modules
+ if phase=="after_source":
+  app=ast.parse(Path("/app/app.py").read_text())
+  setters=[ast.unparse(x) for x in ast.walk(app) if isinstance(x,ast.Call) and ast.unparse(x.func).endswith("set_num_threads")]
+  assert setters==["torch.set_num_threads(1)"];data["source_app_thread_setters"]=setters
+ print(json.dumps(data)); sys.exit(0)
 if sys.argv[2] == "b615a3ec-fae8-4198-ae4c-0aedf9c3e25b":
  data["guest_topology"]={p.name:(p/"topology/thread_siblings_list").read_text().strip() for p in Path("/sys/devices/system/cpu").glob("cpu[0-9]*")}
  data["thread_environment"]={k:os.environ.get(k) for k in ("OMP_NUM_THREADS","MKL_NUM_THREADS","PYTHON_CPU_COUNT")}

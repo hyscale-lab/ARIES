@@ -123,8 +123,9 @@ func command(ctx context.Context) error {
 	if *hfHostCPU >= 0 {
 		inspection := r.Trial == hfInspectionTrial && *hfHarness != ""
 		defaultThreads := r.Trial == hfDefaultThreadsTrial && *hfHarness == ""
-		o.GuestSMT = sourceCPU && defaultThreads
-		if (!inspection && !defaultThreads) || (!sourceCPU && (*observer != "" || *sampler != "")) {
+		fixedThreadsDiagnostic := !sourceCPU && r.Trial == hfLoopbackTrial && *hfHarness != ""
+		o.GuestSMT = (sourceCPU && defaultThreads) || fixedThreadsDiagnostic
+		if (!inspection && !defaultThreads && !fixedThreadsDiagnostic) || (!sourceCPU && (*observer != "" || *sampler != "")) {
 			return errors.New("two-vCPU diagnostic requires the uninstrumented HF inspection source and fixture")
 		}
 		requestedVCPUs = 2
