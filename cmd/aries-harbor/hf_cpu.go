@@ -24,7 +24,20 @@ data = {"guest_logical_cpus":cpus, "guest_allowed_cpus":affinity,
         "guest_cpu_online": Path("/sys/devices/system/cpu/online").read_text().strip()}
 assert cpus == len(affinity) == 2 and "PYTHON_CPU_COUNT" not in os.environ
 if phase == "after_source":
+ import hashlib
  import torch
+ model=Path("/app/model_cache/sentiment_model")
+ expected_files={"README.md":"75f17282923fea5b541df92640e2d8646c4ff5e8e3e16ed0a7e4e50ee7588851",
+    "config.json":"582122c8f414793d131e10022ce9ba04e3811a9da6389137ee2f18665b4f4d15",
+    "model.safetensors":"7c3919835e442510166d267fe7cbe847e0c51cd26d9ba07b89a57b952b49b8aa",
+    "tokenizer_config.json":"5ab9097b4149371c5fd52b2d6e26cb6f9c07c0d19fcfdda895b1adad6b57c3e0",
+    "vocab.txt":"07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"}
+ assert {p.name for p in model.iterdir() if p.is_file()} == set(expected_files)
+ model_files={}
+ for name in expected_files:
+  with (model/name).open("rb") as f: model_files[name]=hashlib.file_digest(f,"sha256").hexdigest()
+ assert model_files == expected_files
+ data["model_file_sha256"]=model_files
  source = ast.parse(Path("/app/app.py").read_text())
  selections = [s for s in source.body if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and ast.unparse(s.value.func) == "torch.set_num_threads"]
  assert len(selections) == 1
