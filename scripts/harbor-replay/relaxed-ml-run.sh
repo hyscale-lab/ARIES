@@ -3,6 +3,13 @@
 set -euo pipefail
 stage=$(realpath "$1")
 variant=$2
+attempt=${ZB_RELAXED_ML_ATTEMPT:-01}
+adapter="$stage/aries-relaxed-ml"
+if [[ $attempt != 01 ]]; then
+    [[ "$attempt:$variant:${3:-}:$#" == "02:v2:e047ddea:3" ]]
+    adapter="$stage/aries-relaxed-ml.retry"
+    (cd "$stage" && sha256sum --quiet -c retry-SHA256SUMS)
+fi
 node=$(cat /var/emulab/boot/nodeid)
 case "$node:$variant" in
     amd200:v2) runtime=/local/zb-v2/runtime; unit=fcmod-zepbound-amd200 ;;
@@ -89,12 +96,13 @@ for task in "$@"; do
             ;;
         *) exit 2 ;;
     esac
-    run=$stage/runs/$task-$variant-relaxed-ml-01
+    run=$stage/runs/$task-$variant-relaxed-ml-$attempt
     mkdir "$run"
     if ! "${ctr[@]}" images ls -q | grep -Fx -- "$image" >/dev/null; then
         "${ctr[@]}" images pull --local --platform linux/amd64 --snapshotter devmapper "$image" > "$run/image-pull.log"
     fi
     sha256sum "$tools" "$torch/codex-harbor-tools.tar.gz" "$cni"/conf/*.conflist > "$run/assets.sha256"
+    sha256sum "$adapter" > "$run/executed-adapter.sha256"
     systemctl show "$unit" -p EffectiveCPUs -p AllowedCPUs -p CPUQuotaPerSecUSec > "$run/host-capacity.txt"
     sudo -n python3 -B "$stage/audit-idle-runtime.py" "$unit" "$runtime" > "$run/deployment-before.json"
     args=(-relaxed-ml -guest-task-v3 "${native[@]}" -trajectory "$stage/sources/$task/trajectory.json"
@@ -108,7 +116,7 @@ for task in "$@"; do
     rc=0
     sudo -n env ZB_VMM_CENSUS=1 BPFTRACE_PERF_RB_PAGES=1024 "${checkpoint_env[@]}" \
         python3 -B "$stage/vmm_exclusivity.py" "$run/placement.jsonl" -- \
-        bash "$stage/tracer/run-traced.sh" "$stage/aries-relaxed-ml" "$stage/tracer" "$run/raw" "${args[@]}" \
+        bash "$stage/tracer/run-traced.sh" "$adapter" "$stage/tracer" "$run/raw" "${args[@]}" \
         > "$run/driver.log" 2>&1 || rc=$?
     printf '%s\n' "$rc" > "$run/driver.exit"
     sudo -n python3 -B "$stage/audit-idle-runtime.py" "$unit" "$runtime" > "$run/deployment-after.json"
