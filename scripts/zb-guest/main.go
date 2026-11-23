@@ -67,7 +67,7 @@ func execute(args []string, out io.Writer) error {
 			if err != nil {
 				return err
 			}
-			return serveListener(listener, pfnStart, pfnCount)
+			return serveListener(listener, pfnStart, pfnCount, os.Getenv("ZB_TORCH_WHEEL_DONTNEED") == "1")
 		}
 		return serve(socket, pfnStart, pfnCount)
 	case "request":
@@ -99,10 +99,10 @@ func serve(path string, start, count uint64) error {
 	if err != nil {
 		return err
 	}
-	return serveListener(listener, start, count)
+	return serveListener(listener, start, count, false)
 }
 
-func serveListener(listener net.Listener, start, count uint64) error {
+func serveListener(listener net.Listener, start, count uint64, wheelControl bool) error {
 	defer listener.Close()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
@@ -128,20 +128,35 @@ func serveListener(listener net.Listener, start, count uint64) error {
 			conn.Close()
 			continue
 		}
-		handleSnapshot(conn, start, count)
+		if handleTelemetry(conn, start, count, wheelControl) {
+			wheelControl = false
+		}
 	}
 }
 
 func handleSnapshot(conn net.Conn, start, count uint64) {
+	handleTelemetry(conn, start, count, false)
+}
+
+func handleTelemetry(conn net.Conn, start, count uint64, wheelControl bool) (used bool) {
 	defer conn.Close()
 	if conn.SetDeadline(time.Now().Add(10*time.Second)) != nil {
-		return
+		return false
 	}
 	var request [len(snapshotRequest)]byte
-	if _, err := io.ReadFull(conn, request[:]); err != nil || string(request[:]) != snapshotRequest {
-		return
+	if _, err := io.ReadFull(conn, request[:]); err != nil {
+		return false
 	}
-	_ = json.NewEncoder(conn).Encode(snapshot(start, count))
+	switch string(request[:]) {
+	case snapshotRequest:
+		_ = json.NewEncoder(conn).Encode(snapshot(start, count))
+	case "evictwhl\n":
+		if wheelControl && count == 0 && os.Getenv("ZB_TORCH_FILE_CACHE") == "1" {
+			_ = json.NewEncoder(conn).Encode(releaseTorchWheels())
+			return true
+		}
+	}
+	return false
 }
 
 func request(path string, out io.Writer) error {

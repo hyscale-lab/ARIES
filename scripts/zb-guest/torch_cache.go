@@ -46,14 +46,15 @@ func torchCachePaths() []string {
 }
 
 type torchCacheFile struct {
-	Device uint64   `json:"device"`
-	Inode  uint64   `json:"inode"`
-	UID    uint32   `json:"uid"`
-	Size   int64    `json:"size_bytes"`
-	Paths  []string `json:"paths"`
-	Pages  uint64   `json:"cached_pages"`
-	Before int      `json:"vmas_before"`
-	After  int      `json:"vmas_after"`
+	Device   uint64      `json:"device"`
+	Inode    uint64      `json:"inode"`
+	UID      uint32      `json:"uid"`
+	Size     int64       `json:"size_bytes"`
+	Paths    []string    `json:"paths"`
+	Pages    uint64      `json:"cached_pages"`
+	PageRuns [][2]uint64 `json:"cached_file_page_runs,omitempty"`
+	Before   int         `json:"vmas_before"`
+	After    int         `json:"vmas_after"`
 }
 
 type cacheControl struct {
@@ -80,10 +81,10 @@ type torchCacheScan struct {
 	Control      cacheControl      `json:"control"`
 }
 
-func fileCache(fd int, offset, length int64) (uint64, error) {
+func cacheResidency(fd int, offset, length int64, retainRuns bool) (uint64, [][2]uint64, error) {
 	region, err := unix.Mmap(fd, offset, int(length), unix.PROT_NONE, unix.MAP_SHARED)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer unix.Munmap(region)
 	page := os.Getpagesize()
@@ -92,13 +93,30 @@ func fileCache(fd int, offset, length int64) (uint64, error) {
 	// permission throughout the query and no file bytes are dereferenced.
 	_, _, errno := unix.Syscall(unix.SYS_MINCORE, uintptr(unsafe.Pointer(&region[0])), uintptr(len(region)), uintptr(unsafe.Pointer(&vector[0])))
 	if errno != 0 {
-		return 0, errno
+		return 0, nil, errno
 	}
 	var count uint64
-	for _, v := range vector {
-		count += uint64(v & 1)
+	var runs [][2]uint64
+	for i, v := range vector {
+		if v&1 == 0 {
+			continue
+		}
+		count++
+		if retainRuns {
+			p := uint64(i) + uint64(offset)/uint64(page)
+			if n := len(runs); n != 0 && runs[n-1][1] == p {
+				runs[n-1][1]++
+			} else {
+				runs = append(runs, [2]uint64{p, p + 1})
+			}
+		}
 	}
-	return count, nil
+	return count, runs, nil
+}
+
+func fileCache(fd int, offset, length int64) (uint64, error) {
+	count, _, err := cacheResidency(fd, offset, length, false)
+	return count, err
 }
 
 func checkCacheControl(root int, device uint64) (cacheControl, error) {
@@ -227,7 +245,8 @@ func torchCacheFileStat(root int, path string, device uint64, seen map[fileID]*t
 		alias.Paths = append(alias.Paths, path)
 		return nil, nil
 	}
-	pages, err := fileCache(fd, 0, before.Size)
+	retainRuns := os.Getenv("ZB_TORCH_WHEEL_DONTNEED") == "1" && strings.HasPrefix(path, "tmp/aries-torch-wheel-cache/http-v2/")
+	pages, runs, err := cacheResidency(fd, 0, before.Size, retainRuns)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +256,7 @@ func torchCacheFileStat(root int, path string, device uint64, seen map[fileID]*t
 	if before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim || pages > (uint64(after.Size)+uint64(os.Getpagesize())-1)/uint64(os.Getpagesize()) {
 		return nil, errors.New("concurrent mutation or impossible page count")
 	}
-	out := &torchCacheFile{Device: before.Dev, Inode: before.Ino, UID: before.Uid, Size: before.Size, Paths: []string{path}, Pages: pages}
+	out := &torchCacheFile{Device: before.Dev, Inode: before.Ino, UID: before.Uid, Size: before.Size, Paths: []string{path}, Pages: pages, PageRuns: runs}
 	seen[id] = out
 	return out, nil
 }

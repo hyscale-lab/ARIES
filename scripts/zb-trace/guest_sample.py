@@ -7,7 +7,7 @@ import socket
 import time
 
 
-def snapshot(vsock):
+def snapshot(vsock, request=b"snapshot\n"):
     start=time.monotonic_ns()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
         conn.settimeout(20)
@@ -21,7 +21,7 @@ def snapshot(vsock):
             reply=stream.readline(128)
             if not reply.startswith(b"OK "):
                 raise RuntimeError(f"guest telemetry connection rejected: {reply!r}")
-            conn.sendall(b"snapshot\n")
+            conn.sendall(request)
             payload=stream.readline(64*1024*1024+1)
     end=time.monotonic_ns()
     if not payload.endswith(b"\n") or len(payload)>64*1024*1024:

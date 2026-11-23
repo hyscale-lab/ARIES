@@ -15,11 +15,17 @@ torch_cache=${ZB_TORCH_FILE_CACHE:-0}
 [[ "$torch_cache" =~ ^[01]$ ]]
 cache_line=
 if [[ "$torch_cache" == 1 ]]; then cache_line=$'Environment=ZB_TORCH_FILE_CACHE=1\n'; fi
+release_wheels=${ZB_TORCH_WHEEL_DONTNEED:-0}
+[[ "$release_wheels" =~ ^[01]$ ]]
 pfn_count=${ZB_GUEST_PFN_COUNT:-524288}
 [[ "$pfn_count" =~ ^(0|[1-9][0-9]{0,6})$ ]] && (( pfn_count <= 2359296 )) || {
     echo 'ZB_GUEST_PFN_COUNT must be an integer from 0 through 2359296' >&2
     exit 2
 }
+if [[ "$release_wheels" == 1 ]]; then
+    [[ "$torch_cache" == 1 && "$pfn_count" == 0 ]]
+    cache_line+=$'Environment=ZB_TORCH_WHEEL_DONTNEED=1\n'
+fi
 cat > "$staging/unit" <<EOF
 [Unit]
 Description=Private guest memory telemetry

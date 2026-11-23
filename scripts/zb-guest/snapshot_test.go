@@ -83,6 +83,9 @@ func TestDaemonOnlyAllowsFixedSnapshot(t *testing.T) {
 	if reply := check("exec who\n"); len(reply) != 0 {
 		t.Fatalf("unexpected non-snapshot response %s", reply)
 	}
+	if reply := check("evictwhl\n"); len(reply) != 0 {
+		t.Fatalf("observe-only listener enabled wheel advice: %s", reply)
+	}
 	var result sample
 	if err := json.Unmarshal(check(snapshotRequest), &result); err != nil {
 		t.Fatal(err)
