@@ -29,7 +29,7 @@ def wait(name,check):
         except subprocess.CalledProcessError as e:
             if e.returncode!=255:raise
         time.sleep(30)
-def main(root,variant):
+def main(root,variant,relocated=False):
     node={'v1':'amd182','v4':'amd189'}[variant]
     result=root/'plan/result/1_opportunity'
     old=read(result/'deep-sweep'/f'compcert-{variant}.json')
@@ -39,11 +39,23 @@ def main(root,variant):
         return
     assert old['first_divergent_step']==6 and old['driver_exit']==1
     cache=root/'repo/ARIES/.cache'
-    prior=cache/'harbor/log-summary-replacement'/f'{node}.complete.json'
-    wait('Wait for complete ordinary and deep log series and transfer on '+node,lambda:prior.is_file() and len(read(prior))==3)
-    if variant=='v4':
-        hf='/tmp/zb-timing17-01/b615a3ec-v3/driver.exit'
-        wait('Wait for native b615 HF terminal receipt and released amd189',lambda:exists(node,hf) and state(node,'zb-timing17-hf') in ('inactive','failed'))
+    placement=result/'relaxed-compcert/deep/relocated-v4.json'
+    if relocated:
+        assert variant=='v4' and read(placement)['active_node']=='amd201' and read(placement)['source_trial']==TRIAL
+        node='amd201'
+        oldunit='zb-relaxed-compcert-deep-queue-v4'
+        assert subprocess.check_output(['systemctl','--user','show',oldunit,'-p','ActiveState','--value'],text=True).strip()=='inactive'
+        assert state('amd189','zb-relaxed-compcert-deep-v4-01')=='inactive'
+    elif variant=='v4' and placement.is_file():
+        assert read(placement)['active_node']=='amd201' and read(placement)['source_trial']==TRIAL
+        print('Superseded by unique amd201 v4 submission',flush=True)
+        return
+    else:
+        prior=cache/'harbor/log-summary-replacement'/f'{node}.complete.json'
+        wait('Wait for complete ordinary and deep log series and transfer on '+node,lambda:prior.is_file() and len(read(prior))==3)
+        if variant=='v4':
+            hf='/tmp/zb-timing17-01/b615a3ec-v3/driver.exit'
+            wait('Wait for native b615 HF terminal receipt and released amd189',lambda:exists(node,hf) and state(node,'zb-timing17-hf') in ('inactive','failed'))
     output=f'deep-{variant}-01'
     series=f'{REMOTE}/{output}/series-status.txt'
     unit=f'zb-relaxed-compcert-deep-{variant}-01'
@@ -76,4 +88,4 @@ def main(root,variant):
     print('Raw archive verified',archive,flush=True)
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('variant',choices=('v1','v4'))
-    a=p.parse_args();main(a.root.resolve(),a.variant)
+    p.add_argument('--relocated-amd201',action='store_true');a=p.parse_args();main(a.root.resolve(),a.variant,a.relocated_amd201)

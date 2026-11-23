@@ -12,7 +12,7 @@ TRIAL='bf3c1acf-2d7d-4fa4-9b03-fb8edfce1666'
 def retire_empty_bridge():
     name='zbccsnap183'
     if not Path('/sys/class/net',name).exists(): return
-    assert Path('/var/emulab/boot/nodeid').read_text().strip() in ('amd182','amd189')
+    assert Path('/var/emulab/boot/nodeid').read_text().strip() in ('amd182','amd189','amd201')
     assert Path('/sys/class/net',name,'bridge').is_dir()
     assert not list(Path('/sys/class/net',name,'brif').iterdir())
     proc=subprocess.check_output(['ps','-eo','comm='],text=True).splitlines()

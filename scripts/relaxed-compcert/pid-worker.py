@@ -21,5 +21,5 @@ if __name__=='__main__':
           '/local/zb-torch-deep-v1-amd182/assets/codex-harbor-tools.tar.gz',TRIAL]
     subprocess.run(args,input=render((STAGE/'run-series.sh').read_bytes()),text=True,check=True)
     bridge_helper=STAGE/'bf3c-series-01.py'
-    assert hashlib.sha256(bridge_helper.read_bytes()).hexdigest()=='c50b3f64dc05d6e8cca70214a0b3c915fd499abf61f287fd21fb601a4f1c6b60'
+    assert hashlib.sha256(bridge_helper.read_bytes()).hexdigest() in ('c50b3f64dc05d6e8cca70214a0b3c915fd499abf61f287fd21fb601a4f1c6b60','bf2864def256a1577b5c141c8a96b4e6dd42d841dd2fc4774ed0eeecb820d34c')
     runpy.run_path(str(bridge_helper))['retire_empty_bridge']()
