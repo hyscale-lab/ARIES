@@ -121,7 +121,9 @@ func command(ctx context.Context) error {
 	}
 	requestedVCPUs := r.VCPUs
 	if *hfHostCPU >= 0 {
-		if r.Trial != hfInspectionTrial || *hfHarness == "" || (!sourceCPU && (*observer != "" || *sampler != "")) {
+		inspection := r.Trial == hfInspectionTrial && *hfHarness != ""
+		defaultDiagnostic := !sourceCPU && r.Trial == hfDefaultThreadsTrial && *hfHarness == ""
+		if (!inspection && !defaultDiagnostic) || (!sourceCPU && (*observer != "" || *sampler != "")) {
 			return errors.New("two-vCPU diagnostic requires the uninstrumented HF inspection source and fixture")
 		}
 		requestedVCPUs = 2
@@ -350,7 +352,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	if hfHostCPU >= 0 {
-		if err := checkHFCPU(ctx, m, id, hfHostCPU, sourceCPU, "before_snapshot", log); err != nil {
+		if err := checkHFCPU(ctx, m, id, r.Trial, hfHostCPU, sourceCPU, "before_snapshot", log); err != nil {
 			return err
 		}
 	}
@@ -389,7 +391,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	if hfHostCPU >= 0 {
-		if err := checkHFCPU(ctx, m, id, hfHostCPU, sourceCPU, "after_restore", log); err != nil {
+		if err := checkHFCPU(ctx, m, id, r.Trial, hfHostCPU, sourceCPU, "after_restore", log); err != nil {
 			return err
 		}
 	}
@@ -493,7 +495,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 		if hfHostCPU >= 0 {
-			return checkHFCPU(ctx, m, id, hfHostCPU, sourceCPU, "after_source", log)
+			return checkHFCPU(ctx, m, id, r.Trial, hfHostCPU, sourceCPU, "after_source", log)
 		}
 	}
 	return nil
