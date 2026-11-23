@@ -104,3 +104,49 @@ func TestDiagnosticTerminalJoinReadsActualRemainingOutput(t *testing.T) {
 		t.Fatal("consumed handle still exists")
 	}
 }
+
+func TestCodexYieldBeginsAfterLaunchAndEarlyExitGrace(t *testing.T) {
+	allowStart := make(chan struct{})
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	sessions := NewCodexProcessSessions(t.Context(), func(ctx context.Context, _ replay.Call, _, _ io.Writer) (core.CommandResult, error) {
+		<-allowStart
+		core.MarkCommandTiming(ctx, "command.started")
+		close(started)
+		<-finish
+		return core.CommandResult{ExitCode: 3}, nil
+	})
+	defer sessions.Close()
+	reply := make(chan core.CommandResult, 1)
+	go func() {
+		r, _ := sessions.Execute(t.Context(), replay.Call{Operation: "StartProcess", SessionID: 7, YieldTime: 10 * time.Millisecond})
+		reply <- r
+	}()
+	select {
+	case <-reply:
+		t.Fatal("yield returned before start")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(allowStart)
+	<-started
+	select {
+	case <-reply:
+		t.Fatal("yield returned inside the native early-exit window")
+	case <-time.After(45 * time.Millisecond):
+	}
+	close(finish)
+	if got := <-reply; got.ExitCode != 3 {
+		t.Fatalf("early exit lost: %+v", got)
+	}
+}
+
+func TestCodexLaunchFailureDoesNotWaitForStart(t *testing.T) {
+	sessions := NewCodexProcessSessions(t.Context(), func(context.Context, replay.Call, io.Writer, io.Writer) (core.CommandResult, error) {
+		return core.CommandResult{}, io.ErrUnexpectedEOF
+	})
+	defer sessions.Close()
+	_, err := sessions.Execute(t.Context(), replay.Call{Operation: "StartProcess", SessionID: 8, YieldTime: time.Hour})
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("launch failure = %v", err)
+	}
+}

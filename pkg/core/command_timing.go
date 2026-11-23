@@ -37,6 +37,15 @@ type CommandTimings struct {
 }
 
 type commandTimingKey struct{}
+type commandStartedKey struct{}
+
+// WithCommandStart returns the provider's first successful process Start acknowledgement.
+// A failed launch returns through the execution result without sending an acknowledgement.
+func WithCommandStart(ctx context.Context) (context.Context, <-chan time.Time) {
+	ack := make(chan time.Time, 1)
+	notify := sync.OnceFunc(func() { ack <- time.Now() })
+	return context.WithValue(ctx, commandStartedKey{}, notify), ack
+}
 
 func WithCommandTimings(ctx context.Context) (context.Context, *CommandTimings) {
 	timings := &CommandTimings{started: time.Now(), stages: make([]CommandTimingStage, 0), milestones: make(map[string]CommandTimingPoint)}
@@ -65,6 +74,11 @@ func TimeCommandStage(ctx context.Context, name string) func() {
 // MarkCommandTiming records a boundary only once, preserving the first
 // observation if multiple execution paths report the same milestone.
 func MarkCommandTiming(ctx context.Context, name string) {
+	if name == "command.started" {
+		if notify, ok := ctx.Value(commandStartedKey{}).(func()); ok {
+			notify()
+		}
+	}
 	timings, _ := ctx.Value(commandTimingKey{}).(*CommandTimings)
 	if timings == nil {
 		return

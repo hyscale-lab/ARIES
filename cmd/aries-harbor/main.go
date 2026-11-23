@@ -414,7 +414,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
-	sessions := harbor.NewProcessSessions(ctx, func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
+	sessions := harbor.NewCodexProcessSessions(ctx, func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
 		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call), nil, stdout, stderr)
 	})
 	defer sessions.Close()

@@ -49,18 +49,29 @@ type guestProcess struct {
 // ProcessSessions owns live foreground processes that returned a native
 // session handle. Only empty write_stdin polls are accepted by the parser.
 type ProcessSessions struct {
-	lock   sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
-	run    GuestStream
-	active map[int]*guestProcess
-	wg     sync.WaitGroup
+	lock             sync.Mutex
+	ctx              context.Context
+	cancel           context.CancelFunc
+	run              GuestStream
+	active           map[int]*guestProcess
+	wg               sync.WaitGroup
+	nativeStartClock bool
 }
 
 func NewProcessSessions(ctx context.Context, run GuestStream) *ProcessSessions {
 	ctx, cancel := context.WithCancel(ctx)
 	return &ProcessSessions{ctx: ctx, cancel: cancel, run: run, active: map[int]*guestProcess{}}
 }
+
+// NewCodexProcessSessions uses Codex 0.151.0's initial yield clock with a
+// provider that reports successful command starts through core.MarkCommandTiming.
+func NewCodexProcessSessions(ctx context.Context, run GuestStream) *ProcessSessions {
+	s := NewProcessSessions(ctx, run)
+	s.nativeStartClock = true
+	return s
+}
+
+const codexEarlyExitGrace = 150 * time.Millisecond
 
 func (s *ProcessSessions) Close() { s.cancel(); s.wg.Wait() }
 
@@ -94,6 +105,7 @@ func (s *ProcessSessions) FinishObservedProcess(ctx context.Context, call replay
 func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain, join bool) (core.CommandResult, error) {
 	s.lock.Lock()
 	p := s.active[call.SessionID]
+	var started <-chan time.Time
 	switch call.Operation {
 	case "StartProcess":
 		if p != nil {
@@ -102,10 +114,14 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		}
 		p = &guestProcess{done: make(chan struct{})}
 		s.active[call.SessionID] = p
+		work := s.ctx
+		if s.nativeStartClock {
+			work, started = core.WithCommandStart(work)
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			p.result, p.err = s.run(s.ctx, call, &p.stdout, &p.stderr)
+			p.result, p.err = s.run(work, call, &p.stdout, &p.stderr)
 			close(p.done)
 		}()
 	case "PollProcess":
@@ -120,7 +136,20 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 	s.lock.Unlock()
 	var timeout <-chan time.Time
 	if !join {
-		timer := time.NewTimer(call.YieldTime)
+		wait := call.YieldTime
+		if started != nil {
+			select {
+			case begin := <-started:
+				// Both local and exec-server backends race an actual exit against
+				// EARLY_EXIT_GRACE_PERIOD before the initial Codex yield window.
+				// The command keeps executing throughout these two windows.
+				wait = time.Until(begin.Add(codexEarlyExitGrace + call.YieldTime))
+			case <-p.done:
+			case <-ctx.Done():
+				return core.CommandResult{}, context.Cause(ctx)
+			}
+		}
+		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		timeout = timer.C
 	}
