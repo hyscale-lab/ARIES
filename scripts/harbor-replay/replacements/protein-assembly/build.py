@@ -26,6 +26,11 @@ INPUT_DIGESTS = {
 NATIVE = frozenset({"exec_command", "write_stdin", "web_search_call", "update_plan"})
 PACKAGE_SHA = "d5724f0fa473fe60002710c9ae8d5e4e259392811e246168c5b0991d1d29db25"
 TASK_LOCK = "sha256:c491d45acce234e1aa1d44dcc6778c55fcf875e9eb254b8dd3ae5ef58119621b"
+CA_PACKAGE_SHA = "f9fbacd417b515450b831032cc39d18059e9874e67525679a43c16071dabf9a0"
+CA_CERT_NAME = "SSL.com_TLS_RSA_Root_CA_2022.crt"
+CA_CERT_SHA = "e1c93696d4de9125e49f6a12b97a1cbcf8ce7331bc8268f1fe7b6ab447cc14cf"
+IMAGE_CA_SHA = "a3413a37a8e09cc21b2c11c9ffb23d92d2fc9d1933c9e7617f5c4fba4f72d37d"
+PATCHED_CA_SHA = "366dc06222558f30e7e03319d95a1acd45015b8e8a745ad434aa8bfe56cac424"
 
 
 def digest(path):
@@ -40,12 +45,25 @@ def edit(path, needle, replacement):
     path.write_text(s.replace(needle, replacement))
 
 
+def verified_ca(package):
+    if digest(package) != CA_PACKAGE_SHA:
+        raise ValueError("unexpected signed Ubuntu CA package")
+    data = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", package])
+    with tarfile.open(fileobj=BytesIO(data)) as fs:
+        name = "./usr/share/ca-certificates/mozilla/"+CA_CERT_NAME
+        certificate = fs.extractfile(name).read()
+    if hashlib.sha256(certificate).hexdigest() != CA_CERT_SHA:
+        raise ValueError("unexpected SSL.com trust anchor")
+    return certificate.decode("ascii")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("output", type=Path)
     p.add_argument("--source", type=Path, required=True)
     p.add_argument("--image", type=Path, required=True)
     p.add_argument("--packages", type=Path, required=True)
+    p.add_argument("--ca-deb", type=Path)
     args = p.parse_args()
     out = args.output.resolve()
     out.mkdir()
@@ -86,6 +104,17 @@ def main():
 command -v python patch git
 python --version
 mkdir -m 0700 -p /tmp/codex-home"""
+        if args.ca_deb:
+            certificate = verified_ca(args.ca_deb)
+            first += f"""
+ca=/etc/ssl/certs/ca-certificates.crt
+echo '{IMAGE_CA_SHA}  /etc/ssl/certs/ca-certificates.crt' | sha256sum -c -
+cat >> "$ca" <<'ARIES_CA'
+{certificate.rstrip()}
+ARIES_CA
+echo '{PATCHED_CA_SHA}  /etc/ssl/certs/ca-certificates.crt' | sha256sum -c -
+echo 'ars_tls_anchor_sha256={CA_CERT_SHA}'
+"""
         checks = "sha256sum -c <<'ARIES_SHA'\n" + "\n".join(
             f"{digest}  {name}" for name, digest in sorted(INPUT_DIGESTS.items())
         ) + "\nARIES_SHA"
@@ -129,6 +158,12 @@ mkdir -m 0700 -p /tmp/codex-home"""
                     package_sha256=PACKAGE_SHA, output_sha256=OUTPUT,
                     adapter_sha256=digest(out/"aries-protein-assembly"),
                     full_initial_files_seen_in_source_step=6)
+    if args.ca_deb:
+        contract["trust_anchor"] = dict(
+            package_sha256=CA_PACKAGE_SHA, package=args.ca_deb.name, certificate=CA_CERT_NAME,
+            certificate_sha256=CA_CERT_SHA, initial_guest_bundle_sha256=IMAGE_CA_SHA,
+            amended_guest_bundle_sha256=PATCHED_CA_SHA,
+        )
     (out/"source-contract.json").write_text(json.dumps(contract, indent=2) + "\n")
 
 
