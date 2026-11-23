@@ -78,6 +78,7 @@ func command(ctx context.Context) error {
 	relaxedML := flag.Bool("relaxed-ml", false, "retain actual timing and exit disagreements in the four reviewed ML replays")
 	bnFit := flag.Bool("replacement-bn-fit", false, "measure the original Bayesian-network replay and archive its actual CSV outputs")
 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
+	videoIPP := flag.String("video-opencv-ipp", "", "source-validated OpenCV IPP profile for a reviewed video trial")
 	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
 	curlPackages := flag.String("curl-packages", "", "pinned Bookworm curl archive for the recorded HTTP client")
 	osTools := flag.String("os-tools", "", "pinned task-specific offline package archive")
@@ -213,6 +214,9 @@ func command(ctx context.Context) error {
 	if *videoDifferences && (r.Task != "video-processing" || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0) {
 		return errors.New("video image diagnostics require a reviewed uninstrumented video recording")
 	}
+	if err := validateVideoIPP(r, *videoIPP); err != nil {
+		return err
+	}
 	if *image != r.Image {
 		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
 	}
@@ -257,10 +261,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -285,6 +289,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	req := deployment.Request{Name: name, AllowNetwork: r.NeedsNetwork, Image: image, StorageMB: storage, Workdir: r.Workdir, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
+	if videoIPP != "" {
+		req.Env = []string{"OPENCV_IPP=" + videoIPP}
+	}
 	req.PrivateHostsFile = r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial)
 	id, err := m.Create(ctx, req)
 	if id != "" {
@@ -371,7 +378,17 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if err != nil || clockErr != nil {
 		return errors.Join(err, clockErr)
 	}
+	if videoIPP != "" {
+		details, ok := state.(map[string]string)
+		if !ok {
+			return errors.New("video readiness details are unavailable")
+		}
+		details["video_opencv_ipp"] = videoIPP
+	}
 	if err = log.Encode(map[string]any{"event": event, "begin_monotonic_ns": prepBegin, "end_monotonic_ns": prepEnd, "state": state}); err != nil {
+		return err
+	}
+	if err = verifyVideoRuntime(ctx, m, id, videoIPP, "before_snapshot", log); err != nil {
 		return err
 	}
 	if r.NeedsNetwork {
@@ -411,6 +428,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if err = lifecycle("restore_complete"); err != nil {
+		return err
+	}
+	if err = verifyVideoRuntime(ctx, m, id, videoIPP, "after_restore", log); err != nil {
 		return err
 	}
 	if r.NeedsNetwork {
