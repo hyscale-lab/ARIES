@@ -74,9 +74,9 @@ def launch(a):
         env.pop(key, None)
     if a.deep:
         env.update(ZB_GUEST_VSOCK="1", ZB_CONTENT_SAMPLE="8192")
-    if a.variant in {"v1", "v2"}:
+    if a.deep or a.variant in {"v1", "v2"}:
         env["ZB_CHECKPOINT_NAMESPACE_DIR"] = str(a.runtime / "checkpoints/aries")
-    else:
+    if a.variant in {"v3", "v4"}:
         args.append("-native-checkpoint")
     process = subprocess.run(args, env=env)
     (a.output / "driver.exit").write_text(f"{process.returncode}\n")

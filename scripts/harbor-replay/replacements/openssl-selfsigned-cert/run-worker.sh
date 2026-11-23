@@ -7,11 +7,15 @@ runtime=$(realpath "$4")
 unit=$5
 tools=$(realpath "$6")
 mode=$7
-suffix=-replacement-01
+attempt=${8:-01}
+suffix=-replacement-$attempt
 capture=()
 case "$mode" in
-  ordinary) ;;
-  deep) suffix=-replacement-deep-01; capture+=(--deep) ;;
+  ordinary) [[ $attempt == 01 ]] ;;
+  deep)
+    [[ $attempt == 01 || $trial:$variant:$attempt == a863bf5e:v4:02 ]]
+    suffix=-replacement-deep-$attempt
+    capture+=(--deep) ;;
   *) exit 2 ;;
 esac
 stage=$base/runs/$trial-$variant$suffix
