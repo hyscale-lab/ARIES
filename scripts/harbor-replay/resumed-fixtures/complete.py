@@ -4,6 +4,9 @@ import os,subprocess,sys,time,shutil
 stage=Path(__file__).resolve().parent
 node=int(sys.argv[1])
 before='zb-timing17-hf' if node==203 else 'zb-timing17-ordinary'
+remaining_markers = sys.argv[2:] == ['remaining-markers']
+if remaining_markers:
+    before = 'zb-git-fixture-02'
 while subprocess.run(['systemctl','is-active','--quiet',before]).returncode==0:time.sleep(10)
 extra=Path('/tmp/zb-resume-extra-01')
 if node==203:
@@ -19,6 +22,8 @@ def passed(folder):
     status=folder/'driver.exit'
     return status.exists() and status.read_text().strip()=='0'
 for mode in modes:
+    if remaining_markers and mode.startswith("deep"):
+        continue
     variant=mode.split('-')[-1]
     tracer=bundle/'tracer'
     unit,runtime={
@@ -39,16 +44,18 @@ for mode in modes:
         tracer=Path('/local/zb-deep-hf-v1-amd203/trace' if node==203 else '/local/zb-grpc69ba-v4/cohort/tracer')
     sock='/run/'+unit+'/containerd.sock'
     for task,digest in [('git-leak-recovery','62160e522a4238b8bcd522411ea97b5b200f811e5899d34947e66809bef7e586'),('dna-assembly','d1adf6835f1dd91205ba70e452c699d0aea601010038e5617f370716efb50569')]:
-        if task=='dna-assembly' and variant in ('v1','v4'):continue
+        if remaining_markers and task!='dna-assembly':continue
+        if not remaining_markers and task=='dna-assembly' and variant in ('v1','v4'):continue
         image='docker.io/alexgshaw/'+task+'@sha256:'+digest
         netargs=[]
         if task=='dna-assembly':
             net=extra/'marker-cni'
-            if node==200:
+            profile = 'marksrc' if remaining_markers else 'marker'
+            if node==200 or remaining_markers:
                 net=stage/'net';net.mkdir(exist_ok=True)
                 for name in ['SHA256SUMS','bin']:subprocess.run(['cp','-an',bundle/'cni'/name,net],check=True)
-                subprocess.run(['bash',stage/'provision-sparql-cni.sh',net,'install','amd200','marker'],check=True)
-            netargs=['-cni-network','zbmarker'+str(node),'-cni-conf-dir',net/'conf','-cni-cache-dir',net/'cache','-cni-bin-dir',net/'bin']
+                subprocess.run(['bash',stage/'provision-sparql-cni.sh',net,'install','amd'+str(node),profile],check=True)
+            netargs=['-cni-network','zb'+profile+str(node),'-cni-conf-dir',net/'conf','-cni-cache-dir',net/'cache','-cni-bin-dir',net/'bin']
         for src in sorted((stage/task).iterdir()):
             short=src.name[:8]
             if mode.startswith('deep'):

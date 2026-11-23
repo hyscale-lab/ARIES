@@ -621,7 +621,7 @@
     "workdir": "/app",
     "image": "docker.io/alexgshaw/dna-assembly@sha256:d1adf6835f1dd91205ba70e452c699d0aea601010038e5617f370716efb50569",
     "effects": [
-      "Run the original local fluorescent-tag fixture analysis against the pinned input and install its recorded Ubuntu tool package. Check the final file digest against the fixed original patch."
+      "Run the original fluorescent-tag fixture with its recorded tool dependency and compare the final file digest with the original write."
     ],
     "trials": [
       {
@@ -633,6 +633,21 @@
         "trial": "8968e176-fa1f-4d6a-8e5a-3ebd7cc0b8de",
         "trajectory_sha256": "8221b64c2fa5302d1a021f999e5a8df41b6c4d8bcabf2954eed1d6697f2c2823",
         "rollout_sha256": "f5bc79c6f4249b8e0586733ff38efc64b826c9308aac6109b3b97eb044439f31"
+      },
+      {
+        "trial": "19addf4a-2f79-4fc8-b873-3362c590da95",
+        "trajectory_sha256": "3bf3f852c4a36857438166d7167bb6cf81032d055a5d0f40fab07c9ea26f349d",
+        "rollout_sha256": "614e9f4c34712ad9de07c56955a891e8750463b5b2e456340261ecfebe62185d"
+      },
+      {
+        "trial": "ba8d88f7-b8ea-4a81-a197-a10e8126f9f8",
+        "trajectory_sha256": "96cbb1a586a941f56d669ee287f80e4528a567bb065cae8953b178d31c1d23ba",
+        "rollout_sha256": "cf3ba5f3b10938673baa9de19a43f7f11e14166e4075d62f22dcaa2f4c2bc948"
+      },
+      {
+        "trial": "ed31bf8e-3dff-4080-bb5e-15c54bae728a",
+        "trajectory_sha256": "b675f65251ae9d33c7f35c1d28601710360e262bc736c2f47b958661b8fb4847",
+        "rollout_sha256": "c660528f20bdd4661ffc467e77cc47fd0309141191af363ac270757d55a10360"
       }
     ],
     "vcpus": 1,

@@ -18,6 +18,10 @@ case "$profile" in
         subnet=10.236.$octet.0/28
         hosts=(bootstrap.pypa.io pypi.org files.pythonhosted.org download.pytorch.org download-r2.pytorch.org)
         ;;
+    marksrc)
+        subnet=10.249.$octet.0/28
+        hosts=(snapshot.ubuntu.com github.com)
+        ;;
     financeapt)
         subnet=10.234.$octet.0/28
         if [[ "$worker" == amd201 ]]; then subnet=10.237.$octet.0/28; fi
