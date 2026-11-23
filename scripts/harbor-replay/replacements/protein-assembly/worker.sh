@@ -41,7 +41,12 @@ if [[ $node == amd198 ]]; then timing_arm=v4; fi
 sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
 test "$(sudo -n systemctl show -p ActiveState --value "$unit")" = active
 attempt=${stage##*-}
-[[ $attempt == 01 || $attempt == 02 || $attempt == 03 ]]
+[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 ]]
+diagnostic=()
+if [[ $attempt == 04 ]]; then
+    [[ "$node:$variant:$kind" == amd183:v1:ordinary ]]
+    diagnostic=(-diagnostic-process-drift)
+fi
 arm=93c2fb63-$variant-protein-assembly-$kind-$attempt
 run=$stage/runs/$arm
 mkdir -p "$stage/runs"
@@ -86,7 +91,7 @@ status=0
 sudo -n env ZB_VMM_CENSUS=1 BPFTRACE_PERF_RB_PAGES=1024 "${checkpoint[@]}" "${deep[@]}" \
     python3 -B "$stage/vmm_exclusivity.py" "$run/placement.jsonl" -- \
     bash "$stage/tracer/run-traced.sh" "$stage/aries-protein-assembly" "$stage/tracer" "$run/raw" \
-      -guest-task-v3 "${native[@]}" -trajectory "$stage/source/trajectory.json" -rollout "$stage/source/rollout.jsonl" \
+      -guest-task-v3 "${native[@]}" "${diagnostic[@]}" -trajectory "$stage/source/trajectory.json" -rollout "$stage/source/rollout.jsonl" \
       -image "$image" -namespace aries -socket "$socket" -checkpoint-dir "$runtime/checkpoints" \
       -shim-dir "$runtime/shim" -io-dir "/run/$unit/aries-io" -codex-tools "$stage/codex-harbor-tools.tar.gz" \
       -os-tools "$stage/task-debs.tar.gz" -vcpus 1 -memory-mib 4096 -storage-mib 10240 \

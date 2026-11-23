@@ -16,6 +16,11 @@ case "$node" in
         ;;
     *) exit 2 ;;
 esac
+if [[ ${stage##*-} == 04 ]]; then
+    [[ $node == amd183 ]]
+    test -s "$stage/harbor-release.json"
+    arms=(v1:ordinary)
+fi
 sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$gate/driver.exit"
 test "$(systemctl show -p ActiveState --value zb-timing17-hf.service)" = inactive
 ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'
