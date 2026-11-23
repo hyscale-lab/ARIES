@@ -30,7 +30,7 @@ def ranges(sorted_gpas, page):
     return spans
 
 
-def reconcile(raw, output, meta):
+def reconcile(raw, output, meta, *, verified_status_disagreements=None):
     events = list(read(raw/"events.jsonl"))
     partial = meta["status"] == "partial_fidelity"
     markers = {"relaxed_ml_observed": "relaxed_ml_measurement",
@@ -44,6 +44,19 @@ def reconcile(raw, output, meta):
         marker, = [e for e in events if e["event"] == markers[meta["status"]]]
         if marker["strict_source_admission"] is not False or marker["trial_id"] != meta["source_trial"]:
             raise ValueError("relaxed measurement marker differs from source metadata")
+    if verified_status_disagreements is not None:
+        if meta["status"] != "diagnostic_replayed" or meta.get("strict_source_admission") is not False:
+            raise ValueError("verified status disagreements require an independently admitted diagnostic")
+        create, = [e for e in events if e["event"] == "create_start"]
+        if (meta["source_trial"], meta["job_id"]) != (create["trial_id"], create["job_id"]):
+            raise ValueError("diagnostic event source differs from verified receipt")
+        observed = {
+            (e["sequence"], e["source_call_id"], e["step_id"], e["exit_code"], e["expected_exit_code"])
+            for e in events if e["event"] == "tool_reply" and e["exit_code"] != e["expected_exit_code"]
+        }
+        if observed != set(verified_status_disagreements):
+            raise ValueError("diagnostic status differences differ from independent verification")
+        relaxed = True
     groups, process_status = identify(events, complete=not partial, relaxed_status=relaxed)
     meta = dict(meta, process_handle_reconciliation=process_status)
     if partial:
