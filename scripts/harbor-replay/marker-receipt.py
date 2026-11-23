@@ -16,9 +16,9 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def receipt(log, source, host, binary, revision, exit_status):
+def receipt(log, source, host, binary, revision, exit_status, configuration):
     summarize = runpy.run_path(str(Path(__file__).with_name("validation-receipt.py")))["summarize"]
-    result = summarize(log, source/"trajectory.json", host, "dna-assembly", revision, digest(binary.read_bytes()))
+    result = summarize(log, source/"trajectory.json", host, "dna-assembly", revision, digest(binary.read_bytes()), configuration)
     if result["rollout_sha256"] != digest((source/"rollout.jsonl").read_bytes()):
         raise ValueError("original rollout digest differs")
     output_sha = OUTPUT_DIGESTS[result["trial_id"]]
@@ -47,5 +47,6 @@ if __name__=="__main__":
     parser.add_argument("--host",required=True)
     parser.add_argument("--revision",required=True)
     parser.add_argument("--driver-exit",required=True,type=int)
+    parser.add_argument("--configuration", required=True, choices=("v1","v2","v3","v4"))
     args=parser.parse_args()
-    print(json.dumps(receipt(args.log,args.source,args.host,args.binary,args.revision,args.driver_exit),indent=2))
+    print(json.dumps(receipt(args.log,args.source,args.host,args.binary,args.revision,args.driver_exit,args.configuration),indent=2))
