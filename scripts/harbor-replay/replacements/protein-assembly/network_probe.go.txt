@@ -1,0 +1,66 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
+	"github.com/hyscale-lab/aries/pkg/replay/harbor"
+)
+
+// Verify route, fixed resolver and certificates without reading a response body.
+// The original guest recording remains the first HTTP client.
+const proteinTLS = `import json
+import socket
+import ssl
+hosts = ("data.rcsb.org", "www.rcsb.org", "www.fpbase.org", "www.ebi.ac.uk",
+         "pubchem.ncbi.nlm.nih.gov", "eutils.ncbi.nlm.nih.gov")
+context = ssl.create_default_context()
+results = {}
+for host in hosts:
+    evidence = {"tls": False}
+    results[host] = evidence
+    try:
+        evidence["ipv4"] = sorted({r[4][0] for r in socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)})
+        with socket.create_connection((host, 443), timeout=8) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                evidence.update(tls=True, protocol=tls.version())
+    except (OSError, ValueError) as err:
+        evidence["error_type"] = type(err).__name__
+print(json.dumps(results, sort_keys=True))
+`
+
+func proteinNetworkEvidence(ctx context.Context, m *vhive.Manager, id, phase string, log *json.Encoder) error {
+	begin, err := harbor.Clock()
+	if err != nil {
+		return err
+	}
+	out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", proteinTLS}})
+	end, clockErr := harbor.Clock()
+	if err != nil || clockErr != nil {
+		return errors.New("guest TLS probe could not run")
+	}
+	var hosts map[string]struct {
+		TLS bool `json:"tls"`
+	}
+	if err := json.Unmarshal([]byte(out), &hosts); err != nil || len(hosts) != 6 {
+		return errors.New("guest TLS probe returned an invalid host set")
+	}
+	event := "validated_guest_network"
+	for _, host := range hosts {
+		if !host.TLS {
+			event = "protein_dependency_probe_failure"
+			break
+		}
+	}
+	if err := log.Encode(map[string]any{"event": event, "phase": phase, "begin_monotonic_ns": begin,
+		"end_monotonic_ns": end, "dependencies": json.RawMessage(out)}); err != nil {
+		return err
+	}
+	if event != "validated_guest_network" {
+		return errors.New("a reviewed public service failed its guest TLS probe")
+	}
+	return nil
+}
