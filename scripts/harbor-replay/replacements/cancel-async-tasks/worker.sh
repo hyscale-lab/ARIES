@@ -23,6 +23,12 @@ case "$node:$variant:$kind" in
         runtime=/local/zb-relaxed-ml-01/stack-v4/runtime
         unit=fcmod-zepbound-relaxed-ml-v4
         ;;
+    amd201:v4:ordinary)
+        handoff=/local/zb-cancel-async-ordinary-v4-handoff
+        test "$(wc -l < "$handoff/amd201-accepted.tsv")" = 5
+        runtime=/local/zb-texpilot/v4/runtime
+        unit=fcmod-zepbound-tex-v4
+        ;;
     amd201:v1:deep)
         runtime=$stage/deep-v1/runtime
         unit=fcmod-zepbound-cancel-async-deep-v1
