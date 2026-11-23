@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start one study worker from the already built common kernel/root and stack binaries.
-# Usage: provision_baseline.sh STACK_DIR UNIT RUNTIME_PROFILE v1|v2|v3|v4|native-v2
+# Usage: provision_baseline.sh STACK_DIR UNIT RUNTIME_PROFILE v1|v2|v3|v4|native-v2 [IMAGE@sha256:DIGEST]
 set -euo pipefail
 stack=$(realpath "$1")
 unit=$2
@@ -11,7 +11,8 @@ variant=$4
 work="$stack/runtime"
 bin="$work/bin"
 socket="/run/$unit/containerd.sock"
-image=docker.io/alexgshaw/fix-git@sha256:389b9c8247610c2c5be080b1ac00429007c2c69bf57f7f26c79f0f75ba2d5c74
+image=${5:-docker.io/alexgshaw/fix-git@sha256:389b9c8247610c2c5be080b1ac00429007c2c69bf57f7f26c79f0f75ba2d5c74}
+[[ "$image" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]]
 test -f "$work/common-rootfs.ext4" && test -x "$bin/containerd-shim-aws-firecracker"
 test ! -e "$work/runtime.json"
 if sudo -n systemctl is-active --quiet "$unit" || sudo -n dmsetup info "$unit" >/dev/null 2>&1; then
