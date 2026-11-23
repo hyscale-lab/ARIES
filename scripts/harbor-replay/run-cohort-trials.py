@@ -13,6 +13,19 @@ import tempfile
 def worker_driver(assets, unit, entries, temporary):
     driver=assets/"run-reviewed-cohort.py"
     tasks={entry["task"] for entry in entries}
+    if unit == "fcmod-zepbound-amd189-stockv3" and tasks == {"hf-model-inference"}:
+        helper = assets / "cohort_hf.py"
+        original = helper.read_bytes()
+        if hashlib.sha256(original).hexdigest() != "bea188baeda0a30565d901dee5a50614aaa74237e896b6c15b2b7e51ad55dd62":
+            raise ValueError("unexpected scoped inference source helper")
+        for module in assets.glob("*.py"):
+            shutil.copyfile(module, temporary / module.name)
+        prefix = b'    bridge, firewall, redirect, loopback = config["plugins"]\n'
+        assert original.count(prefix) == 1 and original.count(b'f"10.235.{match[1]}') == 2
+        updated = original.replace(prefix, b'    subnet_octet = 237 if name == "zbhfm189" else 235\n' + prefix)
+        updated = updated.replace(b'f"10.235.{match[1]}', b'f"10.{subnet_octet}.{match[1]}')
+        (temporary / helper.name).write_bytes(updated)
+        return temporary / driver.name, dict(module=helper.name, source_sha256=hashlib.sha256(original).hexdigest(), deployed_sha256=hashlib.sha256(updated).hexdigest(), network="zbhfm189", source_subnet="10.235.189.0/28", deployed_subnet="10.237.189.0/28")
     if unit == "fcmod-zepbound-amd183-stockv2" and tasks <= {"kv-store-grpc", "financial-document-processor"}:
         helper = assets / "cohort_pypi.py"
         original = helper.read_bytes()
