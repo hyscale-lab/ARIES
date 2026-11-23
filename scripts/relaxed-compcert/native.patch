@@ -1,0 +1,112 @@
+--- a/cmd/aries-harbor/main.go
++++ b/cmd/aries-harbor/main.go
+@@ -112,6 +112,9 @@
+ 	if *image == "" {
+ 		return json.NewEncoder(os.Stdout).Encode(r)
+ 	}
++	if r.Task != "compile-compcert" || !*processDrift || *opamPID || *opamLog || *intraStep != 0 || *probe != "" {
++		return errors.New("this measurement binary requires a reviewed CompCert original with literal commands and real process observations")
++	}
+ 	sourceCPU := *hfSourceCPU >= 0
+ 	if sourceCPU {
+ 		if *hfHostCPU >= 0 || *processDrift {
+@@ -172,7 +175,7 @@
+ 		financialPoll := r.Task == financialTask && r.Trial == "dce59078-0f61-4eac-92f9-3b2728e4ef28"
+ 		hfPoll := r.Task == hfTask && (r.Trial == hfLoopbackTrial || r.Trial == hfInspectionTrial || r.Trial == hfGunicornLoopbackTrial)
+ 		allowed := grpcPoll || financialPoll || hfPoll || torchPoll || r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
+-		if !allowed || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 {
++		if !allowed || *probe != "" || *intraStep != 0 {
+ 			return errors.New("process drift diagnostics require a reviewed uninstrumented recording")
+ 		}
+ 	}
+@@ -437,7 +440,7 @@
+ 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
+ 			}
+ 			// Source-terminal exec_command launches still have a real initial yield.
+-			return sessions.Execute(ctx, call)
++			return sessions.ObserveDrift(ctx, call)
+ 		},
+ 		Boundary: func(ctx context.Context, phase string, step int) error {
+ 			if observer != "" {
+--- a/pkg/replay/harbor/process.go
++++ b/pkg/replay/harbor/process.go
+@@ -83,6 +83,12 @@
+ // ObserveDrift keeps a completed process visible to subsequent original empty
+ // polls. Its terminal status is real, and only newly buffered output is read.
+ func (s *ProcessSessions) ObserveDrift(ctx context.Context, call replay.Call) (core.CommandResult, error) {
++	if call.Operation == "Exec" {
++		// A source-terminal command has no source session ID. Keep its actual
++		// process under a private key if the first live observation yields.
++		call.Operation = "StartProcess"
++		call.SessionID = -int(call.Sequence)
++	}
+ 	return s.execute(ctx, call, true, false)
+ }
+ 
+@@ -97,6 +103,10 @@
+ // terminal poll yielded. This extra diagnostic observation is recorded apart
+ // from the original reply, so the disagreement remains visible.
+ func (s *ProcessSessions) FinishObservedProcess(ctx context.Context, call replay.Call) (core.CommandResult, error) {
++	if call.Operation == "Exec" {
++		call.Operation = "PollProcess"
++		call.SessionID = -int(call.Sequence)
++	}
+ 	if call.Operation != "PollProcess" || call.ExitCode == ProcessRunning {
+ 		return core.CommandResult{}, errors.New("expected an original terminal process poll")
+ 	}
+--- a/pkg/replay/harbor/run.go
++++ b/pkg/replay/harbor/run.go
+@@ -215,7 +215,7 @@
+ 		return fmt.Errorf("step %d image attachment differs from the source", receipt.Step)
+ 	}
+ 	if int32(out.ExitCode) != call.ExitCode {
+-		if h.FinishObservedProcess != nil && call.SessionID != 0 {
++		if h.FinishObservedProcess != nil && (call.SessionID != 0 || call.Operation == "Exec") {
+ 			return recordProcessDrift(ctx, h, call, receipt, out)
+ 		}
+ 		return fmt.Errorf("step %d live exit %d, recorded %d", receipt.Step, out.ExitCode, call.ExitCode)
+--- a/pkg/replay/harbor/process_diagnostic.go
++++ b/pkg/replay/harbor/process_diagnostic.go
+@@ -3,7 +3,6 @@
+ import (
+ 	"context"
+ 	"errors"
+-	"fmt"
+ 
+ 	"github.com/hyscale-lab/aries/pkg/core"
+ 	"github.com/hyscale-lab/aries/pkg/replay"
+@@ -15,7 +14,7 @@
+ 		event.StatusBasis = "real_terminal_before_source_running_poll"
+ 		return emit(h, event)
+ 	}
+-	if call.Operation == "PollProcess" && first.ExitCode == ProcessRunning && call.ExitCode >= 0 {
++	if (call.Operation == "PollProcess" || call.Operation == "Exec") && first.ExitCode == ProcessRunning && call.ExitCode >= 0 {
+ 		event.StatusBasis = "real_process_running_at_source_terminal_poll"
+ 		if err := emit(h, event); err != nil {
+ 			return err
+@@ -24,6 +23,7 @@
+ 			last, err := h.FinishObservedProcess(ctx, call)
+ 			event.StatusBasis = "additional_join_after_source_poll"
+ 			event.Exit = &last.ExitCode
++			event.ProcessTiming = last.Timing
+ 			event.Stdout, event.Stderr = last.Stdout, last.Stderr
+ 			event.StdoutSHA, event.StderrSHA = digest([]byte(last.Stdout)), digest([]byte(last.Stderr))
+ 			if e := errors.Join(err, emit(h, event)); e != nil {
+@@ -32,7 +32,8 @@
+ 			if int32(last.ExitCode) == call.ExitCode {
+ 				return nil
+ 			}
+-			return fmt.Errorf("step %d observed terminal exit %d, recorded %d", source.Step, last.ExitCode, call.ExitCode)
++			event.StatusBasis = "real_terminal_exit_differs_after_join"
++			return emit(h, event)
+ 		}
+ 		if h.deferProcessJoin != nil {
+ 			h.deferProcessJoin(join)
+@@ -40,5 +41,6 @@
+ 		}
+ 		return join()
+ 	}
+-	return fmt.Errorf("step %d live terminal exit %d, recorded %d", source.Step, first.ExitCode, call.ExitCode)
++	event.StatusBasis = "real_terminal_exit_differs"
++	return emit(h, event)
+ }

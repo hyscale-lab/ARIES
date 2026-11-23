@@ -1,0 +1,51 @@
+package harbor
+
+import (
+	"context"
+	"io"
+	"testing"
+	"time"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/replay"
+)
+
+func TestRelaxedCompCertJoinsTheOriginalForegroundProcess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	finish := make(chan struct{})
+	calls := 0
+	processes := NewProcessSessions(ctx, func(ctx context.Context, command replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
+		calls++
+		select {
+		case <-finish:
+		case <-ctx.Done():
+			return core.CommandResult{}, ctx.Err()
+		}
+		_, err := io.WriteString(stdout, "actual late output")
+		return core.CommandResult{ExitCode: 7}, err
+	})
+	defer processes.Close()
+	command := replay.Call{Operation: "Exec", Sequence: 3, ExitCode: 0, YieldTime: time.Millisecond}
+	first, err := processes.ObserveDrift(ctx, command)
+	if err != nil || first.ExitCode != ProcessRunning {
+		t.Fatalf("first observation %v, %v", first, err)
+	}
+	close(finish)
+	var records []Receipt
+	hooks := Hooks{FinishObservedProcess: processes.FinishObservedProcess, Record: func(r Receipt) error {
+		if r.Exit != nil {
+			e := *r.Exit
+			r.Exit = &e
+		}
+		records = append(records, r)
+		return nil
+	}}
+	if err := recordReply(ctx, hooks, command, Receipt{Step: 4, Operation: "Exec"}, first, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(records) != 4 || *records[0].Exit != ProcessRunning || *records[2].Exit != 7 ||
+		records[2].Stdout != "actual late output" || records[3].StatusBasis != "real_terminal_exit_differs_after_join" {
+		t.Fatalf("calls %d, observations %+v", calls, records)
+	}
+}
