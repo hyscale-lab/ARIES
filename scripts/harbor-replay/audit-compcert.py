@@ -105,7 +105,15 @@ def inspect(source, cache, attempts):
             header = outputs[cid].split("\nOutput:\n",1)[0]
             wall = float(re.search(r"Wall time: ([\d.]+) seconds", header)[1])
             polls.append((max(5000, c["arguments"].get("yield_time_ms",0))/1000,wall,elapsed))
-    return dict(trial=source.name, trajectory_sha256=sha(atif), rollout_sha256=sha(rollout),
+    history = []
+    for attempt in sorted(attempts.glob(prefix+"*.json")):
+        receipt = json.loads(attempt.read_bytes())
+        mismatched = [{"step": t["step_id"], "live": t["exit_code"], "source": t["expected_exit_code"]}
+                      for t in receipt["tools"] if t["exit_code"] != t["expected_exit_code"]]
+        history.append(dict(receipt=attempt.name, sha256=sha(attempt), guest_calls=len(receipt["tools"]),
+                            completed=receipt["session_completed"], diagnostic=bool(receipt.get("diagnostic_process_drift")),
+                            status_differences=mismatched))
+    return dict(trial=source.name, trajectory_sha256=sha(atif), rollout_sha256=sha(rollout),attempt_history=history,
         source_guest_calls=len(calls), original_APT=source_apt, old_live_APT=live_apt,
         extra_new_in_live=sorted(set(live_apt["new"])-set(source_apt["new"])),
         missing_new_in_live=sorted(set(source_apt["new"])-set(live_apt["new"])),
