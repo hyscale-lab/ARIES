@@ -79,6 +79,10 @@ def main():
                 continue
             suffix = "-guest-codec" if task == "code-from-image" else ""
             reference = a.receipts / f"{task}-{trial}{suffix}.json"
+            if a.video:
+                strict = a.receipts / f"{task}-{trial}-strict.json"
+                if strict.exists():
+                    reference = strict
             if not reference.exists():
                 pending.append({"task": task, "trial_id": trial, "reason": "unavailable matching native fidelity receipt"})
                 continue

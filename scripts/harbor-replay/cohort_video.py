@@ -12,6 +12,35 @@ WHEEL_HASHES = {
 }
 
 
+def opencv_profile(receipt):
+    ready, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
+    profile = ready.get("video_opencv_ipp")
+    if profile is None:
+        if receipt.get("video_opencv_runtime"):
+            raise ValueError("OpenCV environment readback lacks a validation profile")
+        return None
+    if profile != "disabled" or receipt["trial_id"] not in {
+        "aa067203-b539-48d0-9c99-2128f941c9d0", "020f911b-467e-49ad-8113-bb725bee1d4b"
+    }:
+        raise ValueError("unexpected source-specific OpenCV environment")
+    validate_runtime(receipt["video_opencv_runtime"])
+    return profile
+
+
+def validate_runtime(events):
+    if [e["phase"] for e in events] != ["before_snapshot", "after_restore"]:
+        raise ValueError("missing OpenCV deployment readback across restore")
+    observed = [e["runtime"] for e in events]
+    if observed[0] != observed[1]:
+        raise ValueError("restored OpenCV execution profile differs")
+    r = observed[0]
+    if (r["profile"] != "disabled" or r["ipp_enabled"] is not False or r["ipp_inexact"] is not False
+            or (r["opencv"], r["numpy"], r["python"], r["video_backend"]) != ("5.0.0", "2.5.2", "3.13.7", "FFMPEG")
+            or not r["cpu_features"] or not re.fullmatch("[a-f0-9]{64}", r["opencv_build_sha256"])):
+        raise ValueError("native OpenCV profile readback differs from reviewed software")
+    return r
+
+
 def replay_args(asset, receipt, cni):
     args = network_args(cni, "zbvideo")
     helper = asset / "aries-harbor-image"
@@ -24,6 +53,8 @@ def replay_args(asset, receipt, cni):
         if digest(path) != sha:
             raise ValueError("GNU patch archive differs from the validated guest")
         args.extend(["-os-tools", str(path)])
+    if profile := opencv_profile(receipt):
+        args.extend(["-video-opencv-ipp", profile])
     return args
 
 
@@ -42,6 +73,15 @@ def verify(run, receipt):
         raise ValueError("missing network evidence across restore")
     if any(e["network"]["pypi_status"] != 200 or not e["network"]["pypi_addresses"] for e in networks):
         raise ValueError("guest could not reach the original package index")
+    runtime_events = [e for e in events if e["event"] == "video_opencv_runtime"]
+    if opencv_profile(receipt):
+        current = validate_runtime(runtime_events)
+        reference = validate_runtime(receipt["video_opencv_runtime"])
+        if current["opencv_build_sha256"] != reference["opencv_build_sha256"]:
+            raise ValueError("OpenCV build identity differs from native validation")
+        result["video_opencv_runtime"] = current
+    elif runtime_events:
+        raise ValueError("unexpected OpenCV execution profile")
     final = result["final_checks"].splitlines()
     if not re.fullmatch(r"[a-f0-9]{64}  output\.toml", final[0]) or "example_video.mp4: OK" not in final:
         raise ValueError("final source video/output verification missing")

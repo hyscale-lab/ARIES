@@ -18,6 +18,8 @@ case "${3:-video}" in
         if [[ ${3:-video} == video-amd* ]]; then node=${3#video-amd}; fi
         bridge=zbvid$node
         if [[ $node != 183 ]]; then subnet=10.234.$node.0/28; fi
+        # The financial-document deployment on amd182 owns 10.234.182.0/28.
+        if [[ $node == 182 ]]; then subnet=10.240.182.0/28; fi
         chain=ZB${node}PYPI
         name=zbvideo$node
         ;;

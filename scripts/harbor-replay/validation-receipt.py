@@ -91,6 +91,8 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
                                  "rollout_sha256", "memory_mib", "storage_mib", "vcpus")},
         "task": task, "host": host, "configuration": configuration, "adapter_revision": revision,
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+        **({"video_opencv_runtime": [e for e in events if e["event"] == "video_opencv_runtime"]}
+           if any(e["event"] == "video_opencv_runtime" for e in events) else {}),
         "observer": first["observer"], "session_completed": bool(full),
         "diagnostic_process_drift": first.get("diagnostic_process_drift",False),
         "diagnostic_opam_log": first.get("diagnostic_opam_log",False),
