@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -68,7 +69,8 @@ def main():
     if (phase,step)==('post-tool',12):
         assert Path(os.environ['ZB_RELEASE_HANDLER_EVENTS']).read_text().startswith('ready ')
         row['presence_before']=present(stage,out,'post12-before',pid,ticks,ram)
-        row['wheel_release']=snapshot(vsock,request=b'evictwhl\n' if arm=='treated' else b'shamwhls\n')
+        action_probe=runpy.run_path(str(stage/'guest_sample.py'))['snapshot']
+        row['wheel_release']=action_probe(vsock,request=b'evictwhl\n' if arm=='treated' else b'shamwhls\n')
         result=row['wheel_release']['guest']
         assert not result.get('error') and result['advice_syscalls_enabled']==(arm=='treated')
         row['presence_after']=present(stage,out,'post12-after',pid,ticks,ram)
