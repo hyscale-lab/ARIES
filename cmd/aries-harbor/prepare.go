@@ -62,14 +62,16 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
- if r.Task == "git-leak-recovery" { task.initialCheck += gitRecoveryTemp(r.Trial) }
+	if r.Task == "git-leak-recovery" {
+		task.initialCheck += gitRecoveryTemp(r.Trial)
+	}
 	if r.Task == "compile-compcert" {
 		task.initialCheck = compilerAPT(r.Plan.StartedAt) + task.initialCheck
 	}
 	if r.Task == markerTask {
 		profile, bound := markerTrials[r.Trial]
 		ok = bound
-		task.initialCheck = markerReady(profile.stamp)
+		task.initialCheck = markerReady(r.Trial, profile.stamp)
 	}
 	if r.Task == hfTask {
 		_, ok = hfTrials[r.Trial]
