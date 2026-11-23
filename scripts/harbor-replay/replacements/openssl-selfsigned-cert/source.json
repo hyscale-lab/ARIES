@@ -1,0 +1,54 @@
+{
+  "job_id": "17d1a7f6-3339-4670-8b70-3b145979f57f",
+  "task_config": "https://raw.githubusercontent.com/harbor-framework/terminal-bench-2-1/12b7565679ce5006230b820666353673a133db93/tasks/openssl-selfsigned-cert/task.toml",
+  "median_source_wall_s": 317.633,
+  "deep_trial": "a863bf5e-1a00-4d4e-bba7-3700e53d6dbe",
+  "reviewed": {
+    "task": "openssl-selfsigned-cert",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/openssl-selfsigned-cert@sha256:4c948a4e630af2435ae0a19108fc0814a946ac2fa29a512469e0fc77b38c8c12",
+    "effects": [
+      "Create a disposable internal-development TLS key, self-signed certificate, combined PEM and verification script; keep all key data guest-local"
+    ],
+    "trials": [
+      {
+        "trial": "0feef1f2-d744-49f2-9887-1e12f3b0c18c",
+        "trajectory_sha256": "3c3b0728557b0c895586e53f84006abadc838cbf1525fdfc0fea119b4e794695",
+        "rollout_sha256": "4da6c5ba909713810b268a72e9e56a0dd3594f510a03460e25cdb917f9bbfc38",
+        "source_wall_s": 298.535
+      },
+      {
+        "trial": "17fc4a8c-192e-46a3-9657-5811e290314e",
+        "trajectory_sha256": "18e243ee52ed79cca6d8c7c8a531cd9cc3b2309e5eb0e9afd1b4ce66bc58d9de",
+        "rollout_sha256": "36093889cc519f34000382d059f579722ac011b39d4d99c4b022fda6deecfbc1",
+        "source_wall_s": 303.871
+      },
+      {
+        "trial": "a863bf5e-1a00-4d4e-bba7-3700e53d6dbe",
+        "trajectory_sha256": "d5c372e35e5f4b8b01e82775db00d7133b79f51b9af66e1e1de3378234295a6b",
+        "rollout_sha256": "209d68ac2230d1f5ffa74ad76a1879598124b69986e83f77a7437a22e4ff52e0",
+        "source_wall_s": 317.633
+      },
+      {
+        "trial": "ad5c88ee-b7b8-4259-9bdd-6be50debf3ac",
+        "trajectory_sha256": "d3f2dcb8df59f99e3af86c56a7c840ccfb12ab1ec29d2954efb5ddcd7dcd6cfa",
+        "rollout_sha256": "318c369e38c0346010e2452edf93d41327414108aae3e4863babaa034fe7d315",
+        "source_wall_s": 344.492
+      },
+      {
+        "trial": "b4bb4ece-1409-4a42-903e-eb4a25daf4f7",
+        "trajectory_sha256": "396f1f37a0b82bd11c30f177624197438aef028f211048f82c8fd333e4426746",
+        "rollout_sha256": "1c92224f71176efa17e3eafe2265c91ee173401d773413c6ebcf503973ed31f3",
+        "source_wall_s": 447.245
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call"
+    ]
+  }
+}
