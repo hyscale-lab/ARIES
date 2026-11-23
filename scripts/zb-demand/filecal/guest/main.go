@@ -30,6 +30,7 @@ type fixture struct {
 	mapping  []byte
 	stage    string
 	baseline string
+	synced   string
 	fs       unix.Statfs_t
 	stat     unix.Statx_t
 }
@@ -245,7 +246,34 @@ func (f *fixture) step(action string) (observation, error) {
 			return observation{}, fmt.Errorf("synced direct readback %d: %w", n, shortIO(err))
 		}
 		f.stage = "synced"
-		return f.observe(action, hash(f.mapping), hash(buffer))
+		f.synced = hash(buffer)
+		return f.observe(action, hash(f.mapping), f.synced)
+	case "evict":
+		if f.stage != "synced" {
+			break
+		}
+		if err := unix.Munmap(f.mapping); err != nil {
+			return observation{}, err
+		}
+		f.mapping = nil
+		f.stage = "unmapped"
+		if err := unix.Fadvise(int(f.file.Fd()), offset, page, unix.FADV_DONTNEED); err != nil {
+			return observation{}, fmt.Errorf("advise eviction: %w", err)
+		}
+		// Remap without touching the page so mincore can check the file cache.
+		var err error
+		f.mapping, err = unix.Mmap(int(f.file.Fd()), offset, page, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+		if err != nil {
+			return observation{}, err
+		}
+		f.stage = "eviction-requested"
+		return f.observe(action, "", f.synced)
+	case "reread":
+		if f.stage != "eviction-requested" {
+			break
+		}
+		f.stage = "reread"
+		return f.observe(action, hash(f.mapping), f.synced)
 	}
 	return observation{}, fmt.Errorf("invalid action %q in stage %s", action, f.stage)
 }

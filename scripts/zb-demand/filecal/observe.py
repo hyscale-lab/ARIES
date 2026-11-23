@@ -78,15 +78,22 @@ def read_at(path, size, offset):
         os.close(fd)
 
 
-def one_page(pid, start_ticks, slot, baseline, guest_pfn):
+def one_page(pid, start_ticks, slot, baseline, guest_pfn, *, residency_only=False):
     gpa = guest_pfn * PAGE
     if slot["guest_phys_addr"] != 0 or not 0 <= gpa <= slot["memory_size"] - PAGE:
         raise ValueError("known page requires a zero-based, fully captured RAM slot")
     hva = slot["userspace_addr"] + gpa
     root = Path("/proc") / str(pid)
     offset = hva // PAGE * 8
-    baseline_digest = sha256(read_at(baseline, PAGE, gpa)).hexdigest()
     pte, = struct.unpack("=Q", read_at(root / "pagemap", 8, offset))
+    if residency_only:
+        if start_identity(pid) != start_ticks:
+            raise RuntimeError("host process changed while checking old GPA")
+        resident = bool(pte & PRESENT)
+        frame = pte & PFN_MASK
+        return {"resident": resident, "live_bytes_read": False,
+                "host_pfn_private": frame if resident and frame else None}
+    baseline_digest = sha256(read_at(baseline, PAGE, gpa)).hexdigest()
     if not pte & PRESENT:
         return {"resident": False, "snapshot_sha256": baseline_digest}
     frame = pte & PFN_MASK
@@ -101,21 +108,21 @@ def one_page(pid, start_ticks, slot, baseline, guest_pfn):
 
 
 def verify(rows):
-    state, read, write, synced = [x["guest"] for x in rows]
+    state, read, write, synced, evicted, reread = [x["guest"] for x in rows]
     if state["pte_present"] or state["mincore_present"]:
         raise ValueError("restore did not preserve the cold file cache and absent guest PTE")
     if len({(x["device_major"], x["device_minor"], x["inode"], x["file_offset_bytes"]) for x in
-            (state, read, write, synced)}) != 1:
+            (state, read, write, synced, evicted, reread)}) != 1:
         raise ValueError("file ownership or offset changed in the fixture")
     if len({x["guest_pfn"] for x in (read, write, synced)}) != 1:
         raise ValueError("guest PFN changed in the fixture")
-    for row in rows[1:]:
+    for row in rows[1:4]:
         host, guest = row["host"], row["guest"]
         if not host["resident"] or host["live_sha256"] != guest["mapped_sha256"]:
             raise ValueError("host and guest bytes differ for the controlled page")
-    if len({x["host"]["snapshot_sha256"] for x in rows[1:]}) != 1:
+    if len({x["host"]["snapshot_sha256"] for x in rows[1:4]}) != 1:
         raise ValueError("baseline snapshot bytes changed within the fixture")
-    if any(row["host"]["snapshot_equal"] for row in rows[1:]):
+    if any(row["host"]["snapshot_equal"] for row in rows[1:4]):
         raise ValueError("expected different bytes in the same frame of the private snapshot")
     flags = [x["guest_page_flags"] for x in (read, write, synced)]
     if flags[0] & (GUEST_DIRTY | GUEST_WRITEBACK) or flags[2] & (GUEST_DIRTY | GUEST_WRITEBACK):
@@ -128,6 +135,13 @@ def verify(rows):
             or synced["mapped_sha256"] != write["mapped_sha256"]
             or synced["known_synced_backing_sha256"] != synced["mapped_sha256"]):
         raise ValueError("writeback did not preserve the buffered mutation")
+    if evicted["mincore_present"] or evicted["pte_present"] or "guest_pfn" in evicted:
+        raise ValueError("file-cache removal was not observed on the untouched remap")
+    if not (reread["mincore_present"] and reread["pte_present"]
+            and not reread["guest_page_flags"] & (GUEST_DIRTY | GUEST_WRITEBACK)
+            and synced["known_synced_backing_sha256"] == reread["mapped_sha256"]
+            == rows[-1]["host"].get("live_sha256")):
+        raise ValueError("reread did not reconstruct the synchronized file bytes")
 
 
 def run(args):
@@ -148,18 +162,29 @@ def run(args):
         raise ValueError("snapshot size differs from contiguous packed RAM layout")
     rows = []
     initial_host_frame = None
+    synced_pfn = None
     try:
-        for action in ("state", "read", "write", "sync"):
+        for action in ("state", "read", "write", "sync", "evict", "reread"):
             guest, transport = guest_request(vsock, action)
             result = {"phase": action, "guest": guest, "transport_ns": transport, "vmm_version": version}
             if action != "state":
+                eviction = action == "evict"
+                frame_pfn = synced_pfn if eviction else guest.get("guest_pfn")
+                if frame_pfn is None:
+                    raise RuntimeError(f"no guest PFN for {action}")
                 result["freeze"] = {}
                 with frozen(api, result["freeze"]):
-                    result["host"] = one_page(*api.identity, slot, baseline, guest["guest_pfn"])
+                    result["host"] = one_page(*api.identity, slot, baseline, frame_pfn, residency_only=eviction)
                 frame = result["host"].pop("host_pfn_private", None)
                 if action == "read":
                     initial_host_frame = frame
+                if action == "sync":
+                    synced_pfn = frame_pfn
                 result["host"]["same_host_pfn_as_read"] = frame is not None and frame == initial_host_frame
+                if eviction:
+                    result["host"]["sampled_old_guest_pfn"] = frame_pfn
+                if action == "reread":
+                    result["reused_guest_pfn"] = frame_pfn == synced_pfn
             rows.append(result)
             print(json.dumps(result), flush=True)
         verify(rows)

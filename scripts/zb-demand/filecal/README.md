@@ -49,6 +49,16 @@ The fixture records whether the host PFN is the same as at the first
 read. It rejects missing backing, unsupported mapping, incorrect bytes,
 or mismatched file or guest PFN identity.
 
+After direct readback, the fixture unmaps the page, requests
+`POSIX_FADV_DONTNEED` for the aligned file range, and creates an untouched
+mapping of the same offset. It requires both `mincore` and guest pagemap
+to report absence before the reread. Between the request and reread,
+the host observes only the PTE for the pre-eviction GPA. That GPA's PTE
+can stay present after the guest file cache drops the page, and its
+frame may no longer belong to the file. The probe reads no bytes from
+that GPA in this phase. The final reread checks the synchronized bytes,
+guest cache and PTE presence, and whether Linux used the same guest PFN.
+
 A clean read or synced write can match current filesystem backing while
 differing from the VM snapshot. The guest diagnostic demonstrates that
 intersection for the controlled page. It does not quantify the
