@@ -60,6 +60,9 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
+	if r.Task == "compile-compcert" {
+		task.initialCheck = compilerAPT(r.Plan.StartedAt) + task.initialCheck
+	}
 	if r.Task == markerTask {
 		profile, bound := markerTrials[r.Trial]
 		ok = bound
@@ -143,6 +146,11 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	task, ok := sourceSetup(r)
 	if !ok {
 		return "", nil, fmt.Errorf("no ready-state definition for %s", r.Task)
+	}
+	if r.Task == "compile-compcert" {
+		if err := uploadPinned(ctx, m, id, packages, compilerBootstrapSHA, "/tmp"); err != nil {
+			return "", nil, err
+		}
 	}
 	if r.Task == kvTask || r.Trial == datasetPythonTrial {
 		if err := uploadPinned(ctx, m, id, packages, kvPythonSHA, "/"); err != nil {
@@ -235,6 +243,9 @@ rg --version | head -1`
 	}
 	if r.Trial == hfLoopbackTrial || r.Trial == datasetPythonTrial {
 		details["debian_curl_archive_sha256"] = debianCurlSHA
+	}
+	if r.Task == "compile-compcert" {
+		details["ubuntu_ca_bootstrap_sha256"] = compilerBootstrapSHA
 	}
 	if r.Trial == datasetPythonTrial {
 		details["python_environment_sha256"] = kvPythonSHA
@@ -386,7 +397,7 @@ with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/I
 		probe = "use_revision_endpoint = " + mode + "\n" + datasetNetworkProbe
 	}
 	if task == "compile-compcert" {
-		python, probe = "/usr/bin/python3", compilerNetworkCheck(recording.Trial)
+		python, probe = "/usr/bin/python3", compilerNetworkCheck(recording.Trial, recording.Plan.StartedAt)
 	}
 	if task == sparqlTask {
 		python, probe = "/usr/bin/python3", sparqlNetworkProbe

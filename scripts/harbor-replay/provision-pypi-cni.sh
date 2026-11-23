@@ -63,6 +63,15 @@ case "${3:-video}" in
         tls_hosts=(github.com raw.githubusercontent.com opam.ocaml.org archive.ubuntu.com security.ubuntu.com)
         http_hosts=(archive.ubuntu.com security.ubuntu.com)
         ;;
+    compiler-snapshot-amd183)
+        private_dns=true
+        bridge=zbccsnap183
+        subnet=10.239.183.0/28
+        chain=ZB183CCSNAP
+        name=zbccsnap183
+        dns_unit=zb-ccsnap-dns-amd183
+        tls_hosts=(github.com raw.githubusercontent.com opam.ocaml.org snapshot.ubuntu.com)
+        ;;
     compcert)
         bridge=zbcc189
         subnet=10.231.189.0/28
