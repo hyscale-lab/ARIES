@@ -56,7 +56,7 @@ esac
 test "$(cat /sys/devices/system/cpu/smt/active)" = 0
 ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'
 attempt=${stage##*-}
-if [[ $attempt == 07 || $attempt == 08 ]]; then
+if [[ $attempt == 07 || $attempt == 08 || $attempt == 09 ]]; then
     test -s "$stage/placement-release.json"
     if [[ $kind == deep || $attempt == 08 ]]; then
         python3 -B - "$stage/ordinary-admission.json" <<'PY_GATE'
@@ -76,13 +76,27 @@ else
     sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
 fi
 test "$(sudo -n systemctl show -p ActiveState --value "$unit")" = active
-[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 || $attempt == 07 || $attempt == 08 ]]
+[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 || $attempt == 07 || $attempt == 08 || $attempt == 09 ]]
 if [[ $attempt == 05 ]]; then
     [[ "$node:$variant:$kind" == amd198:v4:ordinary ]]
 fi
 diagnostic=()
 if [[ $attempt == 07 ]]; then
     [[ $node == amd201 ]]
+    diagnostic=(-diagnostic-process-drift)
+fi
+if [[ $attempt == 09 ]]; then
+    [[ "$node" == amd201 && "$kind" == deep && "$variant" =~ ^v[14]$ ]]
+    python3 -B - "$stage/previous-deep-prefix.json" "$variant" <<'PY_PREFIX'
+import json
+import sys
+with open(sys.argv[1]) as stream:
+    previous = json.load(stream)[sys.argv[2]]
+assert previous["node"] == "amd201" and previous["source_observed_tool_replies"] == 11
+assert previous["new_step16"] == {"step_id":16,"sequence":11,"exit_code":-1,"expected_exit_code":0}
+assert previous["status"] == "partial_fidelity" and previous["removed"]
+assert len(previous["archive_sha256"]) == len(previous["raw_idle_sha256"]) == 64
+PY_PREFIX
     diagnostic=(-diagnostic-process-drift)
 fi
 if [[ $attempt == 08 ]]; then
