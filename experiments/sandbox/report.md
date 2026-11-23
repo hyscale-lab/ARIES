@@ -10,9 +10,11 @@
   scored 1, and were confirmed isolated and cleaned up.
 - **agent-sandbox adds nothing to start-up** over a plain pod. gVisor adds
   nothing at start; Kata adds about 4 s to boot its VM.
-- **A warm pool brings a later start down to 1.8 s on every runtime,** hiding
-  Kata's VM boot. Its first claim is cold, and pooled sandboxes are less
-  isolated than per-task ones (see [Warm pools](#warm-pools)).
+- **A warm pool brings every sandbox start down to 1.8 s on every runtime,**
+  hiding Kata's VM boot. ARIES now readies a run's pools before its first task,
+  because a claim on a pool with no ready pod gets a slower pod of its own.
+  Pooled sandboxes are less isolated than per-task ones (see
+  [Warm pools](#warm-pools)).
 - **End to end, the sandbox setup hardly matters.** In the cold and warm
   campaign, every setup's cold latency is within about 1 s of the plain pod's,
   because the sandbox starts while the harness does (12 s for Hermes, 56 s for
@@ -133,8 +135,9 @@ processes were left afterwards.
 
 ![Sandbox start and cleanup in ARIES, per runtime and mode](figures/phase1-lifecycle.png)
 
-With a warm pool, the first task of a run is a cold claim, and the rest are
-warm:
+With a warm pool, the first task of a run was a cold claim in these replays,
+and the rest were warm. ARIES now readies the pool before the first task (see
+[Warm pools](#warm-pools)).
 
 ![A warm pool's first and later claims against creating each sandbox](figures/phase1-warm-pool.png)
 
@@ -170,8 +173,14 @@ pods.
 
 ### Warm pools
 
-A pool is created on the first claim of a pod spec in a run, as a
-`SandboxTemplate` and a `SandboxWarmPool`. Each sandbox creates a
+In the Phase 1 replays a pool was created on the first claim of a pod spec in
+a run, as a `SandboxTemplate` and a `SandboxWarmPool`. That claim was cold. A
+claim on a pool with no ready pod doesn't wait for it: agent-sandbox makes the
+claim a pod of its own about 2 s later, while the pool's pod keeps booting.
+Timed directly, that takes 3.0 s against 1.7 s for a plain Sandbox under runc,
+and 8.0 s against 5.8 s under Kata. ARIES therefore now creates every task's
+pool once the run starts and waits until it is ready, before the first task
+(commit `9f9deac`). Each sandbox creates a
 `SandboxClaim`, and ARIES patches the task's labels and annotations onto the
 claimed pod. The claim is deleted in the foreground when the task ends, and
 the run's pools and templates when the run ends. Tasks that share an image,
@@ -247,12 +256,17 @@ other. All 70 measured runs succeeded, and all 350 task runs were solved. Its
 - **Cold latency:** every setup is within about 1 s of the plain pod, most of
   them within noise. The harness start dominates cold start-up, and every
   sandbox start finishes inside it, Kata's 6.5 s included.
-- **Warm pools:** a pool brings a sandbox start down to 1.8 s on every runtime
-  once its pod is ready. Each run creates its own pool, so the run's first
-  task claims a pod that is still starting: 2.8 s under runc and gVisor, 8.7 s
-  under Kata. Neither saving is visible end to end. Under Kata the pool's
-  replacement VM boots beside the harness and lengthens OpenClaw's harness
-  start by up to 2 s.
+- **Warm pools:** every task, the run's first included, claims a ready pod and
+  starts its sandbox in 1.8–1.9 s on every runtime.
+  - **Rerun with the fix:** the warm-pool setups were run again on 2026-11-23,
+    after the pools-at-run-start fix. Readying the pools adds 1.9 s (runc),
+    2.3 s (gVisor) or 6.3 s (Kata) once, before the first task. In the first
+    pass, `mb-noop` had claimed a fresh pod: 2.8 s, or 8.7 s under Kata.
+  - **Not visible end to end:** none of the saving reaches the user.
+  - **OpenClaw's harness start:** it is 1.0–1.5 s longer on every pooled
+    runtime, and Hermes doesn't show this. The rerun wasn't interleaved with
+    the other setups, so the campaign can't separate the pool's replacement
+    pod from a change between the two days.
 - **Tool calls:** this is where gVisor and Kata cost time, by the same amount
   in plain, agent-sandbox and pooled pods. Each call is 60–70 ms slower for
   OpenClaw and 140–150 ms slower for Hermes, which makes 5 sandbox commands
@@ -281,7 +295,8 @@ other. All 70 measured runs succeeded, and all 350 task runs were solved. Its
 | Configuration | `pkg/config/deployment.go`: `runtime_class`, `agent_sandbox`, `warm_pool`, accepted only on `sandbox.deployment` |
 | Pod and Sandbox manifests | `pkg/deployment/kubernetes/manifest.go`: `runtimeClassName`; a `Sandbox` around the same pod template, with no Service of its own and failed pods retained |
 | Lifecycle | `pkg/deployment/kubernetes/kubernetes.go`: wait on the Sandbox's `Ready`; recover a lost create from the Sandbox; check runtime class and owner; foreground delete, then confirm the Sandbox and pod are gone |
-| Warm pools | `pkg/deployment/kubernetes/warmpool.go`: run-owned template and pool per pod spec with a deny-all policy; claim, then label the pod; foreground claim delete; `environment.go` removes the run's pools |
+| Warm pools | `pkg/deployment/kubernetes/warmpool.go`: run-owned template and pool per pod spec with a deny-all policy; claim, then label the pod; foreground claim delete; `environment.go` readies the run's pools before the first task (`Prewarm`) and removes them |
+| Prewarm | `internal/app/run.go` builds every task's sandbox request (`runner.SandboxRequest`) once image working directories are resolved; `internal/app/wiring/sandbox` turns them into pod specs (`sandbox.DeploymentRequest`) |
 | Bridge | `pkg/deployment/kubernetes/bridge.go`: the target check matches the pod by name and the sandbox by label |
 | Measurement | `pkg/deployment/kubernetes/resources.go`: RuntimeClass pods read from the pod sandbox cgroup |
 | Wiring | `internal/app/wiring/deployment/kubernetes.go` |
@@ -294,8 +309,10 @@ other. All 70 measured runs succeeded, and all 350 task runs were solved. Its
 ## Open items
 
 - Publish a bridge image for this branch (`make k8s-images`). Pooled runs
-  need it; the campaign used one built from its commit and loaded onto the
+  need it; the campaign used images built from its commits and loaded onto the
   workers (`bridge_repository`).
+- Settle OpenClaw's longer harness start under warm pools with an interleaved
+  rerun of the plain pod and one warm-pool setup.
 - Phase 3, CubeSandbox: needs agreement to run the harness and the sandbox on
   different deployment backends.
 - Remove the stopped OpenSandbox server on `node-002`, the CubeSandbox services on

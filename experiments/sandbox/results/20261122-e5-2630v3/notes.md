@@ -7,12 +7,32 @@ time is identical across setups. The plain pod (ARIES K8s) is the baseline;
 native and Docker are not run here, and the coldwarm campaign compares them
 with ARIES K8s.
 
-All 70 measured runs succeeded, 350 of 350 task runs solved. The 14 left out
-are the planned warm-up runs, one per harness and setup.
+All 70 measured runs succeeded, 350 of 350 task runs solved. Left out are the
+planned warm-up runs, one per harness and setup, and the warm-pool runs of the
+first pass (below).
 
-Each run executes the five tasks in order, `mb-noop` first. A warm-pool run
-creates its own pool of one when the run starts, so `mb-noop` claims a pod
-that is still starting, and only the later four tasks claim a ready one.
+Each run executes the five tasks in order, `mb-noop` first.
+
+### The warm-pool setups were run again
+
+In the first pass (2026-11-22), each warm-pool run created its pool on its
+first task's claim. A claim on a pool with no ready pod does not wait for it:
+agent-sandbox makes the claim a pod of its own about 2 s later, while the
+pool's pod keeps booting. `mb-noop` therefore started its sandbox in 2.8 s
+under runc and gVisor and 8.7 s under Kata, slower than without a pool.
+
+ARIES now readies a run's pools before its first task (commit `9f9deac`). The
+six warm-pool setups were run again on 2026-11-23, after the other setups had
+finished, with their own warm-ups. The first pass's 30 runs are kept and
+marked superseded. The bridge's code is unchanged, but the commit gave it a
+new revision, so these runs used the bridge image
+`aries-bridge:v1-9f9deaca3645`. Readying the pool before the first task takes
+1.9 s under runc, 2.3 s under gVisor and 5.3–6.3 s under Kata. This happens
+once per run and is not part of any task's time.
+
+The rerun was not interleaved with the other setups, so differences between
+the warm-pool setups and the rest also include anything that changed on the
+workers in between.
 
 ### The sandbox is not on the critical path
 
@@ -28,19 +48,19 @@ within one standard deviation.
 | gVisor | | 2.6 | 1.8 |
 | Kata | | 6.5 | 1.8 |
 
-The warm pool's 1.8 s is for the four tasks that claim a ready pod. When the
-pod is still starting (`mb-noop`), the claim takes 2.8 s under runc and gVisor
-and 8.7 s under Kata, longer than creating the pod directly.
+With the pool readied first, every task claims a ready pod, `mb-noop`
+included: 1.8–1.9 s on every runtime. A pool therefore saves 0.9 s (runc) to
+4.7 s (Kata) of sandbox start. With these harnesses none of it reaches the
+user. It would matter only for a harness that starts faster than its sandbox.
 
-A pool therefore saves at most 0.9 s (runc) to 4.7 s (Kata) of sandbox start,
-and with these harnesses none of it reaches the user. It would matter only for
-a harness that starts faster than its sandbox.
-
-The largest cold difference, +1.1 s for OpenClaw on the Kata warm pool, comes
-from a longer harness start, not from the sandbox. The likely cause is the
-pool booting a replacement Kata VM, which uses CPU on the same worker while the
-harness starts. `mb-noop`'s harness start is 2.0 s longer there, and in that
-task the claimed VM is also booting.
+OpenClaw's cold latency on the warm-pool setups is 1.1–1.2 s above the plain
+pod's, on every runtime. That comes from a longer harness start (+1.0–1.5 s),
+not from the sandbox. Hermes shows nothing similar. This campaign can't tell
+whether the pool causes it or the reruns ran under different conditions:
+- One possible cause is the pool starting a replacement pod beside the
+  harness, which is busy starting on the same worker.
+- The other is the day between the two passes. In the first pass the effect
+  was smaller and uneven, from 0 to +2 s depending on the task.
 
 ### Where gVisor and Kata cost time: tool calls
 
@@ -51,8 +71,8 @@ The cost per call in warm `mb-ten-calls`, as the harness timed it:
 
 | Harness | runc | gVisor | Kata |
 |---|---|---|---|
-| OpenClaw | 608–614 ms | 668–674 ms (+60) | 680–681 ms (+70) |
-| Hermes | 432–436 ms | 585–588 ms (+150) | 575 ms (+140) |
+| OpenClaw | 608–614 ms | 667–674 ms (+60) | 680–682 ms (+70) |
+| Hermes | 432–436 ms | 585–593 ms (+155) | 574–575 ms (+140) |
 
 The per-task reports' bridge rows split this cost:
 - **OpenClaw:** each call is about 4 sandbox commands. Under gVisor and Kata
@@ -81,7 +101,7 @@ measurable.
   in the sandbox, so it pays the per-command cost.
 - **Clean-up:** about 1.2 s faster under gVisor and Kata (2.0–2.3 s) than
   under runc. Under runc it takes 3.3 s for the plain pod, 3.6–4.0 s for
-  agent-sandbox and 4.6 s for the warm pool. The same ordering appeared in
+  agent-sandbox and 4.5–4.6 s for the warm pool. The same ordering appeared in
   the Phase 1 replays. All three delete in the foreground, so each waits until
   the containers have left the node. Under runc the sandbox's `sleep`
   ignores the stop signal and waits out the grace period, and a claim's

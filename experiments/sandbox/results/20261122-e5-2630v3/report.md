@@ -64,21 +64,21 @@ Cold latency:
 
 | Task | ARIES K8s | agent-sandbox | agent-sandbox gVisor | agent-sandbox Kata | Warm pool | Warm pool gVisor | Warm pool Kata |
 |---|---|---|---|---|---|---|---|
-| [`mb-noop`](tasks/mb-noop.md) | 64.30 | 64.40 | 63.76 | 65.01 | 65.06 | 65.32 | 66.35 |
-| [`mb-one-call`](tasks/mb-one-call.md) | 66.91 | 67.05 | 66.66 | 66.69 | 67.25 | 67.17 | 67.58 |
-| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 85.59 | 84.77 | 85.68 | 86.09 | 85.29 | 85.32 | 86.04 |
-| [`mb-cpu`](tasks/mb-cpu.md) | 73.53 | 73.32 | 73.62 | 74.16 | 74.33 | 73.30 | 75.37 |
-| [`mb-output`](tasks/mb-output.md) | 67.90 | 67.97 | 68.17 | 67.85 | 67.75 | 69.21 | 68.61 |
+| [`mb-noop`](tasks/mb-noop.md) | 64.30 | 64.40 | 63.76 | 65.01 | 66.00 | 65.63 | 65.23 |
+| [`mb-one-call`](tasks/mb-one-call.md) | 66.91 | 67.05 | 66.66 | 66.69 | 67.85 | 67.20 | 68.40 |
+| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 85.59 | 84.77 | 85.68 | 86.09 | 86.14 | 87.60 | 86.93 |
+| [`mb-cpu`](tasks/mb-cpu.md) | 73.53 | 73.32 | 73.62 | 74.16 | 74.91 | 74.98 | 74.42 |
+| [`mb-output`](tasks/mb-output.md) | 67.90 | 67.97 | 68.17 | 67.85 | 69.41 | 68.41 | 69.28 |
 
 Warm latency:
 
 | Task | ARIES K8s | agent-sandbox | agent-sandbox gVisor | agent-sandbox Kata | Warm pool | Warm pool gVisor | Warm pool Kata |
 |---|---|---|---|---|---|---|---|
-| [`mb-noop`](tasks/mb-noop.md) | 2.32 | 2.50 | 2.60 | 2.60 | 2.56 | 2.63 | 2.40 |
-| [`mb-one-call`](tasks/mb-one-call.md) | 5.41 | 5.58 | 5.42 | 5.65 | 5.48 | 5.45 | 5.37 |
-| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 24.58 | 24.47 | 25.01 | 25.17 | 24.63 | 25.09 | 25.29 |
-| [`mb-cpu`](tasks/mb-cpu.md) | 10.55 | 10.56 | 10.77 | 10.79 | 10.82 | 10.90 | 10.88 |
-| [`mb-output`](tasks/mb-output.md) | 6.20 | 6.03 | 6.13 | 6.44 | 6.04 | 6.14 | 6.37 |
+| [`mb-noop`](tasks/mb-noop.md) | 2.32 | 2.50 | 2.60 | 2.60 | 2.45 | 2.57 | 2.54 |
+| [`mb-one-call`](tasks/mb-one-call.md) | 5.41 | 5.58 | 5.42 | 5.65 | 5.43 | 5.49 | 5.60 |
+| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 24.58 | 24.47 | 25.01 | 25.17 | 24.60 | 25.17 | 25.52 |
+| [`mb-cpu`](tasks/mb-cpu.md) | 10.55 | 10.56 | 10.77 | 10.79 | 10.62 | 11.11 | 11.41 |
+| [`mb-output`](tasks/mb-output.md) | 6.20 | 6.03 | 6.13 | 6.44 | 6.06 | 6.06 | 6.19 |
 
 ### Hermes
 
@@ -86,21 +86,21 @@ Cold latency:
 
 | Task | ARIES K8s | agent-sandbox | agent-sandbox gVisor | agent-sandbox Kata | Warm pool | Warm pool gVisor | Warm pool Kata |
 |---|---|---|---|---|---|---|---|
-| [`mb-noop`](tasks/mb-noop.md) | 25.22 | 24.67 | 24.87 | 24.72 | 25.05 | 25.05 | 24.80 |
-| [`mb-one-call`](tasks/mb-one-call.md) | 27.81 | 27.21 | 28.61 | 28.21 | 27.54 | 28.43 | 27.99 |
-| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 42.65 | 42.19 | 44.42 | 44.38 | 41.93 | 44.25 | 44.28 |
-| [`mb-cpu`](tasks/mb-cpu.md) | 31.57 | 31.68 | 32.28 | 32.49 | 31.91 | 32.06 | 32.80 |
-| [`mb-output`](tasks/mb-output.md) | 27.38 | 26.97 | 27.85 | 28.12 | 27.56 | 28.68 | 27.78 |
+| [`mb-noop`](tasks/mb-noop.md) | 25.22 | 24.67 | 24.87 | 24.72 | 24.43 | 25.13 | 24.60 |
+| [`mb-one-call`](tasks/mb-one-call.md) | 27.81 | 27.21 | 28.61 | 28.21 | 27.17 | 28.08 | 28.01 |
+| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 42.65 | 42.19 | 44.42 | 44.38 | 42.67 | 44.79 | 44.62 |
+| [`mb-cpu`](tasks/mb-cpu.md) | 31.57 | 31.68 | 32.28 | 32.49 | 31.63 | 32.18 | 32.53 |
+| [`mb-output`](tasks/mb-output.md) | 27.38 | 26.97 | 27.85 | 28.12 | 27.40 | 28.39 | 27.47 |
 
 Warm latency:
 
 | Task | ARIES K8s | agent-sandbox | agent-sandbox gVisor | agent-sandbox Kata | Warm pool | Warm pool gVisor | Warm pool Kata |
 |---|---|---|---|---|---|---|---|
 | [`mb-noop`](tasks/mb-noop.md) | 1.64 | 1.64 | 1.64 | 1.64 | 1.64 | 1.65 | 1.64 |
-| [`mb-one-call`](tasks/mb-one-call.md) | 3.63 | 3.61 | 4.12 | 3.92 | 3.67 | 4.13 | 3.92 |
-| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 18.84 | 18.88 | 20.40 | 20.24 | 18.86 | 20.41 | 20.30 |
-| [`mb-cpu`](tasks/mb-cpu.md) | 8.02 | 7.93 | 8.35 | 8.40 | 8.08 | 8.52 | 8.41 |
-| [`mb-output`](tasks/mb-output.md) | 3.93 | 3.95 | 4.40 | 4.23 | 4.08 | 4.40 | 4.25 |
+| [`mb-one-call`](tasks/mb-one-call.md) | 3.63 | 3.61 | 4.12 | 3.92 | 3.65 | 4.09 | 3.92 |
+| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 18.84 | 18.88 | 20.40 | 20.24 | 18.84 | 20.44 | 20.25 |
+| [`mb-cpu`](tasks/mb-cpu.md) | 8.02 | 7.93 | 8.35 | 8.40 | 8.03 | 8.52 | 8.40 |
+| [`mb-output`](tasks/mb-output.md) | 3.93 | 3.95 | 4.40 | 4.23 | 3.98 | 4.44 | 4.23 |
 
 ### Overhead against ARIES K8s
 
@@ -112,16 +112,16 @@ Each ARIES setup's mean minus ARIES K8s's, averaged over the tasks. Per tool cal
 | OpenClaw | agent-sandbox | -0.11 | -0.14 | +0.02 | 614 | 2.10 |
 | OpenClaw | agent-sandbox gVisor | -0.29 | -0.07 | +0.17 | 668 | 2.09 |
 | OpenClaw | agent-sandbox Kata | +0.06 | +0.31 | +0.32 | 680 | 2.18 |
-| OpenClaw | Warm pool | +0.26 | +0.29 | +0.10 | 611 | 2.18 |
-| OpenClaw | Warm pool gVisor | +0.15 | +0.42 | +0.23 | 674 | 2.12 |
-| OpenClaw | Warm pool Kata | +0.65 | +1.14 | +0.25 | 681 | 2.10 |
+| OpenClaw | Warm pool | +1.04 | +1.21 | +0.02 | 608 | 2.10 |
+| OpenClaw | Warm pool gVisor | +0.88 | +1.12 | +0.27 | 667 | 2.17 |
+| OpenClaw | Warm pool Kata | +0.88 | +1.21 | +0.44 | 682 | 2.25 |
 | Hermes | ARIES K8s | 14.43 |  |  | 432 | 0.46 |
 | Hermes | agent-sandbox | -0.32 | -0.38 | -0.01 | 436 | 0.47 |
 | Hermes | agent-sandbox gVisor | -0.09 | +0.68 | +0.57 | 585 | 0.48 |
 | Hermes | agent-sandbox Kata | +0.15 | +0.66 | +0.47 | 575 | 0.46 |
-| Hermes | Warm pool | -0.19 | -0.13 | +0.05 | 434 | 0.47 |
-| Hermes | Warm pool gVisor | -0.07 | +0.77 | +0.61 | 588 | 0.47 |
-| Hermes | Warm pool Kata | -0.02 | +0.61 | +0.49 | 575 | 0.47 |
+| Hermes | Warm pool | -0.27 | -0.27 | +0.02 | 433 | 0.47 |
+| Hermes | Warm pool gVisor | -0.21 | +0.79 | +0.61 | 593 | 0.47 |
+| Hermes | Warm pool Kata | -0.12 | +0.52 | +0.48 | 574 | 0.46 |
 
 The ARIES K8s row's start-up column is ARIES K8s's own start-up; the other rows are differences from it. Per tool call and warm harness logic are absolute values in every row.
 
@@ -145,16 +145,16 @@ Runs per harness and setup, by status. Only valid runs are analysed.
 | OpenClaw | agent-sandbox | 5 | 0 | 1 | 25/25 |
 | OpenClaw | agent-sandbox gVisor | 5 | 0 | 1 | 25/25 |
 | OpenClaw | agent-sandbox Kata | 5 | 0 | 1 | 25/25 |
-| OpenClaw | Warm pool | 5 | 0 | 1 | 25/25 |
-| OpenClaw | Warm pool gVisor | 5 | 0 | 1 | 25/25 |
-| OpenClaw | Warm pool Kata | 5 | 0 | 1 | 25/25 |
+| OpenClaw | Warm pool | 5 | 0 | 7 | 25/25 |
+| OpenClaw | Warm pool gVisor | 5 | 0 | 7 | 25/25 |
+| OpenClaw | Warm pool Kata | 5 | 0 | 7 | 25/25 |
 | Hermes | ARIES K8s | 5 | 0 | 1 | 25/25 |
 | Hermes | agent-sandbox | 5 | 0 | 1 | 25/25 |
 | Hermes | agent-sandbox gVisor | 5 | 0 | 1 | 25/25 |
 | Hermes | agent-sandbox Kata | 5 | 0 | 1 | 25/25 |
-| Hermes | Warm pool | 5 | 0 | 1 | 25/25 |
-| Hermes | Warm pool gVisor | 5 | 0 | 1 | 25/25 |
-| Hermes | Warm pool Kata | 5 | 0 | 1 | 25/25 |
+| Hermes | Warm pool | 5 | 0 | 7 | 25/25 |
+| Hermes | Warm pool gVisor | 5 | 0 | 7 | 25/25 |
+| Hermes | Warm pool Kata | 5 | 0 | 7 | 25/25 |
 
 Runs left out:
 
@@ -172,6 +172,42 @@ Runs left out:
 - `runs/hermes/k8s-warm-pool-kata/warmup` (superseded): warm-up before measuring: pulls images, fills caches
 - `runs/openclaw/k8s-warm-pool-gvisor/warmup` (superseded): warm-up before measuring: pulls images, fills caches
 - `runs/openclaw/k8s-warm-pool-kata/warmup` (superseded): warm-up before measuring: pulls images, fills caches
+- `runs/hermes/k8s-warm-pool/1` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-gvisor/1` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-kata/1` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool/1` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-gvisor/1` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool/2` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-kata/1` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-gvisor/2` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-kata/2` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool/3` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-gvisor/3` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-kata/3` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool/2` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-gvisor/2` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-kata/2` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool/4` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-gvisor/4` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-kata/4` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool/5` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-gvisor/5` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool/3` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool-kata/5` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-gvisor/3` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-kata/3` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool/4` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-gvisor/4` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-kata/4` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool/5` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-gvisor/5` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/openclaw/k8s-warm-pool-kata/5` (superseded): run again after warm pools were readied before the run's first task (9f9deac)
+- `runs/hermes/k8s-warm-pool/warmup-2` (superseded): warm-up before measuring: pulls images, fills caches
+- `runs/hermes/k8s-warm-pool-gvisor/warmup-2` (superseded): warm-up before measuring: pulls images, fills caches
+- `runs/openclaw/k8s-warm-pool/warmup-2` (superseded): warm-up before measuring: pulls images, fills caches
+- `runs/hermes/k8s-warm-pool-kata/warmup-2` (superseded): warm-up before measuring: pulls images, fills caches
+- `runs/openclaw/k8s-warm-pool-gvisor/warmup-2` (superseded): warm-up before measuring: pulls images, fills caches
+- `runs/openclaw/k8s-warm-pool-kata/warmup-2` (superseded): warm-up before measuring: pulls images, fills caches
 
 Model requests not answered from the recording: 0.
 
@@ -183,7 +219,7 @@ Model requests not answered from the recording: 0.
 | ARIES commit | `9d36541cf23d539cad23cfb5911087bc20f39792` |
 | Bridge image | `aries-bridge:v1-ff258b6f0569` |
 | vHive setup tool | `9826bb9c2af97d6478498df64879e8c30b21d31d` |
-| Started, finished | 2026-11-22T13:06:37Z, 2026-11-22T17:50:34Z |
+| Started, finished | 2026-11-22T13:06:37Z, 2026-11-23T15:13:49Z |
 | Harnesses | openclaw, hermes |
 | Setups | k8s, k8s-agent-sandbox, k8s-agent-sandbox-gvisor, k8s-agent-sandbox-kata, k8s-warm-pool, k8s-warm-pool-gvisor, k8s-warm-pool-kata |
 | Tasks | `mb-noop`, `mb-one-call`, `mb-ten-calls`, `mb-cpu`, `mb-output` |
@@ -191,11 +227,13 @@ Model requests not answered from the recording: 0.
 | Recordings | experiments/coldwarm/results/20261115-e5-2630v3 |
 | Recording `hermes` | sha256 `d21fee03969c1291` |
 | Recording `openclaw` | sha256 `cd8832d5087cc488` |
+| Bridge image, pc762 once prepared again | `aries-bridge:v1-9f9deaca3645` |
+| Bridge image, pc780 once prepared again | `aries-bridge:v1-9f9deaca3645` |
 
 | Worker | Harnesses | ARIES commit | CPU | CPUs | Memory (GiB) | SMT | Turbo | Kernel | Kubelet | Docker |
 |---|---|---|---|---|---|---|---|---|---|---|
-| pc762 | hermes | `9d36541cf23d` | Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz | 16 | 62.8 | off | off | 6.8.0-149-generic | v1.35.3 | 29.8.2 |
-| pc780 | openclaw | `9d36541cf23d` | Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz | 16 | 62.8 | off | off | 6.8.0-149-generic | v1.35.3 | 29.8.2 |
+| pc762 | hermes | `f6449bfa791d` | Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz | 16 | 62.8 | off | off | 6.8.0-149-generic | v1.35.3 | 29.8.2 |
+| pc780 | openclaw | `14b8d1026447` | Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz | 16 | 62.8 | off | off | 6.8.0-149-generic | v1.35.3 | 29.8.2 |
 
 The full per-variant analysis is in `analysis/analysis.md`, one row per task run in `analysis/tasks.csv`.
 
@@ -210,12 +248,32 @@ time is identical across setups. The plain pod (ARIES K8s) is the baseline;
 native and Docker are not run here, and the coldwarm campaign compares them
 with ARIES K8s.
 
-All 70 measured runs succeeded, 350 of 350 task runs solved. The 14 left out
-are the planned warm-up runs, one per harness and setup.
+All 70 measured runs succeeded, 350 of 350 task runs solved. Left out are the
+planned warm-up runs, one per harness and setup, and the warm-pool runs of the
+first pass (below).
 
-Each run executes the five tasks in order, `mb-noop` first. A warm-pool run
-creates its own pool of one when the run starts, so `mb-noop` claims a pod
-that is still starting, and only the later four tasks claim a ready one.
+Each run executes the five tasks in order, `mb-noop` first.
+
+### The warm-pool setups were run again
+
+In the first pass (2026-11-22), each warm-pool run created its pool on its
+first task's claim. A claim on a pool with no ready pod does not wait for it:
+agent-sandbox makes the claim a pod of its own about 2 s later, while the
+pool's pod keeps booting. `mb-noop` therefore started its sandbox in 2.8 s
+under runc and gVisor and 8.7 s under Kata, slower than without a pool.
+
+ARIES now readies a run's pools before its first task (commit `9f9deac`). The
+six warm-pool setups were run again on 2026-11-23, after the other setups had
+finished, with their own warm-ups. The first pass's 30 runs are kept and
+marked superseded. The bridge's code is unchanged, but the commit gave it a
+new revision, so these runs used the bridge image
+`aries-bridge:v1-9f9deaca3645`. Readying the pool before the first task takes
+1.9 s under runc, 2.3 s under gVisor and 5.3–6.3 s under Kata. This happens
+once per run and is not part of any task's time.
+
+The rerun was not interleaved with the other setups, so differences between
+the warm-pool setups and the rest also include anything that changed on the
+workers in between.
 
 ### The sandbox is not on the critical path
 
@@ -231,19 +289,19 @@ within one standard deviation.
 | gVisor | | 2.6 | 1.8 |
 | Kata | | 6.5 | 1.8 |
 
-The warm pool's 1.8 s is for the four tasks that claim a ready pod. When the
-pod is still starting (`mb-noop`), the claim takes 2.8 s under runc and gVisor
-and 8.7 s under Kata, longer than creating the pod directly.
+With the pool readied first, every task claims a ready pod, `mb-noop`
+included: 1.8–1.9 s on every runtime. A pool therefore saves 0.9 s (runc) to
+4.7 s (Kata) of sandbox start. With these harnesses none of it reaches the
+user. It would matter only for a harness that starts faster than its sandbox.
 
-A pool therefore saves at most 0.9 s (runc) to 4.7 s (Kata) of sandbox start,
-and with these harnesses none of it reaches the user. It would matter only for
-a harness that starts faster than its sandbox.
-
-The largest cold difference, +1.1 s for OpenClaw on the Kata warm pool, comes
-from a longer harness start, not from the sandbox. The likely cause is the
-pool booting a replacement Kata VM, which uses CPU on the same worker while the
-harness starts. `mb-noop`'s harness start is 2.0 s longer there, and in that
-task the claimed VM is also booting.
+OpenClaw's cold latency on the warm-pool setups is 1.1–1.2 s above the plain
+pod's, on every runtime. That comes from a longer harness start (+1.0–1.5 s),
+not from the sandbox. Hermes shows nothing similar. This campaign can't tell
+whether the pool causes it or the reruns ran under different conditions:
+- One possible cause is the pool starting a replacement pod beside the
+  harness, which is busy starting on the same worker.
+- The other is the day between the two passes. In the first pass the effect
+  was smaller and uneven, from 0 to +2 s depending on the task.
 
 ### Where gVisor and Kata cost time: tool calls
 
@@ -254,8 +312,8 @@ The cost per call in warm `mb-ten-calls`, as the harness timed it:
 
 | Harness | runc | gVisor | Kata |
 |---|---|---|---|
-| OpenClaw | 608–614 ms | 668–674 ms (+60) | 680–681 ms (+70) |
-| Hermes | 432–436 ms | 585–588 ms (+150) | 575 ms (+140) |
+| OpenClaw | 608–614 ms | 667–674 ms (+60) | 680–682 ms (+70) |
+| Hermes | 432–436 ms | 585–593 ms (+155) | 574–575 ms (+140) |
 
 The per-task reports' bridge rows split this cost:
 - **OpenClaw:** each call is about 4 sandbox commands. Under gVisor and Kata
@@ -284,7 +342,7 @@ measurable.
   in the sandbox, so it pays the per-command cost.
 - **Clean-up:** about 1.2 s faster under gVisor and Kata (2.0–2.3 s) than
   under runc. Under runc it takes 3.3 s for the plain pod, 3.6–4.0 s for
-  agent-sandbox and 4.6 s for the warm pool. The same ordering appeared in
+  agent-sandbox and 4.5–4.6 s for the warm pool. The same ordering appeared in
   the Phase 1 replays. All three delete in the foreground, so each waits until
   the containers have left the node. Under runc the sandbox's `sleep`
   ignores the stop signal and waits out the grace period, and a claim's

@@ -10,7 +10,7 @@
   "kubernetes_base_image": "alpine/k8s:1.35.3",
   "prometheus": "http://10.109.195.100:9090",
   "started_at": "2026-11-22T13:06:37Z",
-  "finished_at": "2026-11-22T17:50:34Z",
+  "finished_at": "2026-11-23T15:13:49Z",
   "recordings": {
     "source": "experiments/coldwarm/results/20261115-e5-2630v3",
     "sha256": {
@@ -50,7 +50,8 @@
       "harnesses": [
         "openclaw"
       ],
-      "aries_commit": "9d36541cf23d539cad23cfb5911087bc20f39792"
+      "aries_commit": "14b8d1026447fad5d35af966dfc4faeba3b79e76",
+      "bridge_image": "aries-bridge:v1-9f9deaca3645"
     }
   }
 }
