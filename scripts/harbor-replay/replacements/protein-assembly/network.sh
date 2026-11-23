@@ -4,7 +4,7 @@ set -euo pipefail
 base=$(realpath "$1")
 action=$2
 node=$3
-[[ $node == 183 || $node == 198 ]]
+[[ $node == 183 || $node == 198 || $node == 201 ]]
 name=zbprot$node
 subnet=10.250.$node.0/28
 resolver=10.250.$node.1

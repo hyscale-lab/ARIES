@@ -65,7 +65,10 @@ def main():
     p.add_argument("--packages", type=Path, required=True)
     p.add_argument("--ca-deb", type=Path)
     p.add_argument("--retained-boundary-diagnostic", action="store_true")
+    p.add_argument("--terminal-exec-diagnostic", action="store_true")
     args = p.parse_args()
+    if args.terminal_exec_diagnostic and not args.retained_boundary_diagnostic:
+        p.error("the existing retained early-process boundary must also be verified")
     out = args.output.resolve()
     out.mkdir()
     source = args.source
@@ -151,6 +154,11 @@ echo 'ars_tls_anchor_sha256={CA_CERT_SHA}'
             if not args.ca_deb:
                 raise ValueError("the verified trust anchor is required for the diagnostic")
             apply(tree, edit, original)
+        if args.terminal_exec_diagnostic:
+            from terminal_exec import apply as apply_terminal_exec
+            apply_terminal_exec(tree, edit, original, git_root)
+            subprocess.run(["go", "test", "-buildvcs=false", "./pkg/replay/harbor", "./cmd/aries-harbor"],
+                           cwd=tree, check=True)
         subprocess.run(["go", "build", "-trimpath", "-buildvcs=false", "-o",
                         out/"aries-protein-assembly", "./cmd/aries-harbor"], cwd=tree, check=True)
     private = out/"source"
@@ -167,6 +175,9 @@ echo 'ars_tls_anchor_sha256={CA_CERT_SHA}'
     if args.retained_boundary_diagnostic:
         from retained_boundary import contract as boundary_contract
         contract["retained_boundary_diagnostic"] = boundary_contract()
+    if args.terminal_exec_diagnostic:
+        from terminal_exec import contract as terminal_exec_contract
+        contract["terminal_exec_diagnostic"] = terminal_exec_contract()
     if args.ca_deb:
         contract["trust_anchor"] = dict(
             package_sha256=CA_PACKAGE_SHA, package=args.ca_deb.name, certificate=CA_CERT_NAME,

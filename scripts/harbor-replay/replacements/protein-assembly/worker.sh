@@ -30,22 +30,53 @@ case "$node:$variant:$kind" in
         runtime=/local/zb-amd198-deep-v4/circuit/runtime
         unit=fcmod-zepbound-amd198-deep-circuit
         ;;
+    amd201:v1:ordinary)
+        runtime=/local/zb-relaxed-ml-01/stack-v1/runtime
+        unit=fcmod-zepbound-relaxed-ml-v1
+        ;;
+    amd201:v1:deep)
+        runtime=/local/zb-cancel-async-01/deep-v1/runtime
+        unit=fcmod-zepbound-cancel-async-deep-v1
+        ;;
+    amd201:v4:deep)
+        runtime=/local/zb-cancel-async-deep-v4-amd201/runtime
+        unit=fcmod-zepbound-cancel-async-deep-v4
+        ;;
     *) exit 2 ;;
 esac
 (cd "$stage" && sha256sum --quiet -c SHA256SUMS)
 test "$(cat /sys/devices/system/cpu/smt/active)" = 0
 ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'
-test "$(sudo -n systemctl show -p ActiveState --value zb-timing17-hf.service)" = inactive
-timing_arm=v2
-if [[ $node == amd198 ]]; then timing_arm=v4; fi
-sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
+if [[ $node == amd201 ]]; then
+    test -s "$stage/placement-release.json"
+    if [[ $kind == deep ]]; then
+        python3 -B - "$stage/ordinary-admission.json" <<'PY_GATE'
+import json
+import sys
+with open(sys.argv[1]) as stream:
+    receipt = json.load(stream)
+assert receipt["run_id"] == "93c2fb63-v1-protein-assembly-ordinary-07"
+assert receipt["node"] == "amd201" and receipt["source_observed_tool_replies"] == 17
+assert receipt["status"] == "diagnostic_process_observed" and receipt["artifact_sha256_matches"]
+PY_GATE
+    fi
+else
+    test "$(sudo -n systemctl show -p ActiveState --value zb-timing17-hf.service)" = inactive
+    timing_arm=v2
+    if [[ $node == amd198 ]]; then timing_arm=v4; fi
+    sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
+fi
 test "$(sudo -n systemctl show -p ActiveState --value "$unit")" = active
 attempt=${stage##*-}
-[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 ]]
+[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 || $attempt == 07 ]]
 if [[ $attempt == 05 ]]; then
     [[ "$node:$variant:$kind" == amd198:v4:ordinary ]]
 fi
 diagnostic=()
+if [[ $attempt == 07 ]]; then
+    [[ $node == amd201 ]]
+    diagnostic=(-diagnostic-process-drift)
+fi
 if [[ $attempt == 04 ]]; then
     [[ "$node:$variant:$kind" == amd183:v1:ordinary ]]
     diagnostic=(-diagnostic-process-drift)
