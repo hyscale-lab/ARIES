@@ -9,8 +9,22 @@ import time
 
 HERE=Path(__file__).resolve().parent
 q=runpy.run_path(str(HERE/'queue.py'))
-def main(root):
+def main(root,node):
     aries=root/'repo/ARIES'; cache=aries/'.cache'
+    if node=='amd183':
+        decision=root/'plan/result/1_opportunity/replacements/log-summary-date-ranges/relocated-v2-v3.json'
+        q['wait']('completed verified amd183 native and reporting profiles',decision.is_file)
+        ack=cache/'harbor/log-summary-replacement/amd189.v23-skip.json'
+        if not ack.is_file():subprocess.run(['systemctl','--user','restart','zb-log-summary-queue-amd189'],check=True)
+        q['wait']('verified original amd189 v2/v3 skips',ack.is_file)
+        data=json.loads(ack.read_bytes())
+        assert data['decision_sha256']==q['digest'](decision) and set(map(tuple,data['skipped']))=={('ordinary','v2'),('ordinary','v3')}
+        local='zb-log-summary-queue-amd183'
+        state=subprocess.check_output(['systemctl','--user','show',local,'-p','ActiveState','--value'],text=True).strip()
+        if state=='inactive' and not (cache/'harbor/log-summary-replacement/amd183.complete.json').is_file():
+            subprocess.run(['systemd-run','--user','--unit='+local,'--property=WorkingDirectory='+str(root),sys.executable,'-Bu',HERE/'queue.py',root,node],check=True)
+        else:assert state=='active' or (cache/'harbor/log-summary-replacement/amd183.complete.json').is_file()
+        return
     previous=cache/'zb-raw/relaxed-compcert-deep/v4/worker.sha256'
     q['wait']('authenticated completed previous deep v4 export',lambda:previous.is_file() and q['status']('amd201','zb-relaxed-compcert-deep-v4-01')=='inactive')
     result=root/'plan/result/1_opportunity';decision=result/'replacements/log-summary-date-ranges/relocated-modes.json'
@@ -34,4 +48,4 @@ def main(root):
             subprocess.run(['systemd-run','--user','--unit='+unit,'--property=WorkingDirectory='+str(root),sys.executable,'-Bu',script,*args],check=True)
         else: assert state=='active' or receipt.exists()
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);main(p.parse_args().root.resolve())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('--node',choices=('amd201','amd183'),default='amd201');args=p.parse_args();main(args.root.resolve(),args.node)

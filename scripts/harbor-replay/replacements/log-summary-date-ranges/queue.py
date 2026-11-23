@@ -12,6 +12,9 @@ import time
 PAYLOAD = 'ae4fda771fbdb774e270f8c3501fb0e0cda9ec498f7b45f4c7e8b23b2125d088'
 STAGE = '/local/zb-replacement-log-summary-01'
 SERIES = {
+    'amd183': [
+        ('ordinary','v2','fcmod-zepbound-amd183-stockv2','/local/zb-stock183-v2/runtime'),
+        ('ordinary','v3','fcmod-zepbound-amd183-stockv3','/local/zb-stock183-v3/runtime')],
     'amd201': [
         ('ordinary','v1','fcmod-zepbound-relaxed-ml-v1','/local/zb-relaxed-ml-01/stack-v1/runtime'),
         ('ordinary','v4','fcmod-zepbound-tex-v4','/local/zb-texpilot/v4/runtime'),
@@ -78,13 +81,29 @@ def main(root,node):
     if decision.is_file():
         move=json.loads(decision.read_bytes());assert move['active_node']=='amd201'
         moved={(m['level'],m['variant']) for m in move['profiles']}
-    if node=='amd201':
+    second=decision.with_name('relocated-v2-v3.json')
+    new_scope=set()
+    if second.is_file():
+        data=json.loads(second.read_bytes());assert data['active_node']=='amd183'
+        new_scope={(m['level'],m['variant']) for m in data['profiles']}
+        assert new_scope=={('ordinary','v2'),('ordinary','v3')}
+    if node=='amd183':
+        assert new_scope
+        ack=json.loads((local/'amd189.v23-skip.json').read_bytes())
+        assert ack['node']=='amd189' and ack['decision_sha256']==digest(second) and set(map(tuple,ack['skipped']))==new_scope
+        assert status(node,'zb-gitdeep-v4-amd183')=='inactive'
+    elif node=='amd201':
         assert moved=={(level,v) for level,v,_,_ in SERIES[node]}
         for prior_node in ('amd182','amd189'):
             ack=json.loads((local/(prior_node+'.skip.json')).read_bytes())
             assert ack['decision_sha256']==digest(decision) and ack['node']==prior_node
         wait('Complete previous compiler deep-baseline trace, worker exit and raw export',lambda:any((cache/'zb-raw/relaxed-compcert-deep/v1'/marker).is_file() for marker in ('transfer-verified.sha256','worker.sha256')) and status(node,'zb-relaxed-compcert-deep-v1-01')=='inactive')
     else:
+        if node=='amd189' and new_scope:
+            for level,v in sorted(new_scope):
+                assert status(node,f'zb-log-summary-{node}-{level}-{v}')=='inactive'
+                ssh(node,privileged('test','!','-e',STAGE+f'/{level}-{v}'))
+            (local/'amd189.v23-skip.json').write_text(json.dumps(dict(node=node,skipped=sorted(new_scope),decision_sha256=digest(second)),indent=2)+'\n')
         skipped=[(level,v) for level,v,_,_ in SERIES[node] if (level,v) in moved]
         if skipped:
             for level,v in skipped:
@@ -95,7 +114,8 @@ def main(root,node):
         wait(f'CompCert {node}/{variant} verification and completed archive extraction',
              lambda:(cache/'zb-raw/relaxed-compcert'/variant/'extracted').is_file() and status(node,f'zb-relaxed-compcert-{variant}')=='inactive')
     remote=ssh(node,privileged('bash','-c',f'test -s {STAGE}/inputs.sha256 && echo ready || echo new'),capture_output=True,text=True).stdout.strip()
-    require_local=any(node=='amd201' or (l,v) not in moved for l,v,_,_ in SERIES[node])
+    delegated=moved|new_scope
+    require_local=any(node in ('amd183','amd201') or (l,v) not in delegated for l,v,_,_ in SERIES[node])
     if not require_local:pass
     elif remote=='new':
         ssh(node,privileged('mkdir','-p',STAGE))
@@ -107,27 +127,29 @@ def main(root,node):
     receipts=[]
     root_raw=cache/'zb-raw/log-summary-replacement'
     for level,variant,runtime_unit,runtime in SERIES[node]:
-        if node!='amd201' and (level,variant) in moved:continue
+        if node not in ('amd183','amd201') and (level,variant) in delegated:continue
         task=f'zb-log-summary-{node}-{level}-{variant}'
         ids=['aa46'] if level=='deep' else PREFIXES
         done=f'{STAGE}/{level}-{variant}/series-status.txt'
         shell=f'test -f {done} && wc -l < {done} || echo 0'
         def finished():
-            n=int(ssh(node,privileged('bash','-c',shell),capture_output=True,text=True).stdout)
             active=status(node,task)
+            n=int(ssh(node,privileged('bash','-c',shell),capture_output=True,text=True).stdout)
             if active=='failed':raise RuntimeError(f'{node}/{task} failed with {n} of {len(ids)} receipts')
             if active=='inactive' and n<len(ids):raise RuntimeError(f'{node}/{task} inactive with {n} receipts')
             return n==len(ids) and active=='inactive'
         begun=ssh(node,privileged('bash','-c',f'test -d {STAGE}/{level}-{variant} && echo yes || echo no'),capture_output=True,text=True).stdout.strip()
         if begun=='no' and status(node,task)=='inactive':
-            ssh(node,privileged('systemd-run','--unit='+task,STAGE+('/run-series-amd201.sh' if node=='amd201' else '/run-series.sh'),STAGE,variant,level,runtime_unit,runtime,*ids))
+            ssh(node,privileged('systemd-run','--unit='+task,STAGE+(f'/run-series-{node}.sh' if node in ('amd183','amd201') else '/run-series.sh'),STAGE,variant,level,runtime_unit,runtime,*ids))
         wait(f'{node} {level} {variant} {len(ids)} trials',finished)
         receipts.append(archive(node,root_raw,level,variant,ids))
-    if node!='amd201' and any((l,v) in moved for l,v,_,_ in SERIES[node]):
-        other=local/'amd201.complete.json'
-        wait('Relocated unique v1/v4 log archives',other.is_file)
-        for item in json.loads(other.read_bytes()):
-            if any((item['level'],item['variant'])==(l,v) for l,v,_,_ in SERIES[node]):receipts.append(item)
+    if node not in ('amd183','amd201'):
+        for target,areas in (('amd201',moved),('amd183',new_scope)):
+            required={(l,v) for l,v,_,_ in SERIES[node]} & areas
+            if not required:continue
+            other=local/f'{target}.complete.json'
+            wait('Relocated log archives on '+target,other.is_file)
+            receipts.extend(item for item in json.loads(other.read_bytes()) if (item['level'],item['variant']) in required)
         assert len(receipts)==len(SERIES[node])
     (local/f'{node}.complete.json').write_text(json.dumps(receipts,indent=2)+'\n')
 if __name__=='__main__':

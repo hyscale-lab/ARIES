@@ -18,15 +18,23 @@ def runtime(root,level,variant):
     if level=='deep':
         x=json.loads((root/f'plan/result/1_opportunity/deep-sweep/compcert-{variant}.json').read_bytes())
         return x['deployed_files'],x['runtime_profile']
-    node='amd182'
-    previous=('/local/zb-validation/runtime' if variant=='v1' else '/local/zb-relaxed-compcert-v4-runtime/runtime')
+    node='amd189' if variant in ('v2','v3') else 'amd182'
+    previous={'v1':'/local/zb-validation/runtime','v2':'/local/zb-stock189-v2/runtime','v3':'/local/zb-stock189-v3/runtime','v4':'/local/zb-relaxed-compcert-v4-runtime/runtime'}[variant]
     pre=json.loads(output(node,'cat',f'{CC}/{variant}/{TRIAL}/idle-before.json'))
     return pre['files'],json.loads(output(node,'cat',previous+'/runtime.json'))
-def main(root):
-    cache=root/'repo/ARIES/.cache';raw=cache/'zb-raw/relaxed-compcert-deep/v4'
-    assert (raw/'worker.sha256').is_file() and sha(raw/'worker.tar.gz')==(raw/'worker.sha256').read_text().split()[0]
-    assert q['status'](NODE,'zb-relaxed-compcert-deep-v4-01')=='inactive'
-    dst=root/'plan/result/1_opportunity/replacements/log-summary-date-ranges/relocated-modes.json'
+def main(root,NODE='amd201'):
+    cache=root/'repo/ARIES/.cache';result=root/'plan/result/1_opportunity'
+    if NODE=='amd201':
+        raw=cache/'zb-raw/relaxed-compcert-deep/v4'
+        predecessor=(raw/'worker.sha256').read_text().split()[0];assert sha(raw/'worker.tar.gz')==predecessor
+        source_unit='zb-relaxed-compcert-deep-v4-01';decision='relocated-modes.json'
+    else:
+        assert NODE=='amd183'
+        prior=cache/'zb-raw/resumed/amd183/deep/08ae20d8-v4-deep-worker.tar.gz'
+        predecessor='ba1424cdab81e443ec1594369ecc79f8c9289f797175b3d1f3f6cab3493c2107'
+        assert sha(prior)==predecessor;source_unit='zb-gitdeep-v4-amd183';decision='relocated-v2-v3.json'
+    assert q['status'](NODE,source_unit)=='inactive'
+    dst=result/'replacements/log-summary-date-ranges'/decision
     assert not dst.exists()
     source=json.loads((dst.parent/'sources.json').read_bytes())
     bundle=cache/'harbor/log-summary-replacement/stage.tar.gz';assert sha(bundle)==q['PAYLOAD']
@@ -35,7 +43,7 @@ def main(root):
     call(NODE,'bash','-c','cd "$1" && sha256sum --quiet -c inputs.sha256','sh',STAGE)
     blob=(HERE/'run-series.sh').read_bytes();old=b'^amd(182|189)$';assert blob.count(old)==1
     assert hashlib.sha256(blob).hexdigest()=='73cf4d98ab58a788ef3b4b86daf6b941279438545eac31b0a7f37eef460ce6e2'
-    amended=blob.replace(old,b'^amd201$');driver=STAGE+'/run-series-amd201.sh'
+    amended=blob.replace(old,('^'+NODE+'$').encode());driver=STAGE+'/run-series-'+NODE+'.sh'
     call(NODE,'tee',driver,input=amended,stdout=subprocess.DEVNULL);call(NODE,'chmod','0755',driver)
     amended_sha=hashlib.sha256(amended).hexdigest();assert output(NODE,'sha256sum',driver).split()[0]==amended_sha
     image='docker.io/alexgshaw/log-summary-date-ranges@sha256:cbeb6ba905c2fec294f16cd5e16e3ea7f2e04d38ac2484d51a11de262aa7dc51'
@@ -58,12 +66,23 @@ def main(root):
         row,=[s for s in output(NODE,*ctr,'images','ls').splitlines() if s.split() and s.split()[0]==image]
         assert row.count(image.split('@')[1])>=2
         modes.append(dict(level=level,variant=v,previous_node=oldnode,source_sha256={k:actual[k]['sha256'] for k in exact},runtime=rt,service=unit,profile=json.loads(profile),worker=audit['node'],source_image_readback=row))
-    phy=json.loads((root/'plan/result/1_opportunity/relaxed-compcert/deep/relocated-v4.json').read_bytes())['worker_hardware']
+    if NODE=='amd201':
+        phy=json.loads((result/'relaxed-compcert/deep/relocated-v4.json').read_bytes())['worker_hardware']
+    else:
+        phy=json.loads(output(NODE,'python3','-c','''import json,os,struct
+from pathlib import Path
+cpus=[]
+for cpu in range(16):
+ with open('/dev/cpu/'+str(cpu)+'/msr','rb',buffering=0) as f:hw=struct.unpack('<Q',os.pread(f.fileno(),8,0xc0010015))[0]
+ siblings=Path('/sys/devices/system/cpu/cpu'+str(cpu)+'/topology/thread_siblings_list').read_text().strip()
+ cpus.append(dict(cpu=cpu,siblings=siblings,hwcr=hex(hw),boost_disabled=bool(hw&(1<<25))))
+print(json.dumps(dict(online=Path('/sys/devices/system/cpu/online').read_text().strip(),smt=Path('/sys/devices/system/cpu/smt/active').read_text().strip(),boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),cpus=cpus)))'''))
+        assert phy['smt']=='0' and phy['online']=='0-15' and all(x['siblings']==str(x['cpu']) and x['boost_disabled'] for x in phy['cpus'])
     assert output(NODE,'cat','/proc/sys/kernel/random/boot_id')==phy['boot_id']
     receipt=dict(active_node=NODE,utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),profiles=modes,worker_hardware=phy,
-        worker_stage_sha256=q['PAYLOAD'],adapter_sha256=source['adapter_sha256'],original_launcher_sha256=hashlib.sha256(blob).hexdigest(),amd201_launcher_sha256=amended_sha,
+        worker_stage_sha256=q['PAYLOAD'],adapter_sha256=source['adapter_sha256'],original_launcher_sha256=hashlib.sha256(blob).hexdigest(),relocated_launcher_sha256=amended_sha,
         launcher_difference='Only machine-name allowlist at worker placement preflight.',deep_median=source['selected_trial'],
-        worker_source_lock=source['worker_stage_manifest_sha256'],past_compcert_v4_archive_sha256=sha(raw/'worker.tar.gz'))
+        worker_source_lock=source['worker_stage_manifest_sha256'],terminal_predecessor_unit=source_unit,terminal_predecessor_archive_sha256=predecessor)
     tmp=dst.with_suffix('.partial');tmp.write_text(json.dumps(receipt,indent=2)+'\n');tmp.replace(dst)
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);main(p.parse_args().root.resolve())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('--node',choices=('amd201','amd183'),default='amd201');args=p.parse_args();main(args.root.resolve(),args.node)
