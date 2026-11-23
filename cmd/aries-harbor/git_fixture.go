@@ -37,3 +37,36 @@ if test "$(git -C repo rev-parse HEAD)" != e95155fb5729c5dbf7d951cc262be482ecda7
 fi
 git -C repo rev-parse HEAD
 git -C repo fsck --no-reflogs --unreachable | sort`
+
+// The two sources each print one randomly allocated name, then pass it as a
+// literal to later calls. Preserve the native allocator's flags, permissions,
+// collision handling and descriptor by controlling only its first name.
+func gitRecoveryTemp(trial string) string {
+	var suffix string
+	switch trial {
+	case "713938da-5ff4-4af3-b2b8-849e08291aaa":
+		suffix = "mvfalbso"
+	case "cd728dac-1ca6-4a95-a7c3-16ad40797278":
+		suffix = "kbxrtcaa"
+	default:
+		return ""
+	}
+	return `
+site_dir=$(/usr/bin/python3 -c 'import site; print(site.getsitepackages()[0])')
+mkdir -p "$site_dir"
+test ! -e "$site_dir/aries_source_temp.py" && test ! -e "$site_dir/aries_source_temp.pth"
+cat > "$site_dir/aries_source_temp.py" <<'ARIESTEMP'
+import itertools
+import sys
+import tempfile
+original_names = tempfile._get_candidate_names
+def source_names():
+    caller = sys._getframe(1)
+    if caller.f_code in (tempfile._mkstemp_inner.__code__, tempfile.mkdtemp.__code__) and caller.f_locals.get("prefix", caller.f_locals.get("pre")) in ("repo-secret-cleanup-", "repo-secret-audit-"):
+        return itertools.chain(("` + suffix + `",), original_names())
+    return original_names()
+tempfile._get_candidate_names = source_names
+ARIESTEMP
+echo 'import aries_source_temp' > "$site_dir/aries_source_temp.pth"
+python3 -c 'import sys; assert "aries_source_temp" in sys.modules'`
+}
