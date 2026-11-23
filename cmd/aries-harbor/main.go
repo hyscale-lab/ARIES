@@ -70,6 +70,7 @@ func command(ctx context.Context) error {
 	grpcNetDiag := flag.Bool("diagnostic-grpc-loopback", false, "verify the private 69ba guest with its IPv6 loopback address omitted")
 	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
+	relaxedML := flag.Bool("relaxed-ml", false, "retain actual timing and exit disagreements in the four reviewed ML replays")
 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
 	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
 	curlPackages := flag.String("curl-packages", "", "pinned Bookworm curl archive for the recorded HTTP client")
@@ -176,6 +177,17 @@ func command(ctx context.Context) error {
 			return errors.New("process drift diagnostics require a reviewed uninstrumented recording")
 		}
 	}
+	if *relaxedML {
+		switch r.Trial {
+		case "e047ddea-bb8c-43c0-b71e-e625a611565f", "ce62b3a5-602c-44c7-b13e-6537dca35d1d",
+			"f0d5e4b5-b20d-40bf-89ec-6483b65525dc", "eaa24caa-f211-4745-a943-0f7041aa4214":
+		default:
+			return errors.New("relaxed ML replay requires one of four reviewed originals")
+		}
+		if *processDrift || *videoDifferences || *probe != "" || *intraStep != 0 {
+			return errors.New("relaxed ML replay cannot be combined with other diagnostics")
+		}
+	}
 	if *videoDifferences && (r.Task != "video-processing" || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0) {
 		return errors.New("video image diagnostics require a reviewed uninstrumented video recording")
 	}
@@ -223,10 +235,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *relaxedML, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, relaxedML, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -418,11 +430,21 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call), nil, stdout, stderr)
 	})
 	defer sessions.Close()
+	if relaxedML {
+		if err := log.Encode(map[string]any{"event": "relaxed_ml_measurement", "trial_id": r.Trial,
+			"strict_source_admission": false}); err != nil {
+			return err
+		}
+	}
 	h := harbor.Hooks{
 		DiagnosticVideoImages: videoDifferences,
+		RelaxedMeasuredStatus: relaxedML,
 		IntraTool:             intraTool,
 		Record:                func(e harbor.Receipt) error { return log.Encode(e) },
 		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+			if relaxedML && (call.Operation == "Exec" || call.Operation == "StartProcess" || call.Operation == "PollProcess") {
+				return sessions.ObserveRelaxed(ctx, call)
+			}
 			if call.Operation == "StartProcess" || call.Operation == "PollProcess" {
 				if processDrift {
 					return sessions.ObserveDrift(ctx, call)
@@ -473,6 +495,10 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	}
 	if processDrift {
 		h.FinishObservedProcess = sessions.FinishObservedProcess
+		h.WasRetained = sessions.WasRetained
+	}
+	if relaxedML {
+		h.FinishObservedProcess = sessions.FinishRelaxed
 		h.WasRetained = sessions.WasRetained
 	}
 	if groups != nil {

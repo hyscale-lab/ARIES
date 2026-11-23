@@ -27,6 +27,21 @@ class BatchAttributionTests(unittest.TestCase):
         self.assertEqual(status["open_handles"],[13])
         self.assertFalse(events[-1]["terminal_poll_observed"])
 
+    def test_relaxed_process_keeps_actual_early_exit_and_source_poll(self):
+        base = dict(step_id=3, sequence=1, operation="StartProcess", source_process_session_id=13)
+        poll = dict(base, step_id=4, sequence=2, operation="PollProcess")
+        events = [dict(base, event="tool_dispatch"),
+                  dict(base, event="tool_reply", exit_code=2, expected_exit_code=-1),
+                  dict(poll, event="tool_dispatch"),
+                  dict(poll, event="tool_reply", exit_code=2, expected_exit_code=0,
+                       status_basis="retained_terminal_status_empty_poll")]
+        with self.assertRaisesRegex(ValueError, "divergent live process status"):
+            identify(events)
+        _, status = identify(events, relaxed_status=True)
+        self.assertEqual(status["open_handles"], [])
+        self.assertEqual(events[-1]["terminal_sequence"], 1)
+        self.assertEqual(events[-1]["exit_code"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

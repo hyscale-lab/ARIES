@@ -15,21 +15,29 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 		event.StatusBasis = "real_terminal_before_source_running_poll"
 		return emit(h, event)
 	}
-	if call.Operation == "PollProcess" && first.ExitCode == ProcessRunning && call.ExitCode >= 0 {
+	if (call.Operation == "PollProcess" || (h.RelaxedMeasuredStatus && call.Operation == "Exec")) &&
+		first.ExitCode == ProcessRunning && call.ExitCode >= 0 {
 		event.StatusBasis = "real_process_running_at_source_terminal_poll"
+		if call.Operation == "Exec" {
+			event.StatusBasis = "real_process_running_at_source_terminal_reply"
+		}
 		if err := emit(h, event); err != nil {
 			return err
 		}
 		join := func() error {
 			last, err := h.FinishObservedProcess(ctx, call)
 			event.StatusBasis = "additional_join_after_source_poll"
+			if call.Operation == "Exec" {
+				event.StatusBasis = "additional_join_after_source_reply"
+			}
 			event.Exit = &last.ExitCode
+			event.ProcessTiming = last.Timing
 			event.Stdout, event.Stderr = last.Stdout, last.Stderr
 			event.StdoutSHA, event.StderrSHA = digest([]byte(last.Stdout)), digest([]byte(last.Stderr))
 			if e := errors.Join(err, emit(h, event)); e != nil {
 				return e
 			}
-			if int32(last.ExitCode) == call.ExitCode {
+			if h.RelaxedMeasuredStatus || int32(last.ExitCode) == call.ExitCode {
 				return nil
 			}
 			return fmt.Errorf("step %d observed terminal exit %d, recorded %d", source.Step, last.ExitCode, call.ExitCode)
@@ -39,6 +47,10 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 			return nil
 		}
 		return join()
+	}
+	if h.RelaxedMeasuredStatus {
+		event.StatusBasis = "real_terminal_status_differs_from_source"
+		return emit(h, event)
 	}
 	return fmt.Errorf("step %d live terminal exit %d, recorded %d", source.Step, first.ExitCode, call.ExitCode)
 }

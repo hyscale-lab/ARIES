@@ -18,6 +18,7 @@ type Hooks struct {
 	deferProcessJoin      func(func() error)
 	WasRetained           func(int) bool
 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
+	RelaxedMeasuredStatus bool
 	DiagnosticVideoImages bool
 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
 	Boundary              func(context.Context, string, int) error
@@ -215,6 +216,9 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 		return fmt.Errorf("step %d image attachment differs from the source", receipt.Step)
 	}
 	if int32(out.ExitCode) != call.ExitCode {
+		if h.RelaxedMeasuredStatus {
+			return recordProcessDrift(ctx, h, call, receipt, out)
+		}
 		if h.FinishObservedProcess != nil && call.SessionID != 0 {
 			return recordProcessDrift(ctx, h, call, receipt, out)
 		}

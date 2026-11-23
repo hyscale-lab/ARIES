@@ -33,7 +33,12 @@ def ranges(sorted_gpas, page):
 def reconcile(raw, output, meta):
     events = list(read(raw/"events.jsonl"))
     partial = meta["status"] == "partial_fidelity"
-    groups, process_status = identify(events, complete=not partial)
+    relaxed = meta["status"] == "relaxed_ml_observed"
+    if relaxed:
+        marker, = [e for e in events if e["event"] == "relaxed_ml_measurement"]
+        if marker["strict_source_admission"] is not False or marker["trial_id"] != meta["source_trial"]:
+            raise ValueError("relaxed measurement marker differs from source metadata")
+    groups, process_status = identify(events, complete=not partial, relaxed_status=relaxed)
     meta = dict(meta, process_handle_reconciliation=process_status)
     if partial:
         # Keep actual running/early-terminal results and incomplete starts without
@@ -121,7 +126,7 @@ def reconcile(raw, output, meta):
             expected.extend([("pre-tool",step),("post-tool",step)])
         if phases!=expected+[("session-end",0)]:
             raise ValueError("tracing missed a required boundary")
-    elif meta["status"]=="validated":
+    elif meta["status"] in {"validated", "relaxed_ml_observed"}:
         raise ValueError("measurement admission requires traced boundaries")
     sampled_idle = []
     if sampled:

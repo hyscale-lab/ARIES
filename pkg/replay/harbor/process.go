@@ -77,13 +77,27 @@ const codexEarlyExitGrace = 150 * time.Millisecond
 func (s *ProcessSessions) Close() { s.cancel(); s.wg.Wait() }
 
 func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.CommandResult, error) {
-	return s.execute(ctx, call, false, false)
+	return s.execute(ctx, call, false, false, false)
 }
 
 // ObserveDrift keeps a completed process visible to subsequent original empty
 // polls. Its terminal status is real, and only newly buffered output is read.
 func (s *ProcessSessions) ObserveDrift(ctx context.Context, call replay.Call) (core.CommandResult, error) {
-	return s.execute(ctx, call, true, false)
+	return s.execute(ctx, call, true, false, false)
+}
+
+// ObserveRelaxed retains an unnamed live command long enough to record its
+// actual terminal result if its original terminal reply now yields.
+func (s *ProcessSessions) ObserveRelaxed(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	return s.execute(ctx, call, true, false, true)
+}
+
+func (s *ProcessSessions) FinishRelaxed(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	if call.Operation == "Exec" {
+		call.SessionID = -int(call.Sequence)
+		call.Operation = "PollProcess"
+	}
+	return s.FinishObservedProcess(ctx, call)
 }
 
 func (s *ProcessSessions) WasRetained(id int) bool {
@@ -100,22 +114,27 @@ func (s *ProcessSessions) FinishObservedProcess(ctx context.Context, call replay
 	if call.Operation != "PollProcess" || call.ExitCode == ProcessRunning {
 		return core.CommandResult{}, errors.New("expected an original terminal process poll")
 	}
-	return s.execute(ctx, call, true, true)
+	return s.execute(ctx, call, true, true, false)
 }
 
-func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain, join bool) (core.CommandResult, error) {
+func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain, join, trackUnnamed bool) (core.CommandResult, error) {
+	unnamed := trackUnnamed && call.Operation == "Exec"
+	key := call.SessionID
+	if unnamed {
+		key = -int(call.Sequence)
+	}
 	s.lock.Lock()
-	p := s.active[call.SessionID]
+	p := s.active[key]
 	var started <-chan time.Time
 	switch call.Operation {
 	case "Exec", "StartProcess":
-		if call.Operation == "StartProcess" && p != nil {
+		if (call.Operation == "StartProcess" || unnamed) && p != nil {
 			s.lock.Unlock()
 			return core.CommandResult{}, fmt.Errorf("duplicate live session %d", call.SessionID)
 		}
 		p = &guestProcess{done: make(chan struct{})}
-		if call.Operation == "StartProcess" {
-			s.active[call.SessionID] = p
+		if call.Operation == "StartProcess" || unnamed {
+			s.active[key] = p
 		}
 		work := s.ctx
 		if s.nativeStartClock {
@@ -179,8 +198,8 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		s.lock.Lock()
 		if retain && call.ExitCode == ProcessRunning && err == nil {
 			p.retained = true
-		} else if call.Operation != "Exec" {
-			delete(s.active, call.SessionID)
+		} else if call.Operation != "Exec" || unnamed {
+			delete(s.active, key)
 		}
 		s.lock.Unlock()
 	default:
