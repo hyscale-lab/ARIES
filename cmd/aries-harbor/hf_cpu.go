@@ -35,6 +35,19 @@ if sys.argv[2] == "b615a3ec-fae8-4198-ae4c-0aedf9c3e25b":
   setters=[ast.unparse(x.func) for x in ast.walk(app) if isinstance(x,ast.Call) and ast.unparse(x.func).endswith("set_num_threads")]
   assert not setters
   data["source_app_thread_setters"]=setters
+  from transformers import AutoModelForSequenceClassification, AutoTokenizer
+  model_path="/app/model_cache/sentiment_model"
+  tokenizer=AutoTokenizer.from_pretrained(model_path,local_files_only=True)
+  model=AutoModelForSequenceClassification.from_pretrained(model_path,local_files_only=True)
+  model.eval()
+  with torch.inference_mode():
+   tokens=tokenizer("I absolutely love this!",return_tensors="pt",truncation=True)
+   probs=torch.softmax(model(**tokens).logits,dim=-1)[0].tolist()
+  data["offline_prediction"]={model.config.id2label[i].lower():v for i,v in enumerate(probs)}
+  data["visible_cpus_after_prediction"]=os.cpu_count()
+  data["torch_threads_after_prediction"]=torch.get_num_threads()
+  assert data["offline_prediction"]["positive"]>0.99
+  assert data["visible_cpus_after_prediction"]==cpus and data["torch_threads_after_prediction"]==data["probe_torch_default_threads"]
  print(json.dumps(data))
  sys.exit(0)
 if phase == "after_source":
