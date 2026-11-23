@@ -42,14 +42,23 @@ case "$node:$variant:$kind" in
         runtime=/local/zb-cancel-async-deep-v4-amd201/runtime
         unit=fcmod-zepbound-cancel-async-deep-v4
         ;;
+    amd183:v3:ordinary)
+        runtime=/local/zb-stock183-v3/runtime
+        unit=fcmod-zepbound-amd183-stockv3
+        ;;
+    amd201:v4:ordinary)
+        runtime=/local/zb-texpilot/v4/runtime
+        unit=fcmod-zepbound-tex-v4
+        ;;
     *) exit 2 ;;
 esac
 (cd "$stage" && sha256sum --quiet -c SHA256SUMS)
 test "$(cat /sys/devices/system/cpu/smt/active)" = 0
 ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'
-if [[ $node == amd201 ]]; then
+attempt=${stage##*-}
+if [[ $attempt == 07 || $attempt == 08 ]]; then
     test -s "$stage/placement-release.json"
-    if [[ $kind == deep ]]; then
+    if [[ $kind == deep || $attempt == 08 ]]; then
         python3 -B - "$stage/ordinary-admission.json" <<'PY_GATE'
 import json
 import sys
@@ -67,14 +76,20 @@ else
     sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
 fi
 test "$(sudo -n systemctl show -p ActiveState --value "$unit")" = active
-attempt=${stage##*-}
-[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 || $attempt == 07 ]]
+[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 || $attempt == 07 || $attempt == 08 ]]
 if [[ $attempt == 05 ]]; then
     [[ "$node:$variant:$kind" == amd198:v4:ordinary ]]
 fi
 diagnostic=()
 if [[ $attempt == 07 ]]; then
     [[ $node == amd201 ]]
+    diagnostic=(-diagnostic-process-drift)
+fi
+if [[ $attempt == 08 ]]; then
+    case "$node:$variant:$kind" in
+        amd183:v2:ordinary|amd183:v3:ordinary|amd198:v4:ordinary|amd201:v4:ordinary) ;;
+        *) exit 2 ;;
+    esac
     diagnostic=(-diagnostic-process-drift)
 fi
 if [[ $attempt == 04 ]]; then
