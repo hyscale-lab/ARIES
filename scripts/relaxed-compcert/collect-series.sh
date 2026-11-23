@@ -9,9 +9,12 @@ local_dir="$root/repo/ARIES/.cache/zb-raw/relaxed-compcert/$variant"
 mkdir -p "$local_dir"
 if [[ -s "$local_dir/worker.sha256" ]]; then
     (cd "$local_dir" && sha256sum --quiet -c worker.sha256)
+    if [[ ! -e $local_dir/extracted ]]; then
+        (cd "$local_dir" && tar -xzf worker.tar.gz && touch extracted)
+    fi
     exit 0
 fi
 ssh -o ConnectTimeout=15 "nehalem@$node.utah.cloudlab.us" "sudo -n bash -c 'set -eu; cd /local/zb-relaxed-compcert-01; test \$(wc -l < $variant/series-status.txt) = 5; tar --exclude=$variant/cni/bin --exclude=$variant/cni/cache --exclude=$variant/cni/ipam -I \"gzip -1\" -cf - inputs.sha256 $variant'" > "$local_dir/worker.partial.tar.gz"
 tar -tzf "$local_dir/worker.partial.tar.gz" >/dev/null
 mv "$local_dir/worker.partial.tar.gz" "$local_dir/worker.tar.gz"
-(cd "$local_dir" && sha256sum worker.tar.gz > worker.sha256 && tar -xzf worker.tar.gz)
+(cd "$local_dir" && sha256sum worker.tar.gz > worker.sha256 && tar -xzf worker.tar.gz && touch extracted)

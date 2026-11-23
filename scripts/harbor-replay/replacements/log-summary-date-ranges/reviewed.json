@@ -1,0 +1,44 @@
+[
+  {
+    "task": "log-summary-date-ranges",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/log-summary-date-ranges@sha256:cbeb6ba905c2fec294f16cd5e16e3ea7f2e04d38ac2484d51a11de262aa7dc51",
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "write_stdin"
+    ],
+    "effects": [
+      "Read /app/logs, inspect installed local tools, aggregate date/severity counts and create and check /app/summary.csv. Source 56d7 uses real GNU patch and an empty poll of a filesystem search."
+    ],
+    "trials": [
+      {
+        "trial": "015ecd18-dbcc-4558-a268-cd4a77c7df90",
+        "trajectory_sha256": "eaa3312298b3606407e053753d2f35c53d882e8d5279fe4047d850f751fa9631",
+        "rollout_sha256": "9d6eef85091ad1194d1e27c439e2cd426ff9cce9d8dca718982c236c12002fa6"
+      },
+      {
+        "trial": "426ee6e7-0df1-49a6-bc33-fb5593676a1e",
+        "trajectory_sha256": "85695c047e75f471c3cb766b4b03acbd2a9149695602460e88414758834a4e6c",
+        "rollout_sha256": "d9b23db19dce726bd42ad3767a09d22c286155dbe4228aab1245db8ab30c63d0"
+      },
+      {
+        "trial": "56d7a906-0fc0-4101-8987-6476d32648c1",
+        "trajectory_sha256": "0e4a3b9adfbd7a9d132c7b75091911891e80af04b2a3366c9f08641df1b6cb7a",
+        "rollout_sha256": "ca7a4b879e31f667852449725b73d7fd9599a61f9ea93c4444661bc4ef240836"
+      },
+      {
+        "trial": "aa46f9a1-bc98-4d38-a84f-ef25231ac9b3",
+        "trajectory_sha256": "f9b4a016f31122a00e1143df114757dbb38d0828e5da1df00270efdfb65f6e92",
+        "rollout_sha256": "cce743e00c9d9734f014f557e1e0a05ec8966afd62970307131522d764096d6c"
+      },
+      {
+        "trial": "dee8e10f-4a6d-4730-99bb-c64f7367bd68",
+        "trajectory_sha256": "cc133e25bf3b8b377ada70ccb52031beb3b804e4654a1fe87105203fb2f91b0a",
+        "rollout_sha256": "2975c6452461bdb4ce7671ca7e0b886af56abf801b0eff605d33e961ce14fd0f"
+      }
+    ]
+  }
+]

@@ -1,0 +1,22 @@
+{
+  "registry_input": {
+    "image": "sha256:cbeb6ba905c2fec294f16cd5e16e3ea7f2e04d38ac2484d51a11de262aa7dc51",
+    "amd64": "sha256:cbeb6ba905c2fec294f16cd5e16e3ea7f2e04d38ac2484d51a11de262aa7dc51",
+    "layer": "sha256:b79cb5816acd938f12e2e0abe13f039e8cdc44c0257d4fda55c57f876f012937",
+    "manifest_sha256": "ce46cef5a755fbe4bbb7c0e00cdaea217b4c44da99f800be01733ffd629ad314",
+    "count": 164,
+    "lines": 94547,
+    "file_bytes": 5913805
+  },
+  "task_files": {
+    "tests/test_outputs.py": "2fc06a6ce1944ad82f84fb437395fa75ed8c0eadd385b92e375c27e5bc9cb2b4",
+    "task.toml": "9a9593673d6805ef3a301ea734e9c4dbaf80da1b37c0fe9d1f2ceea2a8c57e18",
+    "instruction.md": "c1d4516ad4ec2238209740eaf01291df9ab48b0028a3fc5df383c6f831453484",
+    "environment/Dockerfile": "b479f6e987b63a6ec118fa1691b8bb85c437b2a6a0fe63feab5ed7154957fdfc",
+    "environment/log_generator_deterministic.py": "beb6eff59979e9aa0be63ce8a0f1b0df1178f92871f04ba9f76fa70cf8beb81c"
+  },
+  "task_commit": "12b7565679ce5006230b820666353673a133db93",
+  "terminal_bench_job": "17d1a7f6-3339-4670-8b70-3b145979f57f",
+  "terminal_bench_row": "f8d623c8-5f1b-4f9c-8deb-d110fa91e1d2",
+  "deep_trial": "aa46f9a1-bc98-4d38-a84f-ef25231ac9b3"
+}
