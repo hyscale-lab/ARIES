@@ -33,7 +33,18 @@ def ranges(sorted_gpas, page):
 def reconcile(raw, output, meta):
     events = list(read(raw/"events.jsonl"))
     partial = meta["status"] == "partial_fidelity"
-    groups, process_status = identify(events, complete=not partial)
+    markers = {"relaxed_ml_observed": "relaxed_ml_measurement",
+               "launch_timing_observed": "launch_timing_measurement"}
+    relaxed = meta["status"] in markers or meta["status"] == "diagnostic_process_observed"
+    if meta["status"] == "diagnostic_process_observed":
+        create, = [e for e in events if e["event"] == "create_start"]
+        if create.get("diagnostic_process_drift") is not True or not create.get("observer"):
+            raise ValueError("missing instrumented process-drift configuration")
+    if meta["status"] in markers:
+        marker, = [e for e in events if e["event"] == markers[meta["status"]]]
+        if marker["strict_source_admission"] is not False or marker["trial_id"] != meta["source_trial"]:
+            raise ValueError("relaxed measurement marker differs from source metadata")
+    groups, process_status = identify(events, complete=not partial, relaxed_status=relaxed)
     meta = dict(meta, process_handle_reconciliation=process_status)
     if partial:
         # Keep actual running/early-terminal results and incomplete starts without
@@ -121,7 +132,7 @@ def reconcile(raw, output, meta):
             expected.extend([("pre-tool",step),("post-tool",step)])
         if phases!=expected+[("session-end",0)]:
             raise ValueError("tracing missed a required boundary")
-    elif meta["status"]=="validated":
+    elif meta["status"] == "validated" or relaxed:
         raise ValueError("measurement admission requires traced boundaries")
     sampled_idle = []
     if sampled:

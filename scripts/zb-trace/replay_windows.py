@@ -2,7 +2,7 @@
 from itertools import groupby
 
 
-def identify(events, complete=True):
+def identify(events, complete=True, relaxed_status=False):
     calls = [e for e in events if e["event"] == "tool_dispatch"]
     replies = [e for e in events if e["event"] == "tool_reply"]
     issued = {e["sequence"]: e for e in calls}
@@ -19,9 +19,16 @@ def identify(events, complete=True):
         groups[step] = {"member_sequences": [e["sequence"] for e in members],
                         "member_operations": [e.get("operation", "Exec") for e in members]}
     active = {}
+    retained = {}
     unmatched = []
     for event in events:
         kind = event["event"]
+        if (relaxed_status and kind == "diagnostic_process_observation" and
+                event.get("status_basis") == "additional_join_after_source_poll"):
+            handle = event["source_process_session_id"]
+            if handle not in active or event["exit_code"] < 0:
+                raise ValueError("invalid terminal join for source process")
+            event["start_sequence"] = active.pop(handle)["sequence"]
         if kind not in {"tool_dispatch", "tool_reply"}:
             if active and kind in {"wait_start", "wait_end", "source_event"}:
                 event["background_handles_possibly_running"] = sorted(active)
@@ -40,7 +47,7 @@ def identify(events, complete=True):
             unmatched.append(sequence)
             continue
         success = event["exit_code"] == event["expected_exit_code"]
-        if complete and not success:
+        if complete and not success and not relaxed_status:
             raise ValueError("divergent live process status")
         operation = event.get("operation", "Exec")
         handle = event.get("source_process_session_id")
@@ -54,6 +61,16 @@ def identify(events, complete=True):
                 event["process_transition"] = "process_started"
             elif operation == "StartProcess":
                 event["process_transition"] = "completed_before_source_yield"
+                if relaxed_status:
+                    retained[handle] = event
+            elif relaxed_status and handle in retained:
+                terminal = retained[handle]
+                if event["exit_code"] != terminal["exit_code"] or event.get("status_basis") != "retained_terminal_status_empty_poll":
+                    raise ValueError("retained terminal poll differs from observed terminal status")
+                event["process_transition"] = "retained_terminal_status_empty_poll"
+                event["terminal_sequence"] = terminal["sequence"]
+                if event["expected_exit_code"] != -1:
+                    retained.pop(handle)
             elif handle not in active:
                 event["process_transition"] = "poll_without_observed_start"
                 unmatched.append(sequence)
@@ -62,10 +79,12 @@ def identify(events, complete=True):
             else:
                 event["process_transition"] = "terminal_poll"
                 event["start_sequence"] = active.pop(handle)["sequence"]
+                if relaxed_status and event["expected_exit_code"] == -1:
+                    retained[handle] = event
         group["background_handles_after"] = sorted(active)
     for event in active.values():
         event["terminal_poll_observed"] = False
-    if complete and (active or unmatched):
+    if complete and (active or unmatched or retained):
         raise ValueError("unmatched native start or poll")
     return groups, {"open_handles": sorted(active), "unmatched_reply_sequences": unmatched}
 
