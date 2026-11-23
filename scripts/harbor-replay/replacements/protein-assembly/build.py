@@ -94,6 +94,15 @@ mkdir -m 0700 -p /tmp/codex-home"""
         insert = "var taskSetups = map[string]taskSetup{"
         body = f'\n\t"{TASK}": {{packagesSHA: "{PACKAGE_SHA}", packagesField: "debian_task_tools_sha256", output: "gblock.txt", initialCheck: `{first}`, inputCheck: `{checks}`}},'
         edit(tree/"cmd/aries-harbor/prepare.go", insert, insert + body)
+        (tree/"cmd/aries-harbor/protein_network_probe.go").write_text(
+            Path(__file__).with_name("network_probe.go.txt").read_text()
+        )
+        network = "func networkEvidence(ctx context.Context, m *vhive.Manager, id, phase string, recording *harbor.Recording, log *json.Encoder) error {"
+        edit(tree/"cmd/aries-harbor/prepare.go", network, network + """
+    if recording.Task == "protein-assembly" {
+        return proteinNetworkEvidence(ctx, m, id, phase, log)
+    }
+""")
         # Formatting blobs and source responses stay in memory for verification.
         # The private record includes only digests, timing, IDs and status.
         edit(tree/"cmd/aries-harbor/main.go",

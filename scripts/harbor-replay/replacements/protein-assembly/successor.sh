@@ -9,7 +9,10 @@ case "$node" in
     *) exit 2 ;;
 esac
 host=nehalem@$node.utah.cloudlab.us
-remote=/local/zb-protein-assembly-93c2-01
+attempt=${3:-01}
+[[ $attempt == 01 || $attempt == 02 ]]
+remote=/local/zb-protein-assembly-93c2-$attempt
+worker_unit=zb-protein-93c2-$attempt
 ssh_cmd=(ssh -o BatchMode=yes -o ConnectTimeout=6 "$host")
 until ! systemctl is-active --quiet "zb-timing17-hf-$node.service" &&
       "${ssh_cmd[@]}" "sudo -n test -s /tmp/zb-timing17-01/b615a3ec-$gate/driver.exit &&
@@ -17,12 +20,25 @@ until ! systemctl is-active --quiet "zb-timing17-hf-$node.service" &&
       ! sudo -n pgrep -x 'firecracker|[.]firecracker-re'"; do
     sleep 30
 done
+if [[ $attempt == 02 && $node == amd183 ]]; then
+    "${ssh_cmd[@]}" "sudo -n python3 -B -" <<'PYTHON'
+from pathlib import Path
+import json
+old=Path("/local/zb-protein-assembly-93c2-01")
+claims=(old/"queue.tsv").read_text().splitlines()
+assert {line.split("\t")[0] for line in claims} == {"v1:ordinary","v2:ordinary","v1:deep"}
+for attempt in (old/"runs").iterdir():
+    assert (attempt/"deployment-after.json").is_file()
+    rows=list(map(json.loads,(attempt/"raw/events.jsonl").open()))
+    assert [row["event"] for row in rows] == ["create_start","source_task_ready","removed"]
+PYTHON
+fi
 printf '%s %s gate satisfied\n' "$(date -u +%FT%TZ)" "$node"
 (cd "$stage" && sha256sum --quiet -c SHA256SUMS)
 "${ssh_cmd[@]}" "umask 077; mkdir '$remote'; chmod 0700 '$remote'"
 nice -n 10 tar -cf - -C "$stage" . | "${ssh_cmd[@]}" "umask 077; tar -xf - -C '$remote'"
 "${ssh_cmd[@]}" "cd '$remote'; sha256sum --quiet -c SHA256SUMS &&
-    sudo -n systemd-run --unit=zb-protein-93c2-01 --uid=nehalem --working-directory='$remote' \
+    sudo -n systemd-run --unit=$worker_unit --uid=nehalem --working-directory='$remote' \
         /usr/bin/bash '$remote/queue.sh' '$remote'"
-"${ssh_cmd[@]}" "systemctl show zb-protein-93c2-01.service \
+"${ssh_cmd[@]}" "systemctl show $worker_unit.service \
     -p ActiveState -p SubState -p MainPID -p InvocationID -p ExecMainStartTimestamp"

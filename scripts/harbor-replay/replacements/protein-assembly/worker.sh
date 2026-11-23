@@ -40,7 +40,9 @@ timing_arm=v2
 if [[ $node == amd198 ]]; then timing_arm=v4; fi
 sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
 test "$(sudo -n systemctl show -p ActiveState --value "$unit")" = active
-arm=93c2fb63-$variant-protein-assembly-$kind-01
+attempt=${stage##*-}
+[[ $attempt == 01 || $attempt == 02 ]]
+arm=93c2fb63-$variant-protein-assembly-$kind-$attempt
 run=$stage/runs/$arm
 mkdir -p "$stage/runs"
 mkdir "$run"
