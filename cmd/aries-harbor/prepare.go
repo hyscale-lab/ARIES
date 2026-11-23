@@ -24,15 +24,16 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"sanitize-git-repo": {output: "README.md", initialCheck: "test -s README.md && test -s ray_processing/process.py && command -v git"},
 	"git-leak-recovery": {packagesSHA: sparqlSetup.packagesSHA, output: "secret.txt", initialCheck: "test ! -e /app/secret.txt && test -d /app/repo/.git"},
-	datasetTask:        datasetSetup,
-	markerTask:         markerSetup,
-	financialTask:      financialSetup,
-	sparqlTask:         sparqlSetup,
-	torchTask:          torchSetup,
-	"compile-compcert": compilerSetup,
-	kvTask:             kvSetup,
-	hfTask:             hfSetup,
+	datasetTask:         datasetSetup,
+	markerTask:          markerSetup,
+	financialTask:       financialSetup,
+	sparqlTask:          sparqlSetup,
+	torchTask:           torchSetup,
+	"compile-compcert":  compilerSetup,
+	kvTask:              kvSetup,
+	hfTask:              hfSetup,
 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
@@ -298,6 +299,10 @@ rmdir aries-guest-offline-packages`
 // This source session refers to the original random name literally in four
 // later steps. Allocate its recorded unused directory on the original call.
 var recordedTempDirectories = map[string][2]string{
+	"1b1460f4-7006-4469-997e-2034ffed4e78": {"/tmp/dclm-secret-audit.XXXXXX", "/tmp/dclm-secret-audit.2hgPQQ"},
+	"6d0403e0-740e-4104-a684-619cfc8f85bf": {"/tmp/dclm-sanitize.XXXXXX", "/tmp/dclm-sanitize.qMsklc"},
+	"e9635d5f-9991-4e6a-8308-887e68e6cfa6": {"/tmp/dclm-secret-audit.XXXXXX", "/tmp/dclm-secret-audit.E3lIvM"},
+	"a841b950-f1ec-48f4-bff2-ff231aba2c25": {"/tmp/dclm-secret-audit.XXXXXX", "/tmp/dclm-secret-audit.iOpZ0E"},
 	"337f0b12-666b-4f8f-bd8e-1eec7ab2de7f": {"/tmp/latex-synonyms.XXXXXX", "/tmp/latex-synonyms.eqOYqu"},
 	"18bb015b-80fc-4347-9743-2c11bacc0bcc": {"/tmp/latex-synonyms.XXXXXX", "/tmp/latex-synonyms.5bqpU2"},
 	"0ddfe8fb-e4d8-44f5-970e-27dcb8ec2999": {"/tmp/latex-synonyms.XXXXXXXX", "/tmp/latex-synonyms.RFhrThu1"},
@@ -331,6 +336,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
+	}
+	if r.Task == "sanitize-git-repo" {
+		cmd += "\nfind . -type f -not -path './.git/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
 	}
 	if r.Task == markerTask {
 		cmd += markerFinal(r.Trial)

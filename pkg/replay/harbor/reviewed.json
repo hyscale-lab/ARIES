@@ -687,5 +687,51 @@
         "rollout_sha256": "b2cab4db0a25cfc834b2914ffc39088e30037024888c366aab45f7993e4c017d"
       }
     ]
+  },
+  {
+    "task": "sanitize-git-repo",
+    "workdir": "/app/dclm",
+    "image": "docker.io/alexgshaw/sanitize-git-repo@sha256:4b5234da5bb0d67f3b0bf8db40a2883c07a5219f62b64c2bf9ff1ac84cd0f672",
+    "effects": [
+      "Redact fixture credentials in the local repository and verify the edits"
+    ],
+    "trials": [
+      {
+        "trial": "1b1460f4-7006-4469-997e-2034ffed4e78",
+        "trajectory_sha256": "dc48f86975fa42e350c4f290c44883eb8cde7d94274da82b6c2868a461bb632f",
+        "rollout_sha256": "7b149c49ae14e90cbdb4da5da13debc5c10b54688c0a7108ce08b7dded0d2e88"
+      },
+      {
+        "trial": "5854a3a5-de1f-4d9e-8123-75a524459770",
+        "trajectory_sha256": "1e1f0d91c3cf27a9720cf7d3eef5f8e730377f4d2c4d8c277a2daff8228b55ad",
+        "rollout_sha256": "a41485b2c892a0e4c5bd64fd1ad3a9049a29d4231a67178a24c218f6e399a2a7"
+      },
+      {
+        "trial": "6d0403e0-740e-4104-a684-619cfc8f85bf",
+        "trajectory_sha256": "909250833f1c35389daa7fb900d27bcf248ec609d620105c71737405f56ea5bc",
+        "rollout_sha256": "13ec682b6eec96ad88cc4e9fbfdcc7e3044f5eb4ff35216e88ad622585ae7777"
+      },
+      {
+        "trial": "a841b950-f1ec-48f4-bff2-ff231aba2c25",
+        "trajectory_sha256": "b0034f7631a6d85ceeadd607db537365018f48c9cc7d90b5ee3eb7fee6013f86",
+        "rollout_sha256": "304c84a3072eb077137dd9b3093f42ef1cdcf06b3f137346f6ae896df4b96c86"
+      },
+      {
+        "trial": "e9635d5f-9991-4e6a-8308-887e68e6cfa6",
+        "trajectory_sha256": "81d9f133095217fa1ba9a8ecba8587450eee98661eba2f16504d719b9967935f",
+        "rollout_sha256": "3a660d00edaa98e4ca66e7e8f4936546a3600c84a0bfed8c9395d41646988bee"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "write_stdin",
+      "update_plan",
+      "view_image",
+      "web_search_call"
+    ],
+    "needs_network": true
   }
 ]

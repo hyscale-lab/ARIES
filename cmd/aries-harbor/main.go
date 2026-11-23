@@ -31,6 +31,10 @@ var initialGitState string
 
 func sourceShellCommand(trial string, call replay.Call) core.Command {
 	cmd := core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir}
+	if trial == "5854a3a5-de1f-4d9e-8123-75a524459770" {
+		// The original later commands contain the random directory name verbatim.
+		cmd.Args[1] = strings.Replace(cmd.Args[1], "audit_dir = pathlib.Path(tempfile.mkdtemp(prefix='dclm-sanitize-'))", "audit_dir = pathlib.Path('/tmp/dclm-sanitize-eavsydk9')\naudit_dir.mkdir(mode=0o700)", 1)
+	}
 	if !call.Login {
 		cmd.Args[0] = "-c"
 		if trial == "85e3b0db-f1cb-43b5-9f8a-a2333db196c1" || trial == "f0d5e4b5-b20d-40bf-89ec-6483b65525dc" {
@@ -199,7 +203,7 @@ func command(ctx context.Context) error {
 		return errors.New("this task requires the pinned in-guest -image-helper")
 	}
 	readySetup, _ := sourceSetup(r)
-	if ((r.Trial == hfLoopbackTrial && *hfHarness == "") || r.Trial == hfDefaultThreadsTrial || r.Trial == datasetPythonTrial) != (*curlPackages != "") {
+	if ((r.Trial == hfLoopbackTrial && *hfHarness == "") || r.Trial == hfDefaultThreadsTrial || r.Trial == datasetPythonTrial || r.Task == "sanitize-git-repo") != (*curlPackages != "") {
 		return errors.New("provide the pinned curl archive for the source trial requiring the additional HTTP client")
 	}
 	if r.Task != "fix-git" && (*codexTools == "" || (readySetup.packagesSHA != "" && *osTools == "")) {
