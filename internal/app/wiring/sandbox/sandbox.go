@@ -15,6 +15,18 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// Prewarm hands a run environment's pre-warming the runtime each task's agent
+// sandbox will request.
+func Prewarm(prewarm func(context.Context, []deployment.Request) error) func(context.Context, []core.SandboxRequest) error {
+	return func(ctx context.Context, requests []core.SandboxRequest) error {
+		runtimes := make([]deployment.Request, 0, len(requests))
+		for _, request := range requests {
+			runtimes = append(runtimes, tasksandbox.DeploymentRequest(request, "", core.RuntimePlacement{}))
+		}
+		return prewarm(ctx, runtimes)
+	}
+}
+
 // New takes ownership of transport and resources, closing both on construction
 // failure. On success the sandbox owns transport and the observer owns Resources.
 func New(outputRoot, occurrenceID string, gpuIndices []int, logger *logrus.Logger, transport deployment.Deployment, newEnvironment func() deployment.TaskEnvironment, resources monitor.ResourceSource) (app.SandboxInstance, error) {

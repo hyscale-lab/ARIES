@@ -129,6 +129,10 @@ Gateway protocol owned by the harness. See [harness implementation](implementati
 
 ## Task lifecycle and isolation gates
 
+Before the first task, a backend that keeps warm pools (Kubernetes
+`warm_pool`) readies a pool for every task's sandbox, from the same request
+each task's Runner will make, so the first task also claims a ready pod.
+
 For every task the Runner performs this order:
 
 1. load the benchmark task;

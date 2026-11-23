@@ -50,6 +50,8 @@ type Wiring struct {
 	// Workdirs holds the resolved working directories of task images that name
 	// none, so a harness can start alongside its sandbox.
 	Workdirs map[runner.WorkdirKey]string
+	// Prewarm is the run's, set once its infrastructure has started.
+	Prewarm func(context.Context, []core.SandboxRequest) error
 }
 
 type Dependencies struct {
@@ -249,6 +251,9 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 				if cfg.Execution.Parallel() {
 					taskWiring.Workdirs = resolveWorkdirs(executionCtx, cfg, runID, outputRoot, catalog.Tasks, taskWiring, logger)
 				}
+				if err := prewarmSandboxes(executionCtx, cfg, runID, catalog.Tasks, taskWiring, logger); err != nil {
+					return core.RunResult{Name: cfg.Name, RunID: runID}, err
+				}
 				return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
 					func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 						experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, catalog, taskWiring)
@@ -360,11 +365,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	benchmarkRunner, err := runner.New(benchmark, harness.Harness, sandbox.Sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger,
 		ParallelStart: cfg.Execution.Parallel(), Placement: wiring.Placement, Workdirs: wiring.Workdirs, Warmup: warmup,
-		RuntimeOverrides: runner.RuntimeOverrides{
-			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
-			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB, StorageMB: cfg.Overrides.AgentSandboxResources.StorageMB},
-			AgentTimeout:          cfg.Overrides.AgentTimeout,
-		},
+		RuntimeOverrides: runtimeOverrides(cfg),
 	})
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("construct runner: %w", err), sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
@@ -385,4 +386,31 @@ func closeOccurrenceClients(sandboxClose, harnessClose func() error) error {
 		errs = append(errs, harnessClose())
 	}
 	return errors.Join(errs...)
+}
+
+func runtimeOverrides(cfg config.Config) runner.RuntimeOverrides {
+	return runner.RuntimeOverrides{
+		HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
+		AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB, StorageMB: cfg.Overrides.AgentSandboxResources.StorageMB},
+		AgentTimeout:          cfg.Overrides.AgentTimeout,
+	}
+}
+
+// prewarmSandboxes readies the run's sandbox runtimes for every task's agent
+// sandbox before the first task starts, when the backend keeps warm pools.
+// Each request is the one the task's runner will make.
+func prewarmSandboxes(ctx context.Context, cfg config.Config, runID string, tasks []core.Task, wiring Wiring, logger *logrus.Logger) error {
+	if wiring.Prewarm == nil || len(tasks) == 0 {
+		return nil
+	}
+	started := time.Now()
+	requests := make([]core.SandboxRequest, 0, len(tasks))
+	for _, task := range tasks {
+		requests = append(requests, runner.SandboxRequest(runID, task, runtimeOverrides(cfg), wiring.Workdirs))
+	}
+	if err := wiring.Prewarm(ctx, requests); err != nil {
+		return fmt.Errorf("prewarm task sandboxes: %w", err)
+	}
+	logger.WithContext(ctx).WithFields(logrus.Fields{"tasks": len(tasks), "duration": time.Since(started).String()}).Info("task sandboxes prewarmed")
+	return nil
 }

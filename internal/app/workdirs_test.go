@@ -71,3 +71,40 @@ func TestResolveWorkdirsProbesEachImageOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestPrewarmSandboxesSendsEachTasksSandboxRequest(t *testing.T) {
+	cpu, memory := 2.0, 4096
+	var cfg config.Config
+	cfg.Overrides.AgentSandboxResources = config.ResourceOverrides{CPU: &cpu, MemoryMB: &memory}
+	tasks := []core.Task{
+		{ID: "a", Environment: core.Environment{Image: "img-a"}},
+		{ID: "b", Environment: core.Environment{Image: "img-b", Workdir: "/own"}},
+	}
+	var got []core.SandboxRequest
+	wiring := Wiring{
+		Workdirs: map[runner.WorkdirKey]string{{Image: "img-a"}: "/resolved"},
+		Prewarm: func(_ context.Context, requests []core.SandboxRequest) error {
+			got = requests
+			return nil
+		},
+	}
+	if err := prewarmSandboxes(context.Background(), cfg, "run-1", tasks, wiring, logrus.New()); err != nil {
+		t.Fatal(err)
+	}
+	// Each request is the one the task's runner will make.
+	for i, task := range tasks {
+		want := runner.SandboxRequest("run-1", task, runtimeOverrides(cfg), wiring.Workdirs)
+		if got[i].RunID != want.RunID || got[i].TaskID != want.TaskID || got[i].Environment.Workdir != want.Environment.Workdir ||
+			got[i].Environment.CPU != 2 || got[i].Environment.MemoryMB != 4096 {
+			t.Fatalf("request %d = %+v, want %+v", i, got[i], want)
+		}
+	}
+	if got[0].Environment.Workdir != "/resolved" || got[1].Environment.Workdir != "/own" {
+		t.Fatalf("workdirs = %q, %q", got[0].Environment.Workdir, got[1].Environment.Workdir)
+	}
+
+	wiring.Prewarm = func(context.Context, []core.SandboxRequest) error { return errors.New("pool not ready") }
+	if err := prewarmSandboxes(context.Background(), cfg, "run-1", tasks, wiring, logrus.New()); err == nil {
+		t.Fatal("a failed prewarm was not reported")
+	}
+}

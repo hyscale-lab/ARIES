@@ -376,6 +376,7 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 		}
 		return &app.RunInfrastructure{
 			Environment: environment, Resources: resources, Close: owner.Close, NetworkPolicy: "per-sandbox-policy",
+			Prewarm: sandboxwiring.Prewarm(environment.Prewarm),
 			NewSandbox: func(cfg config.Config, root, run, occurrence string, gpus []int, log *logrus.Logger) (app.SandboxInstance, error) {
 				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
 			},

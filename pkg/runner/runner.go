@@ -343,10 +343,8 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		OutputDir:      r.outputDir,
 		NoSandboxTools: task.NoSandboxTools,
 	}
-	if sandboxEnvironment.Workdir == "" {
-		sandboxEnvironment.Workdir = r.workdirs[WorkdirKey{Image: sandboxEnvironment.Image, ExecUser: sandboxEnvironment.ExecUser}]
-	}
-	sandboxRequest := core.SandboxRequest{RunID: r.runID, TaskID: task.ID, Environment: sandboxEnvironment}
+	sandboxRequest := SandboxRequest(r.runID, task, r.runtimeOverrides, r.workdirs)
+	sandboxEnvironment = sandboxRequest.Environment
 	// With the working directory known, the sandbox and its bridge endpoint are
 	// reserved first, so the harness is configured and started while the
 	// sandbox starts. The bridge serves the endpoint only once it registers the
@@ -586,6 +584,17 @@ func cloneResourceOverrides(resources ResourceOverrides) ResourceOverrides {
 	}
 	cloned.StorageMB = cloneInt(resources.StorageMB)
 	return cloned
+}
+
+// SandboxRequest is the request for a task's agent sandbox: the task's
+// environment with the profile's overrides, and the resolved working directory
+// of an image that names none.
+func SandboxRequest(runID string, task core.Task, overrides RuntimeOverrides, workdirs map[WorkdirKey]string) core.SandboxRequest {
+	environment, _, _, _ := effectiveRuntime(task, overrides)
+	if environment.Workdir == "" {
+		environment.Workdir = workdirs[WorkdirKey{Image: environment.Image, ExecUser: environment.ExecUser}]
+	}
+	return core.SandboxRequest{RunID: runID, TaskID: task.ID, Environment: environment}
 }
 
 func effectiveRuntime(original core.Task, overrides RuntimeOverrides) (core.Environment, *float64, *int, time.Duration) {

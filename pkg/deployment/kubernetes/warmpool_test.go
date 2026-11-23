@@ -217,3 +217,78 @@ func TestWarmPoolNeedsAgentSandbox(t *testing.T) {
 		}
 	}
 }
+
+func TestRunEnvironmentPrewarmsThePoolsItsClaimsUse(t *testing.T) {
+	manager, fake := newTestManager(t, Options{AgentSandbox: true, WarmPool: 2})
+	var created []map[string]any
+	fake.respond = func(_ context.Context, args []string, stdin []byte, _, _ io.Writer) error {
+		if args[0] == "create" {
+			created = append(created, decodeManifest(t, stdin))
+		}
+		return nil
+	}
+	run := manager.NewRunEnvironment("run-1")
+	if err := run.Prewarm(context.Background(), []deployment.Request{testRequest()}); err == nil {
+		t.Fatal("Prewarm before Start succeeded")
+	}
+	if _, err := run.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	created, fake.calls = nil, nil
+
+	// Two tasks with one pod spec share a pool; their names and identities
+	// are not part of it. A third spec gets its own.
+	first, second, other := testRequest(), testRequest(), testRequest()
+	first.Name, first.Labels = "", map[string]string{"aries.component": "sandbox"}
+	second.Labels = map[string]string{"aries.component": "sandbox", "aries.run": "run-1", "aries.task": "task-2"}
+	other.Image = "example.test/other:1"
+	if err := run.Prewarm(context.Background(), []deployment.Request{first, second, other}); err != nil {
+		t.Fatalf("Prewarm = %v", err)
+	}
+	var pools, waited []string
+	for _, manifest := range created {
+		if manifest["kind"] == "SandboxWarmPool" {
+			pools = append(pools, manifest["metadata"].(map[string]any)["name"].(string))
+		}
+	}
+	for _, call := range fake.calls {
+		if call[0] == "wait" {
+			if !slices.Contains(call, "--for=jsonpath={.status.readyReplicas}=2") {
+				t.Fatalf("wait = %v", call)
+			}
+			waited = append(waited, call[4])
+		}
+	}
+	if len(pools) != 3 || pools[0] != pools[1] || pools[0] == pools[2] {
+		t.Fatalf("pools = %v", pools)
+	}
+	if !slices.Equal(waited, []string{poolResource + "/" + pools[0], poolResource + "/" + pools[2]}) {
+		t.Fatalf("waited on %v", waited)
+	}
+
+	// A task's claim uses the prewarmed pool. The fake names no claimed pod,
+	// so Create fails after making the claim.
+	created = nil
+	_, _ = manager.Create(context.Background(), testRequest())
+	for _, manifest := range created {
+		if manifest["kind"] == "SandboxClaim" {
+			if got := manifest["spec"].(map[string]any)["warmPoolRef"].(map[string]any)["name"]; got != pools[0] {
+				t.Fatalf("claim used pool %v, want %v", got, pools[0])
+			}
+			return
+		}
+	}
+	t.Fatalf("no claim created: %v", created)
+}
+
+func TestPrewarmWithoutWarmPoolsDoesNothing(t *testing.T) {
+	manager, fake := newTestManager(t, Options{AgentSandbox: true})
+	run := manager.NewRunEnvironment("run-1")
+	if _, err := run.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fake.calls = nil
+	if err := run.Prewarm(context.Background(), []deployment.Request{testRequest()}); err != nil || len(fake.calls) != 0 {
+		t.Fatalf("Prewarm = %v, calls %v", err, fake.calls)
+	}
+}

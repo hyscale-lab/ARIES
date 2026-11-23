@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +18,13 @@ import (
 
 // A warm pool keeps pods of one spec running before any task asks for one,
 // and a task claims one of them instead of creating its own. The run owns one
-// SandboxTemplate and SandboxWarmPool per distinct pod spec, created by the
-// first claim that needs it and removed by RunEnvironment.Stop.
+// SandboxTemplate and SandboxWarmPool per distinct pod spec, created when the
+// run starts (RunEnvironment.Prewarm) or by the first claim whose spec was not
+// prewarmed, and removed by RunEnvironment.Stop.
+//
+// A claim on a pool with no ready pod does not wait for the pool: the
+// controller makes the claim a pod of its own, about 2 s later, while the
+// pool's pod keeps booting. Prewarm therefore waits until each pool is ready.
 //
 // A pooled pod exists before its task, so it is weaker than a pod ARIES
 // creates for the task: its name is the pool's, not the runtime name ARIES
@@ -149,6 +155,31 @@ func (manager *Manager) ensurePool(ctx context.Context, runID string, request de
 		}
 	}
 	return name, nil
+}
+
+// prewarm creates the run's pools for these pod specs and waits until each
+// holds its ready pods.
+func (manager *Manager) prewarm(ctx context.Context, runID string, requests []deployment.Request) error {
+	var pools []string
+	for _, request := range requests {
+		pool, err := manager.ensurePool(ctx, runID, request)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(pools, pool) {
+			pools = append(pools, pool)
+		}
+	}
+	readyCtx, cancel := context.WithTimeout(ctx, manager.options.ReadyTimeout)
+	defer cancel()
+	timeout := strconv.Itoa(int(manager.options.ReadyTimeout.Seconds())) + "s"
+	ready := "jsonpath={.status.readyReplicas}=" + strconv.Itoa(manager.options.WarmPool)
+	for _, pool := range pools {
+		if _, err := manager.run(readyCtx, nil, "wait", "-n", manager.options.Namespace, "--for="+ready, poolResource+"/"+pool, "--timeout="+timeout); err != nil {
+			return fmt.Errorf("wait for SandboxWarmPool %s: %w", pool, err)
+		}
+	}
+	return nil
 }
 
 // stopClaimed deletes the claim behind a pooled pod and confirms that the

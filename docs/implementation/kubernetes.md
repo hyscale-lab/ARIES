@@ -292,9 +292,23 @@ target checks are the same.
 
 ### Warm pools and their weaker isolation
 
-With `warm_pool: N`, the first sandbox of a given pod spec in a run creates a
-`SandboxTemplate` holding that spec and a `SandboxWarmPool` that keeps `N` of
-its pods running. Each sandbox then creates a `SandboxClaim`, named with the
+With `warm_pool: N`, the run readies its pools before its first task. Once
+the shared infrastructure has started and image working directories are
+resolved, ARIES builds each task's agent-sandbox request, the same one the
+task's runner will make, and the run environment's `Prewarm` creates, per
+distinct pod spec, a `SandboxTemplate` holding that spec and a
+`SandboxWarmPool` that keeps `N` of its pods running. It then waits until every
+pool reports `N` ready pods; a pool that does not get ready fails the run.
+
+Readying the pools before the first claim matters: a claim on a pool with no
+ready pod does not wait for it. The agent-sandbox controller makes the claim a
+pod of its own, about 2 s later, while the pool's pod keeps booting, so that
+claim is slower than creating the pod directly (on the test cluster 3.0 s
+against 1.7 s under runc, 8.0 s against 5.8 s under Kata).
+
+A sandbox whose spec was not prewarmed, such as an evaluation sandbox, creates
+its pool on its first claim, which is then such a cold claim. Each sandbox
+creates a `SandboxClaim`, named with the
 runtime name ARIES chose, and agent-sandbox hands it one of the pool's ready
 pods. ARIES labels and annotates that pod with the task's identity, and the
 pool starts a replacement. Deleting the claim (`shutdownPolicy:
@@ -322,9 +336,9 @@ must say so:
   the deny-all.
 - **The pool costs capacity and interferes.** Every waiting pod holds its CPU
   and memory requests. Claiming a pod starts its replacement on the same node
-  while the task runs, and that pod is not measured as part of any task. The
-  first sandbox of a spec in a run waits for the pool's first pod, so it is a
-  cold start. A pod spec differs by image, resources, working directory and
+  while the task runs, and that pod is not measured as part of any task.
+  Readying the pools lengthens the run's start, before any task. A pod spec
+  differs by image, resources, working directory and
   environment, so tasks that share them share a pool; the container ARIES
   starts once per run to resolve an image's working directory has no limits or
   working directory of its own, and gets a pool of its own.

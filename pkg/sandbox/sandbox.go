@@ -238,23 +238,7 @@ func (m *Manager) reserve(ctx context.Context, request core.SandboxRequest) (*Sa
 }
 
 func (m *Manager) launch(ctx context.Context, s *Sandbox) error {
-	request := s.request
-	env := request.Environment
-	deploymentRequest := deployment.Request{
-		Name: s.containerName, Image: env.Image, Workdir: env.Workdir,
-		Env:        taskEnvironment(env.Env),
-		Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"},
-		Labels:    ownershipLabels(request, "task-container"),
-		Placement: s.connectivity.Placement,
-		StorageMB: env.StorageMB, GPUs: env.GPUs,
-		Init: true, NoNewPrivileges: env.ExecUser != "", AllowImageVolumes: true,
-	}
-	if env.CPU > 0 {
-		deploymentRequest.CPU = &env.CPU
-	}
-	if env.MemoryMB > 0 {
-		deploymentRequest.MemoryMB = &env.MemoryMB
-	}
+	deploymentRequest := DeploymentRequest(s.request, s.containerName, s.connectivity.Placement)
 	var err error
 	s.containerID, err = m.deployment.Create(ctx, deploymentRequest)
 	s.containerOwned = s.containerID != ""
@@ -316,6 +300,28 @@ func (m *Manager) Stop(ctx context.Context, live runner.Sandbox) error {
 		return errors.New("stop deployment sandbox: sandbox belongs to another manager")
 	}
 	return sandbox.stop(ctx)
+}
+
+// DeploymentRequest is the runtime a sandbox for this request runs in, named
+// name and attached at placement.
+func DeploymentRequest(request core.SandboxRequest, name string, placement core.RuntimePlacement) deployment.Request {
+	env := request.Environment
+	deploymentRequest := deployment.Request{
+		Name: name, Image: env.Image, Workdir: env.Workdir,
+		Env:        taskEnvironment(env.Env),
+		Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"},
+		Labels:    ownershipLabels(request, "task-container"),
+		Placement: placement,
+		StorageMB: env.StorageMB, GPUs: env.GPUs,
+		Init: true, NoNewPrivileges: env.ExecUser != "", AllowImageVolumes: true,
+	}
+	if env.CPU > 0 {
+		deploymentRequest.CPU = &env.CPU
+	}
+	if env.MemoryMB > 0 {
+		deploymentRequest.MemoryMB = &env.MemoryMB
+	}
+	return deploymentRequest
 }
 
 func ownershipLabels(request core.SandboxRequest, kind string) map[string]string {

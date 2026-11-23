@@ -78,6 +78,19 @@ func (e *RunEnvironment) Start(ctx context.Context) (core.RuntimePlacement, erro
 	return core.RuntimePlacement{AttachmentID: namespace}, nil
 }
 
+// Prewarm readies the run's warm pools for these sandbox requests before any
+// task claims from them, so the run's first claim also takes a ready pod. Only
+// the requests' pod specs matter. Without warm pools it does nothing.
+func (e *RunEnvironment) Prewarm(ctx context.Context, requests []deployment.Request) error {
+	if err := e.validate(); err != nil {
+		return err
+	}
+	if e.manager.options.WarmPool == 0 {
+		return nil
+	}
+	return e.manager.prewarm(ctx, e.runID, requests)
+}
+
 func (e *RunEnvironment) NewTaskEnvironment() deployment.TaskEnvironment {
 	return &taskEnvironment{owner: e}
 }

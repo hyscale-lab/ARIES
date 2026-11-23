@@ -47,6 +47,9 @@ each as its own conversation.
 
 The app owns one shared bridge and network per run; Runner receives per-sandbox
 sessions. Start shared infrastructure after model preflight, before task admission.
+After resolving image working directories and before admission, call the optional
+`Prewarm` hook with each task's `runner.SandboxRequest`, built exactly as Runner
+builds it; a failed prewarm fails the run.
 After task cleanup, stop and remove the shared bridge runtime, finalize shared
 observation, remove connectivity, and close transports before persisting results.
 Record shared outcomes separately from task counts and measurements.

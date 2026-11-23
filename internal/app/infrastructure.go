@@ -35,6 +35,9 @@ type RunInfrastructure struct {
 	Resources     monitor.ResourceSource
 	Close         func() error
 	NetworkPolicy string
+	// Prewarm, when set, readies runtimes for these sandbox requests before
+	// any task starts; it is set only for backends that keep warm pools.
+	Prewarm func(context.Context, []core.SandboxRequest) error
 }
 
 // runWithInfrastructure finalizes every run resource before executeAndRecord
@@ -149,6 +152,7 @@ func runWithInfrastructure(ctx context.Context, cfg config.Config, runID, output
 	}
 	report.StartupDuration = time.Since(started)
 	wiring.NewSandbox = infra.NewSandbox
+	wiring.Prewarm = infra.Prewarm
 	wiring.Placement = placement
 	wiring.NewBridge = func(_ config.Config, root string, _ *logrus.Logger) (runner.ToolBridge, error) {
 		return service.NewSession(root)
