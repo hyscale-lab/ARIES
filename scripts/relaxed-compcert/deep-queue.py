@@ -83,8 +83,13 @@ def main(root,variant,relocated=False):
             assert s[:3]==[node,variant,TRIAL] and len(s)==4
             int(s[3])
         partial.rename(archive)
+    # The worker has finished exporting. The next independent VM can use it
+    # while this runner unpacks the full archive and computes normalized results.
+    subprocess.run(['gzip','-t',archive],check=True)
+    checksum=sha(archive)+'  worker.tar.gz\n'
+    (local/'transfer-verified.sha256').write_text(checksum)
     with tarfile.open(archive) as data:data.extractall(local,filter='data')
-    (local/'worker.sha256').write_text(sha(archive)+'  worker.tar.gz\n')
+    (local/'worker.sha256').write_text(checksum)
     print('Raw archive verified',archive,flush=True)
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('variant',choices=('v1','v4'))

@@ -83,7 +83,7 @@ def main(root,node):
         for prior_node in ('amd182','amd189'):
             ack=json.loads((local/(prior_node+'.skip.json')).read_bytes())
             assert ack['decision_sha256']==digest(decision) and ack['node']==prior_node
-        wait('Complete previous compiler deep-baseline trace, worker exit and raw export',lambda:(cache/'zb-raw/relaxed-compcert-deep/v1/worker.sha256').is_file() and status(node,'zb-relaxed-compcert-deep-v1-01')=='inactive')
+        wait('Complete previous compiler deep-baseline trace, worker exit and raw export',lambda:any((cache/'zb-raw/relaxed-compcert-deep/v1'/marker).is_file() for marker in ('transfer-verified.sha256','worker.sha256')) and status(node,'zb-relaxed-compcert-deep-v1-01')=='inactive')
     else:
         skipped=[(level,v) for level,v,_,_ in SERIES[node] if (level,v) in moved]
         if skipped:
