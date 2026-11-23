@@ -11,7 +11,7 @@ import sys
 import tarfile
 import tempfile
 
-from colocated_torch import EVENTS, INVENTORY, PERIODS, TRIAL, independent
+from colocated_torch import EVENTS, INVENTORY, PERIODS, SOLO_PERIODS, TRIAL, independent
 
 
 def digest(path):
@@ -50,14 +50,15 @@ nice -n 10 ionice -c 3 tar -czf - -- "${files[@]}"
     return archive, status
 
 
-def verify_case(case, closure, verify):
+def verify_case(case, closure, verify, count):
     results = json.loads((case/'result.json').read_text())
-    if results['source'] != TRIAL or results['warmup']:
-        raise ValueError('expected the original two-VM PyTorch trial')
+    if results['source'] != TRIAL or results['warmup']!=(count==1):
+        raise ValueError('expected the original PyTorch trial and prescribed VM count')
     roles = results['roles']
-    if independent(roles)!=results['shared_effective_root_inode']:
+    shared = independent(roles) if count==2 else None
+    if shared!=results['shared_effective_root_inode']:
         raise ValueError('reported sharing differs from the actual backing identities')
-    for name, role, stamps in zip(('a','b'),roles,results['session_events'],strict=True):
+    for name, role, stamps in zip(('a','b')[:count],roles,results['session_events'],strict=True):
         directory = case/name
         log = directory/'events.jsonl'
         actual = verify(log,closure)
@@ -83,7 +84,7 @@ def verify_case(case, closure, verify):
     expected = {(r['root_readback']['pid'],r['root_readback']['start_ticks']) for r in roles}
     joint = [row for row in host if begin<=row['begin_ns']<=row['end_ns']<=end]
     if (len(host)!=results['worker_frames'] or len(joint)!=results['worker_joint_frames']
-            or max(len(row['vmms']) for row in host)!=2 or any(
+            or max(len(row['vmms']) for row in host)!=count or any(
                 {(p['pid'],p['start_ticks']) for p in row['vmms']}!=expected for row in joint)):
         raise ValueError('host samples do not corroborate the measured two-VM overlap')
     results['host_samples_sha256'] = digest(case/'host.jsonl')
@@ -91,7 +92,7 @@ def verify_case(case, closure, verify):
     return results
 
 
-def publish(archive, assets, target):
+def publish(archive, assets, target, solo=False):
     if digest(assets/'SHA256SUMS') != INVENTORY:
         raise ValueError('sealed bundle revision differs')
     subprocess.run(['sha256sum','--quiet','-c','SHA256SUMS'],cwd=assets,check=True)
@@ -113,17 +114,18 @@ def publish(archive, assets, target):
         if preflight['inventory_sha256'] != INVENTORY or preflight['adapter_sha256'] != closure['adapter_binary_sha256']:
             raise ValueError('measured source bundle lineage differs')
         shutil.copy(staging/'preflight.json',publication)
-        for index, variant in enumerate(PERIODS):
-            name = f'{index:02d}-{variant}-2vm'
+        count = 1 if solo else 2
+        for index, variant in enumerate(SOLO_PERIODS if solo else PERIODS):
+            name = f'{index:02d}-{variant}-{count}vm'
             raw = staging/name
             observations = publication/name
-            meta = verify_case(raw,closure,verify)
+            meta = verify_case(raw,closure,verify,count)
             if meta['variant'] != variant or any(r['root_readback']['root_input'] !=
                     preflight['configurations'][variant]['shared_root'] for r in meta['roles']):
                 raise ValueError('period backing or shared root inode differs')
             observations.mkdir()
             shutil.copy(raw/'host.jsonl',observations)
-            for role in ('a','b'):
+            for role in ('a','b')[:count]:
                 (observations/role).mkdir()
                 shutil.copy(raw/role/'samples.jsonl',observations/role)
             meta.update(node='amd201',raw_archive_sha256=digest(archive))
@@ -138,6 +140,7 @@ def main():
     for name in ('raw','assets','target'):
         p.add_argument(name,type=Path)
     p.add_argument('--reuse-archive',action='store_true',help='Verify previously collected raw inputs')
+    p.add_argument('--solo',action='store_true',help='Verify the single-VM reference campaign')
     args = p.parse_args()
     if args.reuse_archive:
         archive = args.raw/'worker.tar.gz'
@@ -146,7 +149,7 @@ def main():
         archive, status = collect(args.host,args.worker_path,args.raw.resolve())
     if status != '0':
         raise SystemExit(f'campaign exit {status}; raw worker observations retained')
-    publish(archive,args.assets.resolve(strict=True),args.target.resolve())
+    publish(archive,args.assets.resolve(strict=True),args.target.resolve(),args.solo)
 
 
 if __name__ == '__main__':

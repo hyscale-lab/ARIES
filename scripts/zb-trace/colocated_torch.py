@@ -23,6 +23,7 @@ TASK = 'torch-tensor-parallelism'
 INVENTORY = '6f50c5bd8fa791b90e600d487842668baf38e1e1835d68c3cc55426fa9dd06f2'
 ROOT_SHA = '292a537a4bdb05fe4323352ecf74299c13c732b9e430d153d5bd5e53772fed5f'
 PERIODS = ('v3', 'v4', 'v4', 'v3')
+SOLO_PERIODS = ('v4', 'v3')
 EVENTS = ('create_start', 'snapshot_start', 'restore_complete', 'session_start', 'session_end', 'removed')
 GIB = 2**30
 
@@ -245,24 +246,25 @@ def independent(roles):
     return (first['root']['device'],first['root']['inode']) == (second['root']['device'],second['root']['inode'])
 
 
-def run_period(index, variant, output, launch, groups, roots):
+def run_period(index, variant, output, launch, groups, roots, count):
     if processes():
         raise RuntimeError('worker has another running VMM')
-    case = output/f'{index:02d}-{variant}-2vm'
+    case = output/f'{index:02d}-{variant}-{count}vm'
     case.mkdir()
     stop = threading.Event()
     with concurrent.futures.ThreadPoolExecutor(3) as pool:
         sampler = pool.submit(observe_host,stop,case/'host.jsonl',groups)
         try:
             time.sleep(20)
-            first = pool.submit(launch,variant,roots[variant],case/'a')
-            time.sleep(40)
-            if first.done():
-                first.result()
-                raise ValueError('first replay ended before the second launch')
-            second = pool.submit(launch,variant,roots[variant],case/'b')
-            sessions, roles = zip(first.result(),second.result(),strict=True)
-            shared_root_inode = independent(roles)
+            futures = [pool.submit(launch,variant,roots[variant],case/'a')]
+            if count == 2:
+                time.sleep(40)
+                if futures[0].done():
+                    futures[0].result()
+                    raise ValueError('first replay ended before the second launch')
+                futures.append(pool.submit(launch,variant,roots[variant],case/'b'))
+            sessions, roles = zip(*(future.result() for future in futures),strict=True)
+            shared_root_inode = independent(roles) if count == 2 else None
             time.sleep(15)
         finally:
             stop.set()
@@ -274,12 +276,13 @@ def run_period(index, variant, output, launch, groups, roots):
     hi = min(s['session_end'] for s in sessions)
     pids = {(v['root_readback']['pid'],v['root_readback']['start_ticks']) for v in roles}
     overlap = [row for row in host if lo<=row['begin_ns']<=row['end_ns']<=hi]
-    if len(overlap)<2 or max(len(h['vmms']) for h in host)!=2 or any(
+    if len(overlap)<2 or max(len(h['vmms']) for h in host)!=count or any(
             {(p['pid'],p['start_ticks']) for p in row['vmms']}!=pids for row in overlap):
-        raise RuntimeError('worker-wide samples do not establish the exclusive two-VM overlap')
-    config = dict(variant=variant, source=TRIAL, warmup=False, session_events=sessions, roles=roles,
+        raise RuntimeError('worker-wide samples do not establish the intended exclusive VMM placement')
+    config = dict(variant=variant, source=TRIAL, warmup=count==1,
+                  period_type='solo_reference' if count==1 else 'colocated', session_events=sessions, roles=roles,
                   shared_effective_root_inode=shared_root_inode,
-                  worker_frames=len(host), worker_joint_frames=len(overlap), worker_max_vmms=2,
+                  worker_frames=len(host), worker_joint_frames=len(overlap), worker_max_vmms=count,
                   service_cgroups={key:str(value) for key,value in groups.items()})
     (case/'result.json').write_text(json.dumps(config,indent=2)+'\n')
     print(case.name, 'verified', flush=True)
@@ -291,6 +294,7 @@ def main():
         cli.add_argument(name,type=Path)
     cli.add_argument('v3_unit')
     cli.add_argument('v4_unit')
+    cli.add_argument('--solo',action='store_true',help='Run the two unpaused single-VM references')
     a = cli.parse_args()
     assets, output = a.assets.resolve(strict=True), a.output.resolve()
     if output.exists():
@@ -309,11 +313,14 @@ def main():
         raise ValueError('sealed adapter digest mismatch')
     network = replay_args(assets,assets/'cni',TASK)
     output.mkdir(mode=0o700)
-    (output/'preflight.json').write_text(json.dumps(dict(**hardware,adapter_sha256=digest(binary)),indent=2)+'\n')
-    for index,variant in enumerate(PERIODS):
+    order = SOLO_PERIODS if a.solo else PERIODS
+    count = 1 if a.solo else 2
+    hardware.update(adapter_sha256=digest(binary),order=list(order),guests_per_period=count)
+    (output/'preflight.json').write_text(json.dumps(hardware,indent=2)+'\n')
+    for index,variant in enumerate(order):
         launch = partial(run_vm,assets,receipt,binary,runtimes[variant],units[variant],
                          replay_args=network,verify=verify)
-        run_period(index,variant,output,launch,groups,roots)
+        run_period(index,variant,output,launch,groups,roots,count)
 
 
 if __name__ == '__main__':

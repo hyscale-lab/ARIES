@@ -84,6 +84,9 @@ directories, CNI identities and writable backing. Each live readback verifies
 the common configured immutable root input and records the inode actually
 open or mapped inside each private restore namespace. The report can identify
 private block copies and shared DAX backing independently of API path text.
+After the paired campaign, `--solo` measures one unpaused replay on each
+backing in DAX, block order with the same baseline and tail. Use the flag
+with the collector to verify those two references separately.
 
 Retain the launcher output in a sibling `.log` file and the exit code in a
 sibling `.exit` file. `collect_colocated_torch.py` retrieves the raw receipts
