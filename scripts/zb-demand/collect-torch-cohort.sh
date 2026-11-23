@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Retain the sealed PyTorch diagnostic without copying source bundle symlinks.
 set -euo pipefail
+shopt -s dotglob nullglob
 worker=$1
 remote=$2
 out=$(realpath -m "$3")
@@ -10,6 +11,7 @@ variant=$4
 [[ ! -e "$out" && ! -e "$out.tar.gz" ]]
 ssh -o BatchMode=yes "$worker" "sudo -n bash -s -- '$remote' '$variant'" > "$out.tar.gz.partial" <<'WORKER'
 set -euo pipefail
+shopt -s dotglob nullglob
 cd "$1"
 files=()
 for path in ./*; do

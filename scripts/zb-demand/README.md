@@ -3,9 +3,9 @@
 This probe targets the AMD nested-page-fault path on the study's Ubuntu 6.8
 x86_64 host. It uses KVM and core MM BTF and was exercised with bpftrace
 0.20.2. Run it on an isolated diagnostic worker in the initial PID namespace.
-Enable the stock idle hook and the normal replay clock receipts. Start both
-BPF collectors before the VMM and leave them active through session end.
-Retain their stderr and shut down with SIGINT after the final observation.
+Enable the stock idle hook and the normal replay clock receipts. Start the
+KVM collector before the VMM and attach the reporting probe to the restored
+executable. Retain both stderr logs and stop after the final observation.
 
 ```sh
 sudo bpftrace -q -B line scripts/zb-demand/kvm-demand.bt \
