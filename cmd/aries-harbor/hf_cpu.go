@@ -26,13 +26,20 @@ data = {"guest_logical_cpus":cpus, "guest_allowed_cpus":affinity,
         "guest_cpu_online": Path("/sys/devices/system/cpu/online").read_text().strip()}
 assert cpus == len(affinity) == 2 and "PYTHON_CPU_COUNT" not in os.environ
 if sys.argv[2] == "b615a3ec-fae8-4198-ae4c-0aedf9c3e25b":
- import torch
- data["probe_torch_default_threads"]=torch.get_num_threads()
  data["guest_topology"]={p.name:(p/"topology/thread_siblings_list").read_text().strip() for p in Path("/sys/devices/system/cpu").glob("cpu[0-9]*")}
  data["thread_environment"]={k:os.environ.get(k) for k in ("OMP_NUM_THREADS","MKL_NUM_THREADS","PYTHON_CPU_COUNT")}
  if sys.argv[3] == "true":
   assert set(data["guest_topology"].values()) == {"0-1"}, data
-  assert data["probe_torch_default_threads"] == 1 and all(value is None for value in data["thread_environment"].values()),data
+  assert all(value is None for value in data["thread_environment"].values()),data
+  # The original step 6 imports Torch and reads its default. Preserve the
+  # pre-source memory state by reading only kernel CPU topology before then.
+  if phase != "after_source":
+   assert "torch" not in sys.modules
+   data["torch_probe"]="deferred_to_original_step6"
+   print(json.dumps(data)); sys.exit(0)
+ import torch
+ data["probe_torch_default_threads"]=torch.get_num_threads()
+ if sys.argv[3] == "true": assert data["probe_torch_default_threads"] == 1,data
  if phase=="after_source":
   app=ast.parse(Path("/app/app.py").read_text())
   setters=[ast.unparse(x.func) for x in ast.walk(app) if isinstance(x,ast.Call) and ast.unparse(x.func).endswith("set_num_threads")]
