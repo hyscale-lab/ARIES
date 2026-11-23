@@ -32,9 +32,19 @@ if [[ $variant == v4 ]]; then
     if [[ $(cat "$original") != 0 ]]; then
         retry=zb-relaxed-compcert-bf3c-v1-upstream-01
         folder="$base/fallback-bf3c-v1-01"
-        if ! ssh "$host" "sudo -n test -s $folder/series-status.txt"; then
-            ssh "$host" "sudo -n systemd-run --wait --unit=$retry /usr/bin/python3 -B $base/bf3c-series-01.py recovery $base v1 fcmod-zepbound-amd182 /local/zb-validation/runtime /local/zb-deep-kv-v1-amd182/cni /local/zb-torch-deep-v1-amd182/assets/codex-harbor-tools.tar.gz bf3c1acf-2d7d-4fa4-9b03-fb8edfce1666"
+        state=$(ssh "$host" "systemctl show -p ActiveState --value $retry")
+        if [[ $state == inactive ]] && ! ssh "$host" "sudo -n test -s $folder/series-status.txt"; then
+            ssh "$host" "sudo -n systemd-run --unit=$retry /usr/bin/python3 -B $base/bf3c-series-01.py recovery $base v1 fcmod-zepbound-amd182 /local/zb-validation/runtime /local/zb-deep-kv-v1-amd182/cni /local/zb-torch-deep-v1-amd182/assets/codex-harbor-tools.tar.gz bf3c1acf-2d7d-4fa4-9b03-fb8edfce1666"
         fi
+        while :; do
+            state=$(ssh -o ConnectTimeout=10 "$host" "systemctl show -p ActiveState --value $retry") || { sleep 30; continue; }
+            [[ $state != failed ]] || exit 1
+            if [[ $state == inactive ]]; then
+                ssh "$host" "sudo -n test -s $folder/series-status.txt"
+                break
+            fi
+            sleep 30
+        done
         local_retry="$root/repo/ARIES/.cache/zb-raw/relaxed-compcert-menhir/v1"
         mkdir -p "$local_retry"
         if [[ ! -f $local_retry/worker.sha256 ]]; then
