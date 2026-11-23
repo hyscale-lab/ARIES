@@ -24,6 +24,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"git-leak-recovery": {packagesSHA: sparqlSetup.packagesSHA, output: "secret.txt", initialCheck: "test ! -e /app/secret.txt && test -d /app/repo/.git"},
 	datasetTask:        datasetSetup,
 	markerTask:         markerSetup,
 	financialTask:      financialSetup,

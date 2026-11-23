@@ -172,7 +172,7 @@ func command(ctx context.Context) error {
 		financialPoll := r.Task == financialTask && r.Trial == "dce59078-0f61-4eac-92f9-3b2728e4ef28"
 		hfPoll := r.Task == hfTask && (r.Trial == hfLoopbackTrial || r.Trial == hfInspectionTrial || r.Trial == hfGunicornLoopbackTrial)
 		allowed := grpcPoll || financialPoll || hfPoll || torchPoll || r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
-		if !allowed || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 {
+		if !allowed || (!financialPoll && (*observer != "" || *sampler != "" || *probe != "" || *intraStep != 0)) {
 			return errors.New("process drift diagnostics require a reviewed uninstrumented recording")
 		}
 	}

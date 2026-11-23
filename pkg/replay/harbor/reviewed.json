@@ -645,5 +645,47 @@
       "web_search_call"
     ],
     "needs_network": true
+  },
+  {
+    "task": "git-leak-recovery",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/git-leak-recovery@sha256:62160e522a4238b8bcd522411ea97b5b200f811e5899d34947e66809bef7e586",
+    "effects": [
+      "Restore the synthetic marker from the disposable fixture repository and sanitize its local Git history"
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan"
+    ],
+    "trials": [
+      {
+        "trial": "08ae20d8-33b7-4c28-91f0-a7aedff9326b",
+        "trajectory_sha256": "346b08003d4005cd93f238f71a064398d2e6ab544cf33e2466768ec8ae7c9b74",
+        "rollout_sha256": "fe2cee7ea6c6768033478ff928f278755af04e1440c9fdefe2b09a557da465fe"
+      },
+      {
+        "trial": "713938da-5ff4-4af3-b2b8-849e08291aaa",
+        "trajectory_sha256": "14a3e00d7d6e39f65df21b036952eea8409dc7ad785e6e69142a62f71b5493fb",
+        "rollout_sha256": "a635aadd43973005bc27535512ccde8b3f45b41493d99cca3c09022734e892a5"
+      },
+      {
+        "trial": "74af8325-c8bc-4314-9417-9d7472bfa2f5",
+        "trajectory_sha256": "0b49492fdc99077004412480bfb72a241e2e9defe59ee37793124983ae669d45",
+        "rollout_sha256": "3e00f6ed21f67c7c422c13c8d1bb59e1bdc40b44fa9f8d794501af81c925cb58"
+      },
+      {
+        "trial": "7f54ce4b-5424-4863-a7b5-827289650b32",
+        "trajectory_sha256": "22e02683282212799de1ba44e66dd9376a70815c597f7f1e80de22b52ee6d36e",
+        "rollout_sha256": "d09284a03739d4f58af5bbb228b85138d2ede685a218cf9aaf3f68092749bf42"
+      },
+      {
+        "trial": "cd728dac-1ca6-4a95-a7c3-16ad40797278",
+        "trajectory_sha256": "b6235822739cc6b94e287904c2afa1afd489565ea5588b1ba8d6f6566f7e37d4",
+        "rollout_sha256": "b2cab4db0a25cfc834b2914ffc39088e30037024888c366aab45f7993e4c017d"
+      }
+    ]
   }
 ]
