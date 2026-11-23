@@ -9,8 +9,12 @@ from pathlib import Path
 import random
 import statistics
 import subprocess
+import sys
 import tempfile
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "zb-trace"))
+from backing_residency import cached
 
 PAGE = 4096
 CHUNK = 1 << 20
@@ -91,8 +95,16 @@ def measure(folder, payloads, offsets, background):
         phases["save"] = dict(begin_ns=begin, end_ns=end, write_s=(submitted-begin)/1e9,
                               fdatasync_s=(end-submitted)/1e9, saved_bytes=path.stat().st_size,
                               kernel_write_bytes=io_bytes()["write_bytes"]-before["write_bytes"])
-        phases["buffered_read"] = read_pages(path, offsets, False, payloads)
-        phases["direct_read"] = read_pages(path, offsets, True, payloads)
+        with path.open("rb", buffering=0) as data:
+            size = path.stat().st_size
+            file_cache = {"after_save_and_sync": cached(data.fileno(), size)}
+            phases["buffered_read"] = read_pages(path, offsets, False, payloads)
+            os.posix_fadvise(data.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+            file_cache["after_dontneed"] = cached(data.fileno(), size)
+            phases["direct_read"] = read_pages(path, offsets, True, payloads)
+            file_cache["after_direct_read"] = cached(data.fileno(), size)
+            phases["buffered_refault"] = read_pages(path, offsets, False, payloads)
+            file_cache["after_buffered_refault"] = cached(data.fileno(), size)
         if phases["direct_read"]["kernel_read_bytes"] < len(offsets)*PAGE:
             raise ValueError("direct reads did not reach block I/O accounting")
         timeline = []
@@ -105,7 +117,7 @@ def measure(folder, payloads, offsets, background):
             phase["concurrent_completed_read_bytes"] = CHUNK * sum(
                 phase["begin_ns"] <= t <= phase["end_ns"] for _, t in timeline)
         path.unlink()
-        return dict(competing_reader=background, phases=phases)
+        return dict(competing_reader=background, file_cached_bytes=file_cache, phases=phases)
     finally:
         if worker:
             stop.set()
