@@ -11,7 +11,7 @@ attempt=${8:-01}
 suffix=-replacement-$attempt
 capture=()
 case "$mode" in
-  ordinary) [[ $attempt == 01 ]] ;;
+  ordinary) [[ $attempt == 01 || $trial:$attempt == ad5c88ee:02 ]] ;;
   deep)
     [[ $attempt == 01 || $trial:$variant:$attempt == a863bf5e:v4:02 ]]
     suffix=-replacement-deep-$attempt

@@ -13,6 +13,8 @@ TASK = "openssl-selfsigned-cert"
 ROOT = "292a537a4bdb05fe4323352ecf74299c13c732b9e430d153d5bd5e53772fed5f"
 WIDE_ROOT = "8674edc4b2578075ca405699ea23339559f76bae7aea9038c6d96511e8963cf5"
 CODEX = "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab"
+PATCH_TRIAL = "ad5c88ee-b7b8-4259-9bdd-6be50debf3ac"
+PATCH = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
 TRACE = {
     "guest_sample.py": "e61390b021c54c201e117c1da0c181370abe17687b1b0888bbb42124b50114e9",
     "idle.py": "568100daa47324e5a84b7cfed961607ac8ac6ddeb023bf0acc379fe5e7266dd9",
@@ -62,6 +64,12 @@ def run(a):
         "-io-dir", f"/run/{a.unit}/aries-io", "-image", review["image"],
         "-codex-tools", a.codex_tools, "-guest-task-v3", "-replacement-openssl",
     ]
+    packages_sha = None
+    if (patch := a.assets / "circuit-patch-debs.tar.gz").is_file():
+        assert trial["trial"] == PATCH_TRIAL
+        packages_sha = sha(patch)
+        assert packages_sha == PATCH
+        args.extend(["-os-tools", patch])
     env = dict(os.environ, ZB_VMM_CENSUS="1")
     for key in ("ZB_CHECKPOINT_NAMESPACE_DIR", "ZB_GUEST_VSOCK", "ZB_CONTENT_SAMPLE"):
         env.pop(key, None)
@@ -77,6 +85,7 @@ def run(a):
         "trial": trial, "variant": a.variant, "node": Path("/var/emulab/boot/nodeid").read_text().strip(),
         "binary_sha256": a.binary_sha256, "argv": [str(arg) for arg in args],
         "root_sha256": root, "measurement": "wide_pfn_deep" if a.deep else "ordinary",
+        "gnu_patch_archive_sha256": packages_sha,
         "scope": "replacement_observed_first_replies",
     }, indent=2) + "\n")
     return result.returncode

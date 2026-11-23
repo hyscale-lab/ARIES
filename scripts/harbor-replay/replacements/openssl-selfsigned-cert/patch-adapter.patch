@@ -1,0 +1,410 @@
+diff --git i/cmd/aries-harbor/main.go w/cmd/aries-harbor/main.go
+index 5f9be41..1feccb0 100644
+--- i/cmd/aries-harbor/main.go
++++ w/cmd/aries-harbor/main.go
+@@ -68,6 +68,7 @@ func command(ctx context.Context) error {
+ 	ipv4Addrs := flag.Bool("diagnostic-grpc-ipv4-addresses-only", false, "require the isolated 69ba guest to have IPv4 addresses only with its IPv6 stack enabled")
+ 	routeOnly := flag.Bool("diagnostic-grpc-network-only", false, "collect the prepared and restored 69ba guest network readbacks without dispatching a recording")
+ 	grpcNetDiag := flag.Bool("diagnostic-grpc-loopback", false, "verify the private 69ba guest with its IPv6 loopback address omitted")
++	replacementOpenSSL := flag.Bool("replacement-openssl", false, "run the five reviewed offline self-signed development certificate originals")
+ 	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
+ 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
+ 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
+@@ -112,6 +113,9 @@ func command(ctx context.Context) error {
+ 	if *image == "" {
+ 		return json.NewEncoder(os.Stdout).Encode(r)
+ 	}
++	if (r.Task == opensslTask) != *replacementOpenSSL || *replacementOpenSSL && (*processDrift || *videoDifferences || *probe != "" || *intraStep != 0) {
++		return errors.New("OpenSSL replacement requires its reviewed source and standard replay capture")
++	}
+ 	sourceCPU := *hfSourceCPU >= 0
+ 	if sourceCPU {
+ 		if *hfHostCPU >= 0 || *processDrift {
+@@ -223,10 +227,10 @@ func command(ctx context.Context) error {
+ 		return err
+ 	}
+ 	defer f.Close()
+-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
++	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *replacementOpenSSL, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
+ }
+ 
+-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
++func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, replacementOpenSSL, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+ 	m, err := vhive.New(o)
+ 	if err != nil {
+ 		return err
+@@ -245,7 +249,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 			cpuProfile["requested_physical_cpus"] = r.VCPUs
+ 			cpuProfile["source_qualified"] = sourceCPU
+ 		}
+-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
++		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "replacement_openssl": replacementOpenSSL, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
+ 	}
+ 	if err = lifecycle("create_start"); err != nil {
+ 		return err
+@@ -419,6 +423,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 	})
+ 	defer sessions.Close()
+ 	h := harbor.Hooks{
++		ReplacementOpenSSL:    replacementOpenSSL,
+ 		DiagnosticVideoImages: videoDifferences,
+ 		IntraTool:             intraTool,
+ 		Record:                func(e harbor.Receipt) error { return log.Encode(e) },
+@@ -436,6 +441,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 			if call.Operation == "ViewImage" {
+ 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
+ 			}
++			if replacementOpenSSL && call.Operation == "Exec" {
++				return sessions.ObserveDrift(ctx, harbor.ReplacementForegroundSession(call))
++			}
+ 			// Source-terminal exec_command launches still have a real initial yield.
+ 			return sessions.Execute(ctx, call)
+ 		},
+@@ -475,6 +483,15 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 		h.FinishObservedProcess = sessions.FinishObservedProcess
+ 		h.WasRetained = sessions.WasRetained
+ 	}
++	if replacementOpenSSL {
++		h.FinishObservedProcess = func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
++			if call.Operation == "Exec" {
++				call = harbor.ReplacementForegroundSession(call)
++				call.Operation = "PollProcess"
++			}
++			return sessions.FinishObservedProcess(ctx, call)
++		}
++	}
+ 	if groups != nil {
+ 		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+ 			return m.Exec(ctx, id, command)
+diff --git i/cmd/aries-harbor/openssl_setup.go w/cmd/aries-harbor/openssl_setup.go
+new file mode 100644
+index 0000000..012c1fd
+--- /dev/null
++++ w/cmd/aries-harbor/openssl_setup.go
+@@ -0,0 +1,78 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"strings"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
++	"github.com/hyscale-lab/aries/pkg/replay/harbor"
++)
++
++const opensslTask = "openssl-selfsigned-cert"
++
++var opensslSetup = taskSetup{
++	output:       "check_cert.py",
++	initialCheck: "test ! -e ssl && test ! -e check_cert.py\nopenssl version\npython --version",
++}
++
++const certificateCheck = `
++openssl verify -check_ss_sig -CAfile ssl/server.crt ssl/server.crt
++python - <<'ARIESPKI'
++from datetime import datetime, timedelta
++from pathlib import Path
++import re
++import ssl
++import stat
++import subprocess
++
++crt = Path("ssl/server.crt")
++key = Path("ssl/server.key")
++pem = Path("ssl/server.pem")
++assert stat.S_IMODE(key.stat().st_mode) == 0o600
++assert stat.S_IMODE(pem.stat().st_mode) & 0o077 == 0
++def openssl(*args, stdin=None):
++    return subprocess.run(["openssl", *args], input=stdin, check=True, capture_output=True).stdout
++
++details = ssl._ssl._test_decode_cert(str(crt))
++subject = dict(attr for dn in details["subject"] for attr in dn)
++assert subject["commonName"] == "dev-internal.company.local"
++assert subject["organizationName"].lower() == "devops team"
++assert details["subject"] == details["issuer"]
++begin = datetime.strptime(details["notBefore"], "%b %d %H:%M:%S %Y %Z")
++end = datetime.strptime(details["notAfter"], "%b %d %H:%M:%S %Y %Z")
++assert end - begin == timedelta(days=365)
++public = openssl("pkey", "-in", str(key), "-pubout")
++assert public == openssl("x509", "-in", str(crt), "-pubkey", "-noout")
++assert b"(2048 bit)" in openssl("rsa", "-pubin", "-text", "-noout", stdin=public)
++assert openssl("pkey", "-in", str(pem), "-pubout") == public
++assert openssl("x509", "-in", str(pem), "-outform", "DER") == openssl("x509", "-in", str(crt), "-outform", "DER")
++report = Path("ssl/verification.txt").read_text().lower()
++fingerprint = openssl("x509", "-in", str(crt), "-noout", "-fingerprint", "-sha256").decode().strip().split("=", 1)[1]
++assert fingerprint.lower() in report
++assert subject["commonName"] in report and subject["organizationName"].lower() in report
++assert re.search(r"\d{4}-\d{2}-\d{2}|[a-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}", report)
++check = subprocess.run(["python", "/app/check_cert.py"], check=True, capture_output=True, text=True).stdout
++assert subject["commonName"] in check
++assert end.date().isoformat() in check
++assert "Certificate verification successful" in check
++print("CERTIFICATE_VERIFIED rsa_bits=2048 validity_days=365 key_mode=0600 combined_pem_matches=true script_ok=true")
++ARIESPKI
++`
++
++func captureOpenSSL(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, cmd string, begin int64) error {
++	out, execErr := m.Exec(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", cmd + "\n" + certificateCheck}, Dir: r.Workdir})
++	end, clockErr := harbor.Clock()
++	if err := errors.Join(execErr, clockErr); err != nil {
++		return err
++	}
++	event := "final_task_state"
++	if out.ExitCode != 0 {
++		event = "final_task_state_deviation"
++	}
++	return log.Encode(map[string]any{"event": event, "checks": strings.TrimSpace(out.Stdout),
++		"stdout": out.Stdout, "stderr": out.Stderr, "exit_code": out.ExitCode,
++		"begin_monotonic_ns": begin, "end_monotonic_ns": end})
++}
+diff --git i/cmd/aries-harbor/prepare.go w/cmd/aries-harbor/prepare.go
+index ac40298..3f9935b 100644
+--- i/cmd/aries-harbor/prepare.go
++++ w/cmd/aries-harbor/prepare.go
+@@ -24,15 +24,16 @@ type taskSetup struct {
+ }
+ 
+ var taskSetups = map[string]taskSetup{
++	opensslTask:         opensslSetup,
+ 	"git-leak-recovery": {packagesSHA: sparqlSetup.packagesSHA, output: "secret.txt", initialCheck: "test ! -e /app/secret.txt && test -d /app/repo/.git"},
+-	datasetTask:        datasetSetup,
+-	markerTask:         markerSetup,
+-	financialTask:      financialSetup,
+-	sparqlTask:         sparqlSetup,
+-	torchTask:          torchSetup,
+-	"compile-compcert": compilerSetup,
+-	kvTask:             kvSetup,
+-	hfTask:             hfSetup,
++	datasetTask:         datasetSetup,
++	markerTask:          markerSetup,
++	financialTask:       financialSetup,
++	sparqlTask:          sparqlSetup,
++	torchTask:           torchSetup,
++	"compile-compcert":  compilerSetup,
++	kvTask:              kvSetup,
++	hfTask:              hfSetup,
+ 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
+ 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
+ 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
+@@ -61,6 +62,11 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
+ // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
+ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
+ 	task, ok := taskSetups[r.Task]
++	if r.Task == opensslTask && r.Trial == "ad5c88ee-b7b8-4259-9bdd-6be50debf3ac" {
++		task.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
++		task.packagesField = "debian_gnu_patch_archive_sha256"
++		task.initialCheck += "\ntest \"$(command -v patch)\" = /usr/bin/patch\ndpkg-query -W patch"
++	}
+ 	if r.Task == "compile-compcert" {
+ 		task.initialCheck = compilerAPT(r.Plan.StartedAt) + task.initialCheck
+ 	}
+@@ -382,6 +388,9 @@ for item in records:
+     print(json.dumps({'name':item['metadata']['name'],'version':item['metadata']['version'],'download':item['download_info']},sort_keys=True))
+ PYREPORT`
+ 	}
++	if r.Task == opensslTask {
++		return captureOpenSSL(ctx, m, id, r, log, cmd, begin)
++	}
+ 	out, err := checked(ctx, m, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", cmd}, Dir: r.Workdir})
+ 	end, clockErr := harbor.Clock()
+ 	if err != nil || clockErr != nil {
+diff --git i/pkg/replay/harbor/replacement_openssl.go w/pkg/replay/harbor/replacement_openssl.go
+new file mode 100644
+index 0000000..3ea07b7
+--- /dev/null
++++ w/pkg/replay/harbor/replacement_openssl.go
+@@ -0,0 +1,61 @@
++package harbor
++
++import (
++	"context"
++	"errors"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/replay"
++)
++
++// A source-terminal shell that actually yields needs an internal key for
++// its real process. Source process handles remain positive, and the
++// private key is never written into a source call or source receipt.
++func ReplacementForegroundSession(call replay.Call) replay.Call {
++	call.Operation = "StartProcess"
++	call.SessionID = -int(call.Sequence)
++	return call
++}
++
++func recordReplacementOpenSSL(ctx context.Context, h Hooks, call replay.Call, reply Receipt, observed core.CommandResult) error {
++	differs := int32(observed.ExitCode) != call.ExitCode
++	if !differs {
++		return nil
++	}
++	reply.Event = "relaxed_live_deviation"
++	reply.StatusBasis = "observed_first_reply_differs"
++	// The original tool_reply retains the genuine streams. Only the
++	// continuation event can contain additional data from the same process.
++	reply.Stdout, reply.Stderr = "", ""
++	if err := emit(h, reply); err != nil {
++		return err
++	}
++	if observed.ExitCode != ProcessRunning || call.ExitCode < 0 ||
++		(call.Operation != "PollProcess" && call.Operation != "Exec") {
++		return nil
++	}
++	if h.FinishObservedProcess == nil {
++		return errors.New("missing continuation for a genuinely running source-terminal shell")
++	}
++	join := func() error {
++		receipt := reply
++		receipt.Event = "relaxed_continuation_start"
++		receipt.StatusBasis = "actual_process_wait_after_first_reply"
++		if err := emit(h, receipt); err != nil {
++			return err
++		}
++		terminal, err := h.FinishObservedProcess(ctx, call)
++		receipt.Event = "relaxed_continuation_end"
++		receipt.Exit = &terminal.ExitCode
++		receipt.Stdout, receipt.Stderr = terminal.Stdout, terminal.Stderr
++		receipt.StdoutSHA, receipt.StderrSHA = digest([]byte(terminal.Stdout)), digest([]byte(terminal.Stderr))
++		receipt.ProcessTiming = terminal.Timing
++		receipt.OutputComparison = "additional_live_streams"
++		return errors.Join(err, emit(h, receipt))
++	}
++	if h.deferProcessJoin != nil {
++		h.deferProcessJoin(join)
++		return nil
++	}
++	return join()
++}
+diff --git i/pkg/replay/harbor/replacement_openssl_test.go w/pkg/replay/harbor/replacement_openssl_test.go
+new file mode 100644
+index 0000000..1126670
+--- /dev/null
++++ w/pkg/replay/harbor/replacement_openssl_test.go
+@@ -0,0 +1,39 @@
++package harbor
++
++import (
++	"context"
++	"testing"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/replay"
++)
++
++func TestReplacementOriginalTerminalShellKeepsItsRealFirstAndAdditionalReplies(t *testing.T) {
++	var records []Receipt
++	call := replay.Call{Operation: "Exec", Sequence: 3, ExitCode: 0, ResponseStdout: []byte("recorded")}
++	ctx := context.Background()
++	hooks := Hooks{
++		ReplacementOpenSSL: true,
++		Record: func(row Receipt) error {
++			records = append(records, row)
++			return nil
++		},
++		FinishObservedProcess: func(_ context.Context, received replay.Call) (core.CommandResult, error) {
++			if received.Sequence != call.Sequence || received.Operation != "Exec" {
++				t.Fatalf("continuation lost source identity: %+v", received)
++			}
++			return core.CommandResult{ExitCode: 2, Stdout: "live remainder"}, nil
++		},
++	}
++	receipt := Receipt{SourceCallID: "source-call", Sequence: call.Sequence, Operation: call.Operation}
++	actual := core.CommandResult{ExitCode: ProcessRunning, Stdout: "live prefix"}
++	if err := recordReply(ctx, hooks, call, receipt, actual, 10, nil); err != nil {
++		t.Fatal(err)
++	}
++	if len(records) != 4 || records[0].Event != "tool_reply" ||
++		*records[0].Exit != ProcessRunning || records[0].Stdout != "live prefix" ||
++		records[3].Event != "relaxed_continuation_end" || *records[3].Exit != 2 ||
++		records[3].Stdout != "live remainder" || records[3].SourceCallID != receipt.SourceCallID {
++		t.Fatalf("unexpected observed replies: %+v", records)
++	}
++}
+diff --git i/pkg/replay/harbor/reviewed.json w/pkg/replay/harbor/reviewed.json
+index 1e7a412..9c38977 100644
+--- i/pkg/replay/harbor/reviewed.json
++++ w/pkg/replay/harbor/reviewed.json
+@@ -687,5 +687,48 @@
+         "rollout_sha256": "b2cab4db0a25cfc834b2914ffc39088e30037024888c366aab45f7993e4c017d"
+       }
+     ]
++  },
++  {
++    "task": "openssl-selfsigned-cert",
++    "workdir": "/app",
++    "image": "docker.io/alexgshaw/openssl-selfsigned-cert@sha256:4c948a4e630af2435ae0a19108fc0814a946ac2fa29a512469e0fc77b38c8c12",
++    "effects": [
++      "Create a disposable internal-development TLS key, self-signed certificate, combined PEM and verification script; keep all key data guest-local"
++    ],
++    "trials": [
++      {
++        "trial": "0feef1f2-d744-49f2-9887-1e12f3b0c18c",
++        "trajectory_sha256": "3c3b0728557b0c895586e53f84006abadc838cbf1525fdfc0fea119b4e794695",
++        "rollout_sha256": "4da6c5ba909713810b268a72e9e56a0dd3594f510a03460e25cdb917f9bbfc38"
++      },
++      {
++        "trial": "17fc4a8c-192e-46a3-9657-5811e290314e",
++        "trajectory_sha256": "18e243ee52ed79cca6d8c7c8a531cd9cc3b2309e5eb0e9afd1b4ce66bc58d9de",
++        "rollout_sha256": "36093889cc519f34000382d059f579722ac011b39d4d99c4b022fda6deecfbc1"
++      },
++      {
++        "trial": "a863bf5e-1a00-4d4e-bba7-3700e53d6dbe",
++        "trajectory_sha256": "d5c372e35e5f4b8b01e82775db00d7133b79f51b9af66e1e1de3378234295a6b",
++        "rollout_sha256": "209d68ac2230d1f5ffa74ad76a1879598124b69986e83f77a7437a22e4ff52e0"
++      },
++      {
++        "trial": "ad5c88ee-b7b8-4259-9bdd-6be50debf3ac",
++        "trajectory_sha256": "d3f2dcb8df59f99e3af86c56a7c840ccfb12ab1ec29d2954efb5ddcd7dcd6cfa",
++        "rollout_sha256": "318c369e38c0346010e2452edf93d41327414108aae3e4863babaa034fe7d315"
++      },
++      {
++        "trial": "b4bb4ece-1409-4a42-903e-eb4a25daf4f7",
++        "trajectory_sha256": "396f1f37a0b82bd11c30f177624197438aef028f211048f82c8fd333e4426746",
++        "rollout_sha256": "1c92224f71176efa17e3eafe2265c91ee173401d773413c6ebcf503973ed31f3"
++      }
++    ],
++    "vcpus": 1,
++    "memory_mib": 2048,
++    "storage_mib": 10240,
++    "tools": [
++      "exec_command",
++      "update_plan",
++      "web_search_call"
++    ]
+   }
+ ]
+diff --git i/pkg/replay/harbor/run.go w/pkg/replay/harbor/run.go
+index 7ebdd74..c588309 100644
+--- i/pkg/replay/harbor/run.go
++++ w/pkg/replay/harbor/run.go
+@@ -18,6 +18,7 @@ type Hooks struct {
+ 	deferProcessJoin      func(func() error)
+ 	WasRetained           func(int) bool
+ 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
++	ReplacementOpenSSL    bool
+ 	DiagnosticVideoImages bool
+ 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
+ 	Boundary              func(context.Context, string, int) error
+@@ -85,6 +86,9 @@ func compareOutput(source []byte, result core.CommandResult) string {
+ // Run follows source order, substituting live elapsed time for each recorded
+ // guest call interval. There is no verifier, benchmark deadline or LLM client.
+ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
++	if h.ReplacementOpenSSL && r.Task != "openssl-selfsigned-cert" {
++		return errors.New("unreviewed replacement OpenSSL replay")
++	}
+ 	if h.DiagnosticVideoImages && r.Task != "video-processing" {
+ 		return errors.New("unreviewed video diagnostic")
+ 	}
+@@ -208,6 +212,9 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
+ 	if err := errors.Join(callErr, h.Record(receipt)); err != nil {
+ 		return err
+ 	}
++	if h.ReplacementOpenSSL {
++		return recordReplacementOpenSSL(ctx, h, call, receipt, out)
++	}
+ 	if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
+ 		if h.DiagnosticVideoImages && out.ExitCode == 0 && comparableLiveImage(call, out.Stdout) {
+ 			return nil
