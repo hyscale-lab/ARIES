@@ -30,7 +30,7 @@ Copy the complete stage to the reserved amd201 worker. Its stock v3 donor runtim
 bash "$STAGE/run-worker.sh" "$STAGE"
 ```
 
-The raw stage includes `events.jsonl`, `guest-cache.jsonl`, `handler/events`, `slots.log`, `samples.jsonl`, the verification/status files and the worker placement records. The compressed guest trace is in the post-tool-12 response under `wheel_release.guest.filemap_deletions.trace_gzip`. Guest and host timestamps use separate clock domains. The physical-address reduction belongs to Zepbound. [Published result and per-page evidence](https://github.com/JooyoungPark73/Zepbound/tree/main/plan/result/1_opportunity/guest-memory-deep/wheel-filemap-pfn)
+The raw stage includes `events.jsonl`, `guest-cache.jsonl`, `handler/events`, `slots.log`, `samples.jsonl`, the verification/status files and the worker placement records. The compressed guest trace is in the post-tool-12 response under `wheel_release.guest.filemap_deletions.trace_gzip`. Guest and host timestamps use separate clock domains. The physical-address reduction belongs to Zepbound. [Published result and per-page evidence](https://github.com/hyscale-lab/Zepbound/tree/main/plan/result/1_opportunity/guest-memory-deep/wheel-filemap-pfn)
 
 ## Executed probe and stage
 
