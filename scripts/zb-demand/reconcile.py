@@ -155,7 +155,7 @@ def freeze_upper_ns(boundaries, lo, hi):
     return total
 
 
-def reconcile(readiness, termination, faults, steps, boundaries):
+def reconcile(readiness, termination, faults, steps, boundaries, *, on_match=None):
     dispatches = by_step(steps, "tool_dispatch")
     replies = by_step(steps, "tool_reply")
     waits = [(r["monotonic_ns"], other["monotonic_ns"])
@@ -172,6 +172,7 @@ def reconcile(readiness, termination, faults, steps, boundaries):
     owned = [f for f in faults if f.pid == pid]
     counts = Counter()
     matches = []
+    record = matches.append if on_match is None else on_match
     idx = 0
     first = set()
     preceding_scan = 0
@@ -212,7 +213,7 @@ def reconcile(readiness, termination, faults, steps, boundaries):
             counts[f"scope:{scope}"] += 1
             availability_lead = f.begin_ns-available if in_tool and available is not None else None
             freeze_upper = freeze_upper_ns(boundaries, available, f.begin_ns) if availability_lead is not None else None
-            matches.append({
+            record({
                 "step": step, "window_from_step": w["from_step"], "window_kind": w["window_kind"],
                 "scope": scope, "first_match_for_page_in_window": first_in_window, "path": evidence,
                 "absent_at_end": contains(end_ranges, page),
