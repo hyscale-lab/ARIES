@@ -135,7 +135,7 @@ func uploadPinned(ctx context.Context, m *vhive.Manager, id, file, expected, dir
 	return m.UploadArchive(ctx, id, dir, r)
 }
 
-func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages, curlPackages, grpcTools string) (string, any, error) {
+func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages, curlPackages, grpcTools, hfHarness string) (string, any, error) {
 	if r.Task == "fix-git" {
 		out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-c", initialGitState}, Dir: r.Workdir})
 		if err != nil || !json.Valid([]byte(out)) {
@@ -162,7 +162,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 			return "", nil, err
 		}
 	}
-	if r.Trial == hfLoopbackTrial || r.Trial == datasetPythonTrial {
+	if curlPackages != "" {
 		if err := installPackages(ctx, m, id, curlPackages, debianCurlSHA); err != nil {
 			return "", nil, err
 		}
@@ -196,6 +196,12 @@ ARIESPATH`}})
 		}
 	}
 	initial := task.initialCheck
+	if hfHarness != "" {
+		if err := prepareHFInspection(ctx, m, id, hfHarness); err != nil {
+			return "", nil, err
+		}
+		initial += hfInspectionReady
+	}
 	if grpcTools != "" {
 		if err := installPackages(ctx, m, id, grpcTools, grpcSystemToolsSHA); err != nil {
 			return "", nil, err
@@ -230,6 +236,11 @@ rg --version | head -1`
 		pkgField = "ubuntu_packages_sha256"
 	}
 	details := map[string]string{"codex_prefix_sha256": codexPrefixSHA, pkgField: task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}
+	if hfHarness != "" {
+		details["curated_plugins_commit"] = hfPluginsCommit
+		details["curated_plugins_archive_sha256"] = hfPluginsArchive
+		details["inspection_tool_archive_sha256"] = hfInspectionPackages
+	}
 	if r.Task == hfTask {
 		details["inference_environment_sha256"] = hfEnvironmentSHA
 	}
@@ -251,7 +262,7 @@ rg --version | head -1`
 		}
 		details["pip_configuration"] = strings.TrimSpace(pip)
 	}
-	if r.Trial == hfLoopbackTrial || r.Trial == datasetPythonTrial {
+	if curlPackages != "" {
 		details["debian_curl_archive_sha256"] = debianCurlSHA
 	}
 	if r.Task == "compile-compcert" {

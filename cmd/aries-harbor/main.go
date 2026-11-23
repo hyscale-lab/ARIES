@@ -58,6 +58,7 @@ func command(ctx context.Context) error {
 	intraStep := flag.Int("intra-tool-step", 0, "recorded step for experimental intra-tool tracing")
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
+	hfHarness := flag.String("hf-harness", "", "directory with the approved Debian utility and curated marketplace archives for the two HF inspection trials")
 	grpcTools := flag.String("grpc-tools", "", "signed, date-matched Debian git/patch package bundle for the 69ba source")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
 	opamPID := flag.Bool("diagnostic-opam-pid", false, "bind the recorded compiler signal-zero check and progress reads to the observed guest installer")
@@ -123,7 +124,10 @@ func command(ctx context.Context) error {
 	}
 	// Both sources explicitly exercise nohup and a separate-session replacement.
 	// Every original shell in these trials receives the same backend.
-	useGroups := *groupMode || r.Trial == hfLoopbackTrial || r.Trial == grpcLoopbackTrial
+	if *hfHarness != "" && (r.Task != hfTask || (r.Trial != hfLoopbackTrial && r.Trial != hfInspectionTrial)) {
+		return errors.New("HF inspection fixture requires its reviewed source")
+	}
+	useGroups := *groupMode || *hfHarness != "" || r.Trial == hfLoopbackTrial || r.Trial == grpcLoopbackTrial
 	if (r.Trial == grpcLoopbackTrial && !*grpcNetDiag) != (*grpcTools != "") {
 		return errors.New("normal 69ba replay must provide its signed -grpc-tools fixture")
 	}
@@ -175,7 +179,7 @@ func command(ctx context.Context) error {
 		return errors.New("this task requires the pinned in-guest -image-helper")
 	}
 	readySetup, _ := sourceSetup(r)
-	if (r.Trial == hfLoopbackTrial || r.Trial == datasetPythonTrial) != (*curlPackages != "") {
+	if ((r.Trial == hfLoopbackTrial && *hfHarness == "") || r.Trial == datasetPythonTrial) != (*curlPackages != "") {
 		return errors.New("provide the pinned curl archive for the source trial requiring the additional HTTP client")
 	}
 	if r.Task != "fix-git" && (*codexTools == "" || (readySetup.packagesSHA != "" && *osTools == "")) {
@@ -199,10 +203,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -301,7 +305,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
-	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools, curlPackages, grpcTools)
+	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools, curlPackages, grpcTools, hfHarness)
 	prepEnd, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil {
 		return errors.Join(err, clockErr)
