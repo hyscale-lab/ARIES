@@ -1,0 +1,46 @@
+package main
+
+import (
+ "context"
+ _ "embed"
+ "encoding/json"
+ "flag"
+ "time"
+ "github.com/hyscale-lab/aries/pkg/core"
+ "github.com/hyscale-lab/aries/pkg/deployment/vhive"
+ "github.com/hyscale-lab/aries/pkg/replay"
+ "github.com/hyscale-lab/aries/pkg/replay/harbor"
+)
+var e047Alias=flag.Bool("e047-source-hostname",false,"measure the reviewed e047 original with a verified Gloo hostname address")
+const e047JoinLimit=240*time.Second
+
+//go:embed e047_wait_state.py
+var waitStateProbe string
+
+type finishCall func(context.Context,replay.Call)(core.CommandResult,error)
+
+func boundE047Join(m *vhive.Manager,id string,finish finishCall,log *json.Encoder) finishCall {
+ return func(ctx context.Context,call replay.Call)(core.CommandResult,error) {
+  if call.Operation!="PollProcess" || call.SessionID!=30372 || call.ExitCode!=0 {return finish(ctx,call)}
+  bounded,cancel:=context.WithTimeout(ctx,e047JoinLimit)
+  done:=make(chan struct{})
+  go func() {
+   defer close(done)
+   for _,delay:=range []time.Duration{5*time.Second,55*time.Second,60*time.Second} {
+    select {case <-bounded.Done():return;case <-time.After(delay):}
+    begin,_:=harbor.Clock()
+    probe,stop:=context.WithTimeout(bounded,5*time.Second)
+    res,err:=m.Exec(probe,id,core.Command{Path:"/usr/bin/python3",Args:[]string{"-c",waitStateProbe},Dir:"/app"})
+    stop()
+    end,_:=harbor.Clock()
+    obs:=map[string]any{"event":"e047_native_join_wait_state","source_process_session_id":30372,"begin_monotonic_ns":begin,"end_monotonic_ns":end}
+    if err!=nil {obs["error"]=err.Error()} else if res.ExitCode==0 && json.Valid([]byte(res.Stdout)) {obs["state"]=json.RawMessage(res.Stdout)} else {obs["exit"]=res.ExitCode;obs["stderr"]=res.Stderr}
+    _=log.Encode(obs)
+   }
+  }()
+  result,err:=finish(bounded,call)
+  cancel()
+  <-done
+  return result,err
+ }
+}
