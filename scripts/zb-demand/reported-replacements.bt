@@ -1,0 +1,35 @@
+// Substitute the verified live VMM PID, executable path, and exact stock ELF symbol.
+BEGIN { printf("ready %llu\n",nsecs(monotonic)); }
+uprobe:VMMEXE:REPORTSYMBOL
+/pid == VMMPID/
+{
+    @report[tid] = 1;
+    @entries++;
+}
+uretprobe:VMMEXE:REPORTSYMBOL
+/pid == VMMPID && @report[tid]/
+{
+    delete(@report[tid]);
+    @returns++;
+}
+tracepoint:syscalls:sys_enter_mmap
+/pid == VMMPID && (args->flags & 0x32) == 0x32 && args->len >= 4096/
+{
+    @address[tid] = args->addr;
+    @length[tid] = args->len;
+    @begin[tid] = nsecs(monotonic);
+    @in_report[tid] = @report[tid];
+}
+tracepoint:syscalls:sys_exit_mmap
+/pid == VMMPID && @begin[tid]/
+{
+    printf("fixed %llu %llu %d %d %llu %llu %lld %d\n",
+           @begin[tid],nsecs(monotonic),pid,tid,@address[tid],@length[tid],args->ret,@in_report[tid]);
+    delete(@begin[tid]); delete(@address[tid]); delete(@length[tid]); delete(@in_report[tid]);
+}
+END
+{
+    printf("end %llu %llu %llu\n",nsecs(monotonic),@entries,@returns);
+    clear(@report); clear(@entries); clear(@returns);
+    clear(@begin); clear(@address); clear(@length); clear(@in_report);
+}
