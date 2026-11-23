@@ -9,3 +9,5 @@ The retry adapter records each actual first reply. At a source-terminal boundary
 [Benchmark reference](https://github.com/harbor-framework/terminal-bench-2-1/tree/12b7565679ce5006230b820666353673a133db93/tasks/sanitize-git-repo/tests)
 
 If the strict image viewer rejects a different PNG size, the retry leaves its actual first reply intact. A separately timestamped guest read keeps the exact available PNG in the private archive and records its dimensions, size, and digest. This extra read runs within the observed tool interval.
+
+A final-state digest can verify the required clean reference only when it matches the independent pinned-image reconstruction. When available, supply that reconstruction as the sixth argument to `stage-retry.sh`. The resulting sealed manifest controls whether a completed original satisfies the skip gate.
