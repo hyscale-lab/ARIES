@@ -58,6 +58,7 @@ func command(ctx context.Context) error {
 	intraStep := flag.Int("intra-tool-step", 0, "recorded step for experimental intra-tool tracing")
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
+	hfSourceCPU := flag.Int("hf-host-cpu", -1, "source-qualified HF one-host-core capacity with two guest-visible CPUs")
 	hfHostCPU := flag.Int("diagnostic-hf-host-cpu", -1, "verify two HF guest vCPUs on the selected single host CPU in an isolated diagnostic deployment")
 	hfHarness := flag.String("hf-harness", "", "directory with the approved Debian utility and curated marketplace archives for the two HF inspection trials")
 	grpcTools := flag.String("grpc-tools", "", "signed, date-matched Debian git/patch package bundle for the 69ba source")
@@ -111,9 +112,16 @@ func command(ctx context.Context) error {
 	if *image == "" {
 		return json.NewEncoder(os.Stdout).Encode(r)
 	}
+	sourceCPU := *hfSourceCPU >= 0
+	if sourceCPU {
+		if *hfHostCPU >= 0 || *processDrift {
+			return errors.New("source-qualified HF capacity requires strict timing and a single CPU profile")
+		}
+		*hfHostCPU = *hfSourceCPU
+	}
 	requestedVCPUs := r.VCPUs
 	if *hfHostCPU >= 0 {
-		if r.Trial != hfInspectionTrial || *hfHarness == "" || *observer != "" || *sampler != "" {
+		if r.Trial != hfInspectionTrial || *hfHarness == "" || (!sourceCPU && (*observer != "" || *sampler != "")) {
 			return errors.New("two-vCPU diagnostic requires the uninstrumented HF inspection source and fixture")
 		}
 		requestedVCPUs = 2
@@ -211,10 +219,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -226,7 +234,14 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if err != nil {
 			return err
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "diagnostic_hf_host_cpu": hfHostCPU, "source_requested_cpus": r.VCPUs})
+		cpuProfile := map[string]any{}
+		if hfHostCPU >= 0 {
+			cpuProfile["host_cpu"] = hfHostCPU
+			cpuProfile["guest_vcpus"] = o.VCPUs
+			cpuProfile["requested_physical_cpus"] = r.VCPUs
+			cpuProfile["source_qualified"] = sourceCPU
+		}
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
@@ -335,7 +350,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	if hfHostCPU >= 0 {
-		if err := checkHFCPU(ctx, m, id, hfHostCPU, "before_snapshot", log); err != nil {
+		if err := checkHFCPU(ctx, m, id, hfHostCPU, sourceCPU, "before_snapshot", log); err != nil {
 			return err
 		}
 	}
@@ -374,7 +389,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	if hfHostCPU >= 0 {
-		if err := checkHFCPU(ctx, m, id, hfHostCPU, "after_restore", log); err != nil {
+		if err := checkHFCPU(ctx, m, id, hfHostCPU, sourceCPU, "after_restore", log); err != nil {
 			return err
 		}
 	}
@@ -478,7 +493,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 		if hfHostCPU >= 0 {
-			return checkHFCPU(ctx, m, id, hfHostCPU, "after_source", log)
+			return checkHFCPU(ctx, m, id, hfHostCPU, sourceCPU, "after_source", log)
 		}
 	}
 	return nil

@@ -41,9 +41,30 @@ if phase == "after_source":
        "threads":[(t/"comm").read_text().strip() for t in (p/"task").iterdir()]})
   except (FileNotFoundError, ProcessLookupError): pass
  assert len(data["servers"]) == 1, data
+ server = data["servers"][0]
+ p = Path("/proc") / str(server["pid"])
+ server["affinity"] = sorted(os.sched_getaffinity(server["pid"]))
+ server["cpu_count_override"] = any(v.startswith(b"PYTHON_CPU_COUNT=") for v in (p/"environ").read_bytes().split(b"\0"))
+ server["no_python_options"] = server["argv"] == ["python", "-u", "/app/app.py"]
+ assert server["affinity"] == affinity and not server["cpu_count_override"] and server["no_python_options"]
+ # Exercise the still-running original server after its source session, using one
+ # request at a time. The thread counters describe the actual endpoint process.
+ import requests
+ def thread_cpu():
+  return {int(t.name):int((t/"schedstat").read_text().split()[0]) for t in (p/"task").iterdir()}
+ before=thread_cpu()
+ predictions=[]
+ for _ in range(4):
+  result=requests.post("http://127.0.0.1:5000/sentiment",json={"text":"I absolutely love this!"},timeout=10)
+  result.raise_for_status()
+  predictions.append(result.json()["sentiment"])
+ after=thread_cpu()
+ assert predictions==["positive"]*4
+ server["serial_prediction_thread_cpu_ns"]={str(t):after[t]-before.get(t,0) for t in after}
+ server["serial_predictions"]=predictions
 print(json.dumps(data))`
 
-func checkHFCPU(ctx context.Context, m *vhive.Manager, id string, hostCPU int, phase string, log *json.Encoder) error {
+func checkHFCPU(ctx context.Context, m *vhive.Manager, id string, hostCPU int, sourceCPU bool, phase string, log *json.Encoder) error {
 	socket, err := m.VMMSocket(ctx, id)
 	if err != nil {
 		return err
@@ -56,6 +77,10 @@ func checkHFCPU(ctx context.Context, m *vhive.Manager, id string, hostCPU int, p
 	if err != nil {
 		return err
 	}
-	return log.Encode(map[string]any{"event": "diagnostic_hf_cpu_readback", "phase": phase,
+	event := "diagnostic_hf_cpu_readback"
+	if sourceCPU {
+		event = "source_hf_cpu_readback"
+	}
+	return log.Encode(map[string]any{"event": event, "phase": phase,
 		"host": json.RawMessage(host), "guest": json.RawMessage(guest)})
 }
