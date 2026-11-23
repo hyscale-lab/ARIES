@@ -6,17 +6,29 @@ SOURCE_STEP = 17
 SOURCE_CALL = "call_zkHevzPcbGrer7T32te3CvRp"
 ADDITIONAL_STEP = 16
 ADDITIONAL_CALL = "call_wcYqo0dPntHFaw4od1NaAv7d"
+FINAL_EXEC_BOUNDARIES = (
+    (18, "call_vx0lmrkNblwtPdlqWsSKnkyb"),
+    (19, "call_nVRzvPg3Diyf4IlgSOML0QvT"),
+    (24, "call_4AKIw7pL8TyuPccKQXpsnXB6"),
+)
 JOIN_TIMEOUT_S = 45
 PROCESS_TRACKING_REVISION = "6ecdcc0fc73f6a018ab6541ab9c7bbb4bb75515f"
 
 
-def apply(tree, edit, recording, git_root, additional=False):
-    boundaries = [(SOURCE_STEP, SOURCE_CALL)]
+def boundaries(additional, through_final):
+    chosen = [(SOURCE_STEP, SOURCE_CALL)]
     if additional:
-        boundaries.append((ADDITIONAL_STEP, ADDITIONAL_CALL))
+        chosen.append((ADDITIONAL_STEP, ADDITIONAL_CALL))
+    if through_final:
+        chosen.extend(FINAL_EXEC_BOUNDARIES)
+    return chosen
+
+
+def apply(tree, edit, recording, git_root, additional=False, through_final=False):
+    approved = boundaries(additional, through_final)
     calls = []
     gates = []
-    for source_step, source_call in boundaries:
+    for source_step, source_call in approved:
         step, = [row for row in recording["steps"] if row["step_id"] == source_step]
         calls_at_boundary = [c for c in step["tool_calls"]
                              if c["tool_call_id"] == source_call and c["function_name"] == "exec_command"]
@@ -86,7 +98,7 @@ func isVerifiedTerminalExec(call replay.Call) bool {{
         {gate}''')
 
 
-def contract(additional=False):
+def contract(additional=False, through_final=False):
     result = {
         "step": SOURCE_STEP,
         "source_call": SOURCE_CALL,
@@ -94,8 +106,10 @@ def contract(additional=False):
         "join_timeout_s": JOIN_TIMEOUT_S,
         "process_tracking_revision": PROCESS_TRACKING_REVISION,
     }
-    if additional:
-        result["additional"] = [{
-            "step": ADDITIONAL_STEP, "source_call": ADDITIONAL_CALL, "expected_terminal": 0,
-        }]
+    extra = boundaries(additional, through_final)[1:]
+    if extra:
+        result["additional"] = [
+            {"step": step, "source_call": call, "expected_terminal": 0}
+            for step, call in extra
+        ]
     return result

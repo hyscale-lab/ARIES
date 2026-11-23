@@ -67,7 +67,10 @@ def main():
     p.add_argument("--retained-boundary-diagnostic", action="store_true")
     p.add_argument("--terminal-exec-diagnostic", action="store_true")
     p.add_argument("--terminal-exec-step16", action="store_true")
+    p.add_argument("--terminal-exec-through-final", action="store_true")
     args = p.parse_args()
+    if args.terminal_exec_through_final and not args.terminal_exec_step16:
+        p.error("the bounded remaining Exec calls require the verified step 16 continuation")
     if args.terminal_exec_step16 and not args.terminal_exec_diagnostic:
         p.error("step 16 continuation requires the registered terminal Exec diagnostic")
     if args.terminal_exec_diagnostic and not args.retained_boundary_diagnostic:
@@ -159,7 +162,8 @@ echo 'ars_tls_anchor_sha256={CA_CERT_SHA}'
             apply(tree, edit, original)
         if args.terminal_exec_diagnostic:
             from terminal_exec import apply as apply_terminal_exec
-            apply_terminal_exec(tree, edit, original, git_root, args.terminal_exec_step16)
+            apply_terminal_exec(tree, edit, original, git_root, args.terminal_exec_step16,
+                                args.terminal_exec_through_final)
             subprocess.run(["go", "test", "-buildvcs=false", "./pkg/replay/harbor", "./cmd/aries-harbor"],
                            cwd=tree, check=True)
         subprocess.run(["go", "build", "-trimpath", "-buildvcs=false", "-o",
@@ -180,7 +184,7 @@ echo 'ars_tls_anchor_sha256={CA_CERT_SHA}'
         contract["retained_boundary_diagnostic"] = boundary_contract()
     if args.terminal_exec_diagnostic:
         from terminal_exec import contract as terminal_exec_contract
-        contract["terminal_exec_diagnostic"] = terminal_exec_contract(args.terminal_exec_step16)
+        contract["terminal_exec_diagnostic"] = terminal_exec_contract(args.terminal_exec_step16, args.terminal_exec_through_final)
     if args.ca_deb:
         contract["trust_anchor"] = dict(
             package_sha256=CA_PACKAGE_SHA, package=args.ca_deb.name, certificate=CA_CERT_NAME,
