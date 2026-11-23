@@ -24,7 +24,7 @@ case "$node:$variant:$kind" in
         ;;
     amd198:v4:ordinary)
         runtime=/local/zb-imagecircuit-v4/runtime
-        unit=fcmod-zepbound-amd198-image-circuit
+        unit=fcmod-zepbound-amd198-imagecircuit
         ;;
     amd198:v4:deep)
         runtime=/local/zb-amd198-deep-v4/circuit/runtime
@@ -41,7 +41,10 @@ if [[ $node == amd198 ]]; then timing_arm=v4; fi
 sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$timing_arm/driver.exit"
 test "$(sudo -n systemctl show -p ActiveState --value "$unit")" = active
 attempt=${stage##*-}
-[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 ]]
+[[ $attempt == 01 || $attempt == 02 || $attempt == 03 || $attempt == 04 || $attempt == 05 ]]
+if [[ $attempt == 05 ]]; then
+    [[ "$node:$variant:$kind" == amd198:v4:ordinary ]]
+fi
 diagnostic=()
 if [[ $attempt == 04 ]]; then
     [[ "$node:$variant:$kind" == amd183:v1:ordinary ]]

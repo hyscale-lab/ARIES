@@ -20,6 +20,10 @@ if [[ ${stage##*-} == 04 ]]; then
     [[ $node == amd183 ]]
     test -s "$stage/harbor-release.json"
     arms=(v1:ordinary)
+elif [[ ${stage##*-} == 05 ]]; then
+    [[ $node == amd198 ]]
+    test -s "$stage/harbor-release.json"
+    arms=(v4:ordinary)
 fi
 sudo -n test -s "/tmp/zb-timing17-01/b615a3ec-$gate/driver.exit"
 test "$(systemctl show -p ActiveState --value zb-timing17-hf.service)" = inactive
