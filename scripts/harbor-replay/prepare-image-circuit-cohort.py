@@ -100,6 +100,11 @@ def main():
                 if digest(pkg) != curl_sha:
                     raise ValueError("Debian curl archive differs from the native validation")
                 install(pkg, output / pkg.name)
+            if python_sha := ready.get("python_environment_sha256"):
+                pkg = a.cache / "kv-fixture/kv-python.tar.gz"
+                if digest(pkg) != python_sha:
+                    raise ValueError("Python environment archive differs from the native validation")
+                install(pkg, output / pkg.name)
             binary_sha = receipt["adapter_binary_sha256"]
             adapter = output / "adapters" / binary_sha
             if not adapter.exists():

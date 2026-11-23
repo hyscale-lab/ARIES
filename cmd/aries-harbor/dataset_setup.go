@@ -14,6 +14,29 @@ import (
 )
 
 const datasetTask = "count-dataset-tokens"
+const datasetPythonTrial = "eaa24caa-f211-4745-a943-0f7041aa4214"
+
+// The source printed Python 3.13.15 before creating /tmp/openthoughts-venv.
+// The published image provides 3.13.7 with an older ensurepip seed.
+const datasetPythonCheck = `test "$(python --version)" = 'Python 3.13.15'
+python - <<'PYVERSION'
+import ensurepip
+from pathlib import Path
+import shutil
+import sysconfig
+base = Path(sysconfig.get_path("purelib"))
+old = base / "pip-25.2.dist-info"
+if old.exists():
+    assert "Version: 25.2" in (old / "METADATA").read_text().splitlines()
+    shutil.rmtree(old)
+bundles = Path(ensurepip.__file__).parent / "_bundled"
+(bundles / "pip-25.2-py3-none-any.whl").unlink(missing_ok=True)
+assert sorted(x.name for x in bundles.glob("pip-*.whl")) == ["pip-26.2.1-py3-none-any.whl"]
+assert ensurepip.version() == "26.2.1"
+assert sorted(x.name for x in base.glob("pip-*.dist-info")) == ["pip-26.2.1.dist-info"]
+print("source Python 3.13.15, clean virtual environment pip seed", ensurepip.version())
+PYVERSION
+`
 
 var datasetSetup = taskSetup{output: "answer.txt", initialCheck: `test ! -e answer.txt
 test "$(python -c 'import sys; print(sys.version_info[:2])')" = "(3, 13)"

@@ -81,10 +81,13 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	if r.Trial == videoPatchTrial {
 		task.initialCheck += "\n" + videoPatchAlias
 	}
-	if r.Trial == "427a5c05-723c-407c-bdbd-a2927203c0eb" || r.Trial == "eaa24caa-f211-4745-a943-0f7041aa4214" {
+	if r.Trial == "427a5c05-723c-407c-bdbd-a2927203c0eb" {
 		task.packagesSHA = debianCurlSHA
 		task.packagesField = "debian_curl_archive_sha256"
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
+	}
+	if r.Trial == datasetPythonTrial {
+		task.initialCheck = datasetPythonCheck + task.initialCheck
 	}
 	if r.Trial == videoHarnessTrial || r.Trial == datasetPatchDiscoveryTrial || r.Trial == financialHarnessTrial {
 		task.initialCheck += "\n" + sourceHarnessDirectory
@@ -141,7 +144,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	if !ok {
 		return "", nil, fmt.Errorf("no ready-state definition for %s", r.Task)
 	}
-	if r.Task == kvTask {
+	if r.Task == kvTask || r.Trial == datasetPythonTrial {
 		if err := uploadPinned(ctx, m, id, packages, kvPythonSHA, "/"); err != nil {
 			return "", nil, err
 		}
@@ -151,7 +154,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 			return "", nil, err
 		}
 	}
-	if r.Task == hfTask && r.Trial == hfLoopbackTrial {
+	if r.Trial == hfLoopbackTrial || r.Trial == datasetPythonTrial {
 		if err := installPackages(ctx, m, id, curlPackages, debianCurlSHA); err != nil {
 			return "", nil, err
 		}
@@ -230,8 +233,11 @@ rg --version | head -1`
 		}
 		details["pip_configuration"] = strings.TrimSpace(pip)
 	}
-	if r.Task == hfTask && r.Trial == hfLoopbackTrial {
+	if r.Trial == hfLoopbackTrial || r.Trial == datasetPythonTrial {
 		details["debian_curl_archive_sha256"] = debianCurlSHA
+	}
+	if r.Trial == datasetPythonTrial {
+		details["python_environment_sha256"] = kvPythonSHA
 	}
 	return "source_task_ready", details, nil
 }

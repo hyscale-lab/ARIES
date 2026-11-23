@@ -36,6 +36,13 @@ def replay_args(asset, receipt, cni):
     if set(hosts) != ENDPOINTS or not all(ipaddress.ip_address(v).is_global for v in hosts.values()):
         raise ValueError("unexpected dataset endpoints")
     ready, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
+    if sha := ready.get("python_environment_sha256"):
+        python = asset / "kv-python.tar.gz"
+        curl = asset / "curl-debs.tar.gz"
+        if (sha != "7f8a93c102db3ce25dae68cc485877f8ec9f79edb42a7c4518c96a1153b78682"
+                or digest(python) != sha or digest(curl) != ready["debian_curl_archive_sha256"]):
+            raise ValueError("source Python or curl archive differs from the native validation")
+        return [*args, "-os-tools", str(python), "-curl-packages", str(curl)]
     for field, name in (("debian_curl_archive_sha256","curl-debs.tar.gz"),
                         ("debian_patch_archive_sha256","circuit-patch-debs.tar.gz")):
         if sha := ready.get(field):
