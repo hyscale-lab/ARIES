@@ -80,6 +80,28 @@ Run offline joins with
 The trace also requires ready and clean end markers and rejects reported
 BPF event loss.
 
+## Trace the stock PyTorch block and DAX arms
+
+Use the sealed `4b588047` cohort on the same idle native worker. Run
+`check-torch-backing.py` against the completed block trace before starting
+DAX. It compares the installed root and kernel bytes, live daemons, and
+runtime profiles and records the worker boot identity.
+
+```sh
+sudo python3 scripts/zb-demand/check-torch-backing.py \
+  amd201 /local/zb-texpilot fcmod-zepbound-tex /local/zb-torch-demand-4b58-01 \
+  > deployment.json
+sudo bash scripts/zb-demand/trace-torch-cohort.sh \
+  SEALED_BUNDLE V4_RUNTIME V4_UNIT FRESH_OUTPUT PROBE_DIRECTORY v4
+bash scripts/zb-demand/collect-torch-cohort.sh WORKER FRESH_OUTPUT RUNNER_OUTPUT v4
+```
+
+The probe directory contains the adjacent trace tools and
+`scripts/zb-trace/vmm_exclusivity.py`. Keep `deployment.json` alongside the
+collected files for reduction. The launcher resolves the balloon socket
+after the restored VMM's first sample and records the read-only root pmem
+configuration and guest counters. The KVM trace covers RAM and device slots.
+
 [KVM SVM fault handling](https://github.com/torvalds/linux/blob/v6.8/arch/x86/kvm/svm/svm.c) ·
 [KVM MMU page-fault construction](https://github.com/torvalds/linux/blob/v6.8/arch/x86/kvm/mmu/mmu_internal.h) ·
 [Linux filemap fault path](https://github.com/torvalds/linux/blob/v6.8/mm/filemap.c)
