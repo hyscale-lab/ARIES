@@ -31,6 +31,12 @@ case "$node:$variant:$kind" in
         runtime=/local/zb-amd200-torch-deep-v4/runtime
         unit=fcmod-zepbound-amd200-torch-deep-v4
         ;;
+    amd201:v4:deep)
+        handoff=/local/zb-cancel-async-deep-v4-handoff
+        test -s "$handoff/amd201-accepted.tsv"
+        runtime=/local/zb-cancel-async-deep-v4-amd201/runtime
+        unit=fcmod-zepbound-cancel-async-deep-v4
+        ;;
     *) exit 2 ;;
 esac
 (cd "$stage" && sha256sum --quiet -c SHA256SUMS)
