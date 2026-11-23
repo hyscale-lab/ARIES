@@ -10,9 +10,9 @@ node=$(cat /var/emulab/boot/nodeid)
 case "$node:$variant:$mode" in
   amd203:v1:ordinary) unit=fcmod-zepbound-demand-amd203; runtime=/users/nehalem/zepbound-demand-amd203/runtime ;;
   amd203:v1:deep) unit=fcmod-zepbound-deep203cf; runtime=/local/zb-deep-cf-v1-amd203/runtime ;;
-  amd191:v4:ordinary) unit=fcmod-zepbound-amd191-v4; runtime=/local/zb-fc-v4/v4/runtime ;;
   amd191:v3:ordinary) unit=fcmod-zepbound-amd191-v3; runtime=/local/zb-fc-v4/v3/runtime ;;
-  amd191:v4:deep) unit=fcmod-zepbound-amd191-expdeep; runtime=/local/zb-expdeep-runtime-amd191/runtime ;;
+  amd198:v4:ordinary) unit=fcmod-zepbound-amd198-imagecircuit; runtime=/local/zb-imagecircuit-v4/runtime ;;
+  amd198:v4:deep) unit=fcmod-zepbound-amd198-deep-circuit; runtime=/local/zb-amd198-deep-v4/circuit/runtime ;;
   amd200:v2:ordinary) unit=fcmod-zepbound-amd200; runtime=/local/zb-v2/runtime ;;
   *) exit 2 ;;
 esac
@@ -24,6 +24,8 @@ case "$node" in
     export LD_LIBRARY_PATH=/users/nehalem/zepbound-demand-amd203/tools/bpf/usr/lib/x86_64-linux-gnu ;;
   amd191) tools=/local/zb-fc-v4/pilot/pypi-cohort-amd191/codex-harbor-tools.tar.gz
     inherited_net=/tmp/zb-resume-extra-01/marker-cni ;;
+  amd198) tools=/local/zb-imagecircuit-v4/video-assigned-assets/codex-harbor-tools.tar.gz
+    inherited_net="$old/net" ;;
   amd200) tools=/local/zb-corpus-financeapt-cohort-v2/codex-harbor-tools.tar.gz
     inherited_net=/local/zb-corpus-financeapt-cohort-v2/cni ;;
 esac

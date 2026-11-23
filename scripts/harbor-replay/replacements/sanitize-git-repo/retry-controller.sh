@@ -6,7 +6,8 @@ old=$(realpath "$2")
 node=$(cat /var/emulab/boot/nodeid)
 case "$node" in
   amd203) modes=(v1:ordinary v1:deep) ;;
-  amd191) modes=(v4:ordinary v3:ordinary v4:deep) ;;
+  amd191) modes=(v3:ordinary) ;;
+  amd198) modes=(v4:deep v4:ordinary) ;;
   amd200) modes=(v2:ordinary) ;;
   *) exit 2 ;;
 esac

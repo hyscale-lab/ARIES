@@ -50,7 +50,7 @@ def launch(a):
     binary = a.stage / "aries-sanitize-retry"
     assert sha(binary) == (a.stage / "adapter.sha256").read_text().strip()
     node = Path("/var/emulab/boot/nodeid").read_text().strip()
-    assert node in {"amd191", "amd200", "amd203"}
+    assert node in {"amd191", "amd198", "amd200", "amd203"}
     network = a.old_stage / "net"
     config = json.loads((network / "conf/10-cleanse.conflist").read_bytes())
     assert config["name"] == f"zbcleanse{node.removeprefix('amd')}"
