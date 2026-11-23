@@ -26,13 +26,20 @@ func compilerAPT(start time.Time) string {
 		"Suites: noble noble-updates noble-security noble-backports", 1)
 	return signed + `
 apt-get -o Acquire::https::CaInfo=/tmp/aries-compiler-ca.pem update -qq
-DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::https::CaInfo=/tmp/aries-compiler-ca.pem install -y --no-install-recommends build-essential=12.10ubuntu1 ca-certificates=20260601~24.04.1 curl git procps python3 >/tmp/aries-compiler-ready-apt.log
+# libncurses-dev in the original transaction required the matching runtime
+# without upgrading these four packages from the earlier OCI base version.
+ncurses='6.4+20240113-1ubuntu2.1'
+DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::https::CaInfo=/tmp/aries-compiler-ca.pem install -y --no-install-recommends \
+    build-essential=12.10ubuntu1 ca-certificates=20260601~24.04.1 curl git procps python3 \
+    "libncursesw6=$ncurses" "libtinfo6=$ncurses" "ncurses-base=$ncurses" "ncurses-bin=$ncurses" >/tmp/aries-compiler-ready-apt.log
 rm /tmp/aries-compiler-ca.pem
 test ! -e /usr/bin/time
 test ! -e /usr/bin/coqc && test ! -e /usr/bin/ocamlc && test ! -e /usr/bin/opam
 test "$(dpkg-query -W -f='${Version}' build-essential)" = 12.10ubuntu1
 test "$(dpkg-query -W -f='${Version}' ca-certificates)" = '20260601~24.04.1'
+dpkg-query -W libncursesw6 libtinfo6 ncurses-base ncurses-bin
 apt-cache policy libncurses6 bubblewrap build-essential ca-certificates
+apt list --upgradable 2>/dev/null
 `
 }
 
