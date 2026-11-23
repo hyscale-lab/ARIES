@@ -38,12 +38,14 @@ fi
 git -C repo rev-parse HEAD
 git -C repo fsck --no-reflogs --unreachable | sort`
 
-// The two sources each print one randomly allocated name, then pass it as a
+// These sources each print one randomly allocated name, then pass it as a
 // literal to later calls. Preserve the native allocator's flags, permissions,
 // collision handling and descriptor by controlling only its first name.
 func gitRecoveryTemp(trial string) string {
 	var suffix string
 	switch trial {
+	case "08ae20d8-33b7-4c28-91f0-a7aedff9326b":
+		suffix = "548ngaqo"
 	case "713938da-5ff4-4af3-b2b8-849e08291aaa":
 		suffix = "mvfalbso"
 	case "cd728dac-1ca6-4a95-a7c3-16ad40797278":
