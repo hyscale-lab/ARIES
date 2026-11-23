@@ -74,6 +74,36 @@ func TestDiagnosticPollRetainsEarlyCompletionAndConsumesOutputOnce(t *testing.T)
 	}
 }
 
+func TestRelaxedUnnamedCommandKeepsOriginalProviderIdentity(t *testing.T) {
+	called := make(chan replay.Call, 1)
+	finish := make(chan struct{})
+	sessions := NewProcessSessions(t.Context(), func(ctx context.Context, call replay.Call, stdout, _ io.Writer) (core.CommandResult, error) {
+		called <- call
+		select {
+		case <-finish:
+		case <-ctx.Done():
+			return core.CommandResult{}, ctx.Err()
+		}
+		fmt.Fprint(stdout, "real late output")
+		return core.CommandResult{ExitCode: 9}, nil
+	})
+	defer sessions.Close()
+	command := replay.Call{Operation: "Exec", Sequence: 4, YieldTime: time.Millisecond}
+	first, err := sessions.ObserveRelaxed(t.Context(), command)
+	if err != nil || first.ExitCode != ProcessRunning {
+		t.Fatal(first, err)
+	}
+	call := <-called
+	if call.Operation != "Exec" || call.SessionID != 0 {
+		t.Fatalf("provider received altered identity: %s, %d", call.Operation, call.SessionID)
+	}
+	close(finish)
+	last, err := sessions.FinishRelaxed(t.Context(), command)
+	if err != nil || last.ExitCode != 9 || last.Stdout != "real late output" {
+		t.Fatal(last, err)
+	}
+}
+
 func TestDiagnosticTerminalJoinReadsActualRemainingOutput(t *testing.T) {
 	release := make(chan struct{})
 	sessions := NewProcessSessions(t.Context(), func(ctx context.Context, _ replay.Call, stdout, _ io.Writer) (core.CommandResult, error) {

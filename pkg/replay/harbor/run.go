@@ -18,6 +18,7 @@ type Hooks struct {
 	deferProcessJoin      func(func() error)
 	WasRetained           func(int) bool
 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
+	RelaxedMeasuredStatus bool
 	DiagnosticVideoImages bool
 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
 	Boundary              func(context.Context, string, int) error
@@ -51,6 +52,7 @@ type Receipt struct {
 	SourceOutputSHA  string              `json:"source_output_sha256,omitempty"`
 	CaptureEndNS     int64               `json:"capture_end_monotonic_ns,omitempty"`
 	CaptureIndex     int                 `json:"capture_index,omitempty"`
+	NativeError      string              `json:"native_error,omitempty"`
 }
 
 func Clock() (int64, error) {
@@ -205,6 +207,11 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 	receipt.Stderr = out.Stderr
 	receipt.StdoutSHA = digest([]byte(out.Stdout))
 	receipt.StderrSHA = digest([]byte(out.Stderr))
+	if h.RelaxedMeasuredStatus && callErr != nil {
+		receipt.Exit = nil
+		receipt.NativeError = callErr.Error()
+		receipt.StatusBasis = "native_transport_or_observer_error"
+	}
 	if err := errors.Join(callErr, h.Record(receipt)); err != nil {
 		return err
 	}
@@ -215,6 +222,9 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 		return fmt.Errorf("step %d image attachment differs from the source", receipt.Step)
 	}
 	if int32(out.ExitCode) != call.ExitCode {
+		if h.RelaxedMeasuredStatus {
+			return recordProcessDrift(ctx, h, call, receipt, out)
+		}
 		if h.FinishObservedProcess != nil && call.SessionID != 0 {
 			return recordProcessDrift(ctx, h, call, receipt, out)
 		}
