@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -45,16 +46,14 @@ func torchCachePaths() []string {
 }
 
 type torchCacheFile struct {
-	Device    uint64   `json:"device"`
-	Inode     uint64   `json:"inode"`
-	UID       uint32   `json:"uid"`
-	Size      int64    `json:"size_bytes"`
-	Paths     []string `json:"paths"`
-	Pages     uint64   `json:"cached_pages"`
-	Dirty     uint64   `json:"dirty_pages"`
-	Writeback uint64   `json:"writeback_pages"`
-	Before    int      `json:"vmas_before"`
-	After     int      `json:"vmas_after"`
+	Device uint64   `json:"device"`
+	Inode  uint64   `json:"inode"`
+	UID    uint32   `json:"uid"`
+	Size   int64    `json:"size_bytes"`
+	Paths  []string `json:"paths"`
+	Pages  uint64   `json:"cached_pages"`
+	Before int      `json:"vmas_before"`
+	After  int      `json:"vmas_after"`
 }
 
 type cacheControl struct {
@@ -65,6 +64,7 @@ type cacheControl struct {
 }
 
 type torchCacheScan struct {
+	Method       string            `json:"method"`
 	Begin        int64             `json:"begin_ns"`
 	End          int64             `json:"end_ns"`
 	QueryStart   int64             `json:"query_begin_ns"`
@@ -80,10 +80,25 @@ type torchCacheScan struct {
 	Control      cacheControl      `json:"control"`
 }
 
-func fileCache(fd int, off, length uint64) (unix.Cachestat_t, error) {
-	var out unix.Cachestat_t
-	err := unix.Cachestat(uint(fd), &unix.CachestatRange{Off: off, Len: length}, &out, 0)
-	return out, err
+func fileCache(fd int, offset, length int64) (uint64, error) {
+	region, err := unix.Mmap(fd, offset, int(length), unix.PROT_NONE, unix.MAP_SHARED)
+	if err != nil {
+		return 0, err
+	}
+	defer unix.Munmap(region)
+	page := os.Getpagesize()
+	vector := make([]byte, (len(region)+page-1)/page)
+	// Only pass the start address. The new mapping stays without access
+	// permission throughout the query and no file bytes are dereferenced.
+	_, _, errno := unix.Syscall(unix.SYS_MINCORE, uintptr(unsafe.Pointer(&region[0])), uintptr(len(region)), uintptr(unsafe.Pointer(&vector[0])))
+	if errno != 0 {
+		return 0, errno
+	}
+	var count uint64
+	for _, v := range vector {
+		count += uint64(v & 1)
+	}
+	return count, nil
 }
 
 func checkCacheControl(root int, device uint64) (cacheControl, error) {
@@ -105,24 +120,32 @@ func checkCacheControl(root int, device uint64) (cacheControl, error) {
 	if err = unix.Ftruncate(fd, 4*page); err != nil {
 		return out, err
 	}
-	cold, err := fileCache(fd, 0, 0)
+	if err = unix.Fchmod(fd, 0444); err != nil {
+		return out, err
+	}
+	ro, err := unix.Open(fmt.Sprintf("/proc/self/fd/%d", fd), unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return out, err
 	}
-	out.Cold = cold.Cache
+	defer unix.Close(ro)
+	cold, err := fileCache(ro, 0, 4*page)
+	if err != nil {
+		return out, err
+	}
+	out.Cold = cold
 	if n, err := unix.Pwrite(fd, make([]byte, page), page); err != nil || int64(n) != page {
 		return out, fmt.Errorf("control write %d/%d: %v", n, page, err)
 	}
-	hot, err := fileCache(fd, uint64(page), uint64(page))
+	hot, err := fileCache(ro, page, page)
 	if err != nil {
 		return out, err
 	}
-	out.Written = hot.Cache
-	untouched, err := fileCache(fd, 2*uint64(page), uint64(page))
+	out.Written = hot
+	untouched, err := fileCache(ro, 2*page, page)
 	if err != nil {
 		return out, err
 	}
-	out.Untouched = untouched.Cache
+	out.Untouched = untouched
 	if out.Cold != 0 || out.Written != 1 || out.Untouched != 0 {
 		return out, errors.New("cold/written/untouched control failed")
 	}
@@ -196,22 +219,25 @@ func torchCacheFileStat(root int, path string, device uint64, seen map[fileID]*t
 	if before.Mode&unix.S_IFMT != unix.S_IFREG || before.Dev != device || before.Size <= 0 || before.Size > 1<<30 {
 		return nil, errors.New("candidate is not a bounded regular file on the task filesystem")
 	}
+	if before.Uid != uint32(os.Geteuid()) {
+		return nil, errors.New("candidate is not owned by the probe UID, so mincore could mask its result")
+	}
 	id := fileID{before.Dev, before.Ino}
 	if alias := seen[id]; alias != nil {
 		alias.Paths = append(alias.Paths, path)
 		return nil, nil
 	}
-	s, err := fileCache(fd, 0, uint64(before.Size))
+	pages, err := fileCache(fd, 0, before.Size)
 	if err != nil {
 		return nil, err
 	}
 	if err = unix.Fstat(fd, &after); err != nil {
 		return nil, err
 	}
-	if before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim || s.Cache > (uint64(after.Size)+uint64(os.Getpagesize())-1)/uint64(os.Getpagesize()) {
+	if before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim || pages > (uint64(after.Size)+uint64(os.Getpagesize())-1)/uint64(os.Getpagesize()) {
 		return nil, errors.New("concurrent mutation or impossible page count")
 	}
-	out := &torchCacheFile{Device: before.Dev, Inode: before.Ino, UID: before.Uid, Size: before.Size, Paths: []string{path}, Pages: s.Cache, Dirty: s.Dirty, Writeback: s.Writeback}
+	out := &torchCacheFile{Device: before.Dev, Inode: before.Ino, UID: before.Uid, Size: before.Size, Paths: []string{path}, Pages: pages}
 	seen[id] = out
 	return out, nil
 }
@@ -225,6 +251,12 @@ func collectTorchCache() (out torchCacheScan) {
 	defer func() { out.End, _ = monotonic() }()
 	out.Errors = make(map[string]string)
 	out.EUID = os.Geteuid()
+	out.Method = "mincore-prot-none"
+	ids, err := os.ReadFile("/proc/self/uid_map")
+	if out.EUID != 0 || err != nil || !slices.Equal(strings.Fields(string(ids)), []string{"0", "0", "4294967295"}) {
+		out.Errors["control"] = "initial guest root user namespace not verified"
+		return
+	}
 	roots, err := filepath.Glob("/container/aries-torch-tensor-parallelism-*/rootfs")
 	if err != nil || len(roots) != 1 {
 		out.Errors["root"] = "need exactly one mounted PyTorch task root"
@@ -247,7 +279,7 @@ func collectTorchCache() (out torchCacheScan) {
 	runTorchControl.Do(func() { cachedTorchControl, cachedTorchControlErr = checkCacheControl(root, st.Dev) })
 	out.Control = cachedTorchControl
 	if cachedTorchControlErr != nil || out.Control.Device != st.Dev {
-		out.Errors["control"] = fmt.Sprintf("unverified cachestat control: %v", cachedTorchControlErr)
+		out.Errors["control"] = fmt.Sprintf("unverified mincore control: %v", cachedTorchControlErr)
 		return
 	}
 	before, pidsA, errA := candidateVMAs(st.Dev)
