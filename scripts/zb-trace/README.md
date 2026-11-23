@@ -71,3 +71,19 @@ within a window. This hook does not classify guest objects, backing
 recoverability, or filesystem page state.
 
 Sources: [Firecracker x86_64 RAM layout](https://github.com/firecracker-microvm/firecracker/blob/v1.18.0/src/vmm/src/arch/x86_64/mod.rs), [KVM userspace memory regions](https://docs.kernel.org/virt/kvm/api.html#kvm-set-user-memory-region), [Linux idle page tracking](https://docs.kernel.org/admin-guide/mm/idle_page_tracking.html).
+
+### Colocated original PyTorch sessions
+
+Use `colocated_torch.py` on the idle amd201 block and DAX worker with the
+sealed `4b588047` bundle and both task images already unpacked. Pass the bundle,
+runtime base, fresh result directory, and v3 and v4 systemd unit names. The
+launcher checks disk, RAM and thin-pool capacity, and verifies the installed
+root bytes. It uses the Git 20-second baseline, 40-second stagger and 15-second
+tail in v3, v4, v4, v3 order. The two roles have separate checkpoint and I/O
+directories, CNI identities and writable backing. Each live readback verifies
+that both restores use the same immutable root inode for that period.
+
+Retain the launcher output in a sibling `.log` file and the exit code in a
+sibling `.exit` file. `collect_colocated_torch.py` retrieves the raw receipts
+and samples, reruns the sealed source verifier for every replay, and preserves
+content-free host and VMM observations for the common colocation analysis.
