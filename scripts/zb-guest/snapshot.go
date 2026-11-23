@@ -47,6 +47,7 @@ type sample struct {
 	Errors           map[string]string `json:"source_errors"`
 	PageBytes        int               `json:"page_bytes"`
 	RegularFiles     *regularMapScan   `json:"regular_files,omitempty"`
+	TorchFileCache   *torchCacheScan   `json:"torch_file_cache,omitempty"`
 	PFNs             *pfnScan          `json:"pfn_scan,omitempty"`
 }
 
@@ -110,6 +111,10 @@ func snapshot(start, count uint64) sample {
 	if os.Getenv("ZB_REGULAR_MAPS") == "1" {
 		files := collectRegularFiles()
 		out.RegularFiles = &files
+	}
+	if os.Getenv("ZB_TORCH_FILE_CACHE") == "1" {
+		files := collectTorchCache()
+		out.TorchFileCache = &files
 	}
 	out.EndNS, err = monotonic()
 	if err != nil {

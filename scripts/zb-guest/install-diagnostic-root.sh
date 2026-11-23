@@ -11,9 +11,13 @@ cp --sparse=always --reflink=auto "$source_image" "$staging/image"
 chmod u+w "$staging/image"
 regular_maps=${ZB_REGULAR_MAPS:-0}
 [[ "$regular_maps" =~ ^[01]$ ]]
+torch_cache=${ZB_TORCH_FILE_CACHE:-0}
+[[ "$torch_cache" =~ ^[01]$ ]]
+cache_line=
+if [[ "$torch_cache" == 1 ]]; then cache_line=$'Environment=ZB_TORCH_FILE_CACHE=1\n'; fi
 pfn_count=${ZB_GUEST_PFN_COUNT:-524288}
-[[ "$pfn_count" =~ ^[1-9][0-9]{0,6}$ ]] && (( pfn_count <= 2359296 )) || {
-    echo 'ZB_GUEST_PFN_COUNT must be an integer from 1 through 2359296' >&2
+[[ "$pfn_count" =~ ^(0|[1-9][0-9]{0,6})$ ]] && (( pfn_count <= 2359296 )) || {
+    echo 'ZB_GUEST_PFN_COUNT must be an integer from 0 through 2359296' >&2
     exit 2
 }
 cat > "$staging/unit" <<EOF
@@ -24,7 +28,7 @@ After=local-fs.target
 
 [Service]
 Environment=ZB_REGULAR_MAPS=$regular_maps
-ExecStart=/usr/local/bin/zb-guest serve --host-vsock --pfn-count $pfn_count
+${cache_line}ExecStart=/usr/local/bin/zb-guest serve --host-vsock --pfn-count $pfn_count
 
 [Install]
 WantedBy=firecracker.target
