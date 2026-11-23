@@ -52,6 +52,7 @@ type Receipt struct {
 	SourceOutputSHA  string              `json:"source_output_sha256,omitempty"`
 	CaptureEndNS     int64               `json:"capture_end_monotonic_ns,omitempty"`
 	CaptureIndex     int                 `json:"capture_index,omitempty"`
+	NativeError      string              `json:"native_error,omitempty"`
 }
 
 func Clock() (int64, error) {
@@ -206,6 +207,11 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 	receipt.Stderr = out.Stderr
 	receipt.StdoutSHA = digest([]byte(out.Stdout))
 	receipt.StderrSHA = digest([]byte(out.Stderr))
+	if h.RelaxedMeasuredStatus && callErr != nil {
+		receipt.Exit = nil
+		receipt.NativeError = callErr.Error()
+		receipt.StatusBasis = "native_transport_or_observer_error"
+	}
 	if err := errors.Join(callErr, h.Record(receipt)); err != nil {
 		return err
 	}

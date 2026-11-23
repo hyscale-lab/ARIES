@@ -34,6 +34,11 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 			event.ProcessTiming = last.Timing
 			event.Stdout, event.Stderr = last.Stdout, last.Stderr
 			event.StdoutSHA, event.StderrSHA = digest([]byte(last.Stdout)), digest([]byte(last.Stderr))
+			if h.RelaxedMeasuredStatus && err != nil {
+				event.Exit = nil
+				event.NativeError = err.Error()
+				event.StatusBasis = "native_terminal_observation_error"
+			}
 			if e := errors.Join(err, emit(h, event)); e != nil {
 				return e
 			}
