@@ -33,7 +33,8 @@
       "harnesses": [
         "hermes"
       ],
-      "aries_commit": "9d36541cf23d539cad23cfb5911087bc20f39792"
+      "aries_commit": "f6449bfa791d8b2dde2a90b0faf2163680953014",
+      "bridge_image": "aries-bridge:v1-9f9deaca3645"
     },
     "pc780": {
       "hostname": "node-002",
