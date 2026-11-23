@@ -1,0 +1,14 @@
+{
+  "schema": "aries.wheel-pfn.abba.v1",
+  "trial": "4b588047-22af-4dc2-a705-6b8d24ff88fe",
+  "variant": "v3", "worker": "amd201",
+  "order": ["treated", "sham", "sham", "treated"],
+  "paired_periods": [[1,2],[4,3]],
+  "action_boundary": ["post-tool", 12],
+  "primary_fixed_post_window_s": 180,
+  "primary_fixed_pre_window_s": 30,
+  "primary_outcome": "1-second VMM PSS integrated from host action RPC completion through 180 wall seconds, and mean PSS over that interval. Pairwise contrasts are sham minus treated. Baseline-adjust the post mean difference by the sham-minus-treated mean in the 30 seconds before the action RPC begins. Both arms retain stock v3 reporting.",
+  "secondary": "Same-source endpoint from action RPC completion through the host start of session-end observation, and phases through pre-tool 14 and post-tool 15. Integrate with a linear interpolation of bracketing VMM samples; reject missing bracket coverage or sample gaps above 2.5 s. Report actual durations and exact boundary KVM guest-RAM PSS separately.",
+  "host_presence": "On both arms, nonfaulting host pagemap scans of the registered RAM slots immediately before and after the action RPC and at later source boundaries. In each treated session join its own measured deleted PFNs to host present/absent bits. Guest PFNs are not paired across VMs.",
+  "observer": "Same collector binary, root, measurement path, demand and stock reporting in both arms. The sham skips only the file advice syscall. Every period uses a fresh independent VM. Include measured detection, observer timing, ranking/order and single-worker limits; no campaign credit."
+}

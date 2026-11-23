@@ -12,6 +12,11 @@ cp "$repo"/scripts/zb-guest/*.go "$repo/go.mod" "$repo/go.sum" "$work/"
 cp "$here/testdata/filemap_probe.go" "$work/"
 cd "$work"
 patch --quiet --fuzz=0 -p0 --input "$here/testdata/wheel-release.patch"
+case ${2:-single} in
+    single) ;;
+    pair) patch --quiet --fuzz=0 -p0 --input "$here/testdata/sham.patch" ;;
+    *) echo "unknown probe mode" >&2; exit 2 ;;
+esac
 export CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1
 go test -buildvcs=false .
 go build -buildvcs=false -trimpath -o "$dst" .
