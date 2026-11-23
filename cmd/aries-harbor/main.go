@@ -61,6 +61,7 @@ func command(ctx context.Context) error {
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
 	opamPID := flag.Bool("diagnostic-opam-pid", false, "bind the recorded compiler signal-zero check and progress reads to the observed guest installer")
 	opamLog := flag.Bool("diagnostic-opam-log", false, "bind the original compiler progress-log name to its observed OPAM file in a diagnostic")
+	grpcNetDiag := flag.Bool("diagnostic-grpc-loopback", false, "verify the private 69ba guest with its IPv6 loopback address omitted")
 	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
@@ -119,7 +120,10 @@ func command(ctx context.Context) error {
 	}
 	// Both sources explicitly exercise nohup and a separate-session replacement.
 	// Every original shell in these trials receives the same backend.
-	useGroups := *groupMode || r.Trial == hfLoopbackTrial || r.Trial == "69ba9b75-cf5b-4722-94f4-7ce3ea31bbb4"
+	useGroups := *groupMode || r.Trial == hfLoopbackTrial || r.Trial == grpcLoopbackTrial
+	if *grpcNetDiag && (r.Trial != grpcLoopbackTrial || *observer != "" || *processDrift) {
+		return errors.New("guest loopback calibration requires an uninstrumented 69ba replay with strict process checks")
+	}
 	if useGroups && r.Task != hfTask && r.Task != kvTask {
 		return errors.New("Codex process-group helper requires a reviewed HF or gRPC Python guest")
 	}
@@ -131,7 +135,7 @@ func command(ctx context.Context) error {
 	}
 	if *processDrift {
 		torchPoll := r.Task == torchTask && (r.Trial == "e047ddea-bb8c-43c0-b71e-e625a611565f" || r.Trial == "ce62b3a5-602c-44c7-b13e-6537dca35d1d")
-		grpcPoll := r.Task == kvTask && r.Trial == "69ba9b75-cf5b-4722-94f4-7ce3ea31bbb4"
+		grpcPoll := r.Task == kvTask && r.Trial == grpcLoopbackTrial
 		financialPoll := r.Task == financialTask && r.Trial == "dce59078-0f61-4eac-92f9-3b2728e4ef28"
 		hfPoll := r.Task == hfTask && (r.Trial == "f0d5e4b5-b20d-40bf-89ec-6483b65525dc" || r.Trial == "071ce48d-3de4-4c02-9e42-3eb64933acd2")
 		allowed := grpcPoll || financialPoll || hfPoll || torchPoll || r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
@@ -186,10 +190,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -201,7 +205,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if err != nil {
 			return err
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
@@ -297,6 +301,14 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.NeedsNetwork {
+		if grpcNetDiag {
+			guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+				return m.Exec(ctx, id, command)
+			}
+			if err := readGRPCLoopback(ctx, guest, "before_snapshot", log); err != nil {
+				return err
+			}
+		}
 		if err = networkEvidence(ctx, m, id, "before_snapshot", r, log); err != nil {
 			return err
 		}
@@ -323,6 +335,14 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.NeedsNetwork {
+		if grpcNetDiag {
+			guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+				return m.Exec(ctx, id, command)
+			}
+			if err := readGRPCLoopback(ctx, guest, "after_restore", log); err != nil {
+				return err
+			}
+		}
 		if err = networkEvidence(ctx, m, id, "after_restore", r, log); err != nil {
 			return err
 		}

@@ -95,6 +95,9 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
            if any(e["event"] == "video_opencv_runtime" for e in events) else {}),
         "observer": first["observer"], "session_completed": bool(full),
         "diagnostic_process_drift": first.get("diagnostic_process_drift",False),
+        **({"diagnostic_grpc_loopback": True, "diagnostic_guest_network_readback": [
+            e for e in events if e["event"]=="diagnostic_grpc_network"
+        ], "primary_eligible": False} if first.get("diagnostic_grpc_loopback") else {}),
         "diagnostic_opam_log": first.get("diagnostic_opam_log",False),
         "diagnostic_opam_pid": first.get("diagnostic_opam_pid",False),
         "opam_pid_identity_observations": [e for e in events if e["event"] in ("diagnostic_opam_pid_discovery","diagnostic_opam_pid_check")],
