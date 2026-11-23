@@ -64,6 +64,7 @@ func command(ctx context.Context) error {
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
 	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
+	curlPackages := flag.String("curl-packages", "", "pinned Bookworm curl archive for the recorded inference HTTP check")
 	osTools := flag.String("os-tools", "", "pinned task-specific offline package archive")
 	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
 	probe := flag.String("guest-probe", "", "optional guest telemetry executable for diagnostic runs")
@@ -154,6 +155,9 @@ func command(ctx context.Context) error {
 		return errors.New("this task requires the pinned in-guest -image-helper")
 	}
 	readySetup, _ := sourceSetup(r)
+	if (r.Task == hfTask && r.Trial == hfLoopbackTrial) != (*curlPackages != "") {
+		return errors.New("the inference trial with the recorded curl check requires its pinned curl archive")
+	}
 	if r.Task != "fix-git" && (*codexTools == "" || (readySetup.packagesSHA != "" && *osTools == "")) {
 		return errors.New("missing pinned guest tool bundle for this task")
 	}
@@ -175,10 +179,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, imageHelper string, videoDifferences, processDrift, opamLog, opamPID bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -257,7 +261,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
-	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools)
+	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools, curlPackages)
 	prepEnd, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil {
 		return errors.Join(err, clockErr)

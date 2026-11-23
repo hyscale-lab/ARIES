@@ -16,6 +16,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/replay/harbor"
 )
 
+const debianCurlSHA = "6e8e1dac4bc58e974f2654b53c6e4d5210cc8b7f492f1ad5660cdab5ac4c6998"
 const codexPrefixSHA = "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab"
 
 type taskSetup struct {
@@ -81,7 +82,7 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 		task.initialCheck += "\n" + videoPatchAlias
 	}
 	if r.Trial == "427a5c05-723c-407c-bdbd-a2927203c0eb" || r.Trial == "eaa24caa-f211-4745-a943-0f7041aa4214" {
-		task.packagesSHA = "6e8e1dac4bc58e974f2654b53c6e4d5210cc8b7f492f1ad5660cdab5ac4c6998"
+		task.packagesSHA = debianCurlSHA
 		task.packagesField = "debian_curl_archive_sha256"
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
@@ -128,7 +129,7 @@ func uploadPinned(ctx context.Context, m *vhive.Manager, id, file, expected, dir
 	return m.UploadArchive(ctx, id, dir, r)
 }
 
-func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages string) (string, any, error) {
+func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages, curlPackages string) (string, any, error) {
 	if r.Task == "fix-git" {
 		out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-c", initialGitState}, Dir: r.Workdir})
 		if err != nil || !json.Valid([]byte(out)) {
@@ -149,6 +150,12 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 		if err := uploadPinned(ctx, m, id, packages, hfEnvironmentSHA, "/"); err != nil {
 			return "", nil, err
 		}
+	}
+	if r.Task == hfTask && r.Trial == hfLoopbackTrial {
+		if err := installPackages(ctx, m, id, curlPackages, debianCurlSHA); err != nil {
+			return "", nil, err
+		}
+		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
 	if task.packagesSHA != "" {
 		if err := installPackages(ctx, m, id, packages, task.packagesSHA); err != nil {
@@ -222,6 +229,9 @@ rg --version | head -1`
 			return "", nil, err
 		}
 		details["pip_configuration"] = strings.TrimSpace(pip)
+	}
+	if r.Task == hfTask && r.Trial == hfLoopbackTrial {
+		details["debian_curl_archive_sha256"] = debianCurlSHA
 	}
 	return "source_task_ready", details, nil
 }
