@@ -7,3 +7,5 @@ The retry adapter records each actual first reply. At a source-terminal boundary
 `retry-controller.sh RETRY_STAGE ORIGINAL_STAGE` runs the assigned cells in order after its prerequisites and whole-worker idle have been established. It retains a completed original when its source, replies, final state, and trace files agree. The runner exports each closed retry archive before acknowledging the next cell.
 
 [Benchmark reference](https://github.com/harbor-framework/terminal-bench-2-1/tree/12b7565679ce5006230b820666353673a133db93/tasks/sanitize-git-repo/tests)
+
+If the strict image viewer rejects a different PNG size, the retry leaves its actual first reply intact. A separately timestamped guest read keeps the exact available PNG in the private archive and records its dimensions, size, and digest. This extra read runs within the observed tool interval.

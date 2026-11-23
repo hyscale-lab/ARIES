@@ -1,5 +1,5 @@
 diff --git i/cmd/aries-harbor/main.go w/cmd/aries-harbor/main.go
-index 596a0da..0763867 100644
+index 596a0da..124d2ee 100644
 --- i/cmd/aries-harbor/main.go
 +++ w/cmd/aries-harbor/main.go
 @@ -72,6 +72,7 @@ func command(ctx context.Context) error {
@@ -42,14 +42,23 @@ index 596a0da..0763867 100644
  	}
  	if err = lifecycle("create_start"); err != nil {
  		return err
-@@ -423,12 +427,13 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+@@ -423,12 +427,21 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
  	})
  	defer sessions.Close()
  	h := harbor.Hooks{
 +		SanitizeObservation:   sanitizeObservation,
  		DiagnosticVideoImages: videoDifferences,
  		IntraTool:             intraTool,
- 		Record:                func(e harbor.Receipt) error { return log.Encode(e) },
+-		Record:                func(e harbor.Receipt) error { return log.Encode(e) },
++		Record: func(e harbor.Receipt) error {
++			if err := log.Encode(e); err != nil {
++				return err
++			}
++			if sanitizeObservation && e.Event == "tool_reply" && e.Operation == "ViewImage" && e.Exit != nil && *e.Exit != 0 {
++				return observeSanitizePNG(ctx, m, id, r, log, e)
++			}
++			return nil
++		},
  		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
  			if call.Operation == "StartProcess" || call.Operation == "PollProcess" {
 -				if processDrift {
@@ -57,7 +66,7 @@ index 596a0da..0763867 100644
  					return sessions.ObserveDrift(ctx, call)
  				}
  				return sessions.Execute(ctx, call)
-@@ -440,6 +445,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+@@ -440,6 +453,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
  			if call.Operation == "ViewImage" {
  				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
  			}
@@ -67,7 +76,7 @@ index 596a0da..0763867 100644
  			// Source-terminal exec_command launches still have a real initial yield.
  			return sessions.Execute(ctx, call)
  		},
-@@ -479,6 +487,16 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+@@ -479,6 +495,16 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
  		h.FinishObservedProcess = sessions.FinishObservedProcess
  		h.WasRetained = sessions.WasRetained
  	}
@@ -84,7 +93,7 @@ index 596a0da..0763867 100644
  	if groups != nil {
  		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
  			return m.Exec(ctx, id, command)
-@@ -498,7 +516,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+@@ -498,7 +524,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
  		return err
  	}
  	if r.Task != "fix-git" {
@@ -131,16 +140,17 @@ index edd22a4..aa377ce 100644
  	if r.Task == markerTask {
 diff --git i/cmd/aries-harbor/sanitize_observation.go w/cmd/aries-harbor/sanitize_observation.go
 new file mode 100644
-index 0000000..fd2ba9d
+index 0000000..32ed26f
 --- /dev/null
 +++ w/cmd/aries-harbor/sanitize_observation.go
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,123 @@
 +package main
 +
 +import (
 +	"context"
 +	"encoding/json"
 +	"errors"
++	"strings"
 +
 +	"github.com/hyscale-lab/aries/pkg/core"
 +	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
@@ -203,6 +213,60 @@ index 0000000..fd2ba9d
 +	}
 +	return log.Encode(state)
 +}
++
++// This independent observation preserves an existing PNG after the strict
++// viewer rejects its shape. It never changes the first tool reply.
++func observeSanitizePNG(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, reply harbor.Receipt) error {
++	if !strings.Contains(reply.Stderr, "unexpected PNG resize in reviewed recording") {
++		return nil
++	}
++	png := ""
++	for _, call := range r.Plan.Calls {
++		if call.Sequence == reply.Sequence && call.Operation == "ViewImage" {
++			png = call.Path
++			break
++		}
++	}
++	if png == "" {
++		return errors.New("PNG observation has no reviewed source path")
++	}
++	begin, err := harbor.Clock()
++	if err != nil {
++		return err
++	}
++	out, captureErr := m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", observeRawPNG, png}})
++	end, err := harbor.Clock()
++	if err != nil {
++		return err
++	}
++	observed := map[string]any{"event": "diagnostic_native_png_raw", "sequence": reply.Sequence, "step_id": reply.Step,
++		"source_call_id": reply.SourceCallID, "monotonic_ns": end, "begin_monotonic_ns": begin,
++		"exit_code": out.ExitCode, "transport_failed": captureErr != nil}
++	if captureErr == nil && out.ExitCode == 0 && json.Valid([]byte(out.Stdout)) {
++		observed["png"] = json.RawMessage(out.Stdout)
++	}
++	return log.Encode(observed)
++}
++
++const observeRawPNG = `
++import base64
++import hashlib
++import json
++from pathlib import Path
++import struct
++import sys
++
++path = Path(sys.argv[1])
++assert path.is_file()
++with path.open("rb") as image:
++    data = image.read(8 * 1024 * 1024 + 1)
++assert len(data) <= 8 * 1024 * 1024
++assert data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR" and len(data) >= 24
++width, height = struct.unpack(">II", data[16:24])
++assert width > 0 and height > 0
++print(json.dumps({"width": width, "height": height, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
++                  "content_base64": base64.b64encode(data).decode("ascii")}))
++`
 diff --git i/pkg/replay/harbor/run.go w/pkg/replay/harbor/run.go
 index 7ebdd74..53850a1 100644
 --- i/pkg/replay/harbor/run.go
