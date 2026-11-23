@@ -29,8 +29,10 @@ def main():
     is_hf = entry['task'] == 'hf-model-inference'
     if is_hf:
         import cohort_hf_cpu
-        expected_trial,root_sha,cni_flag=cohort_hf_cpu.TRIAL,cohort_hf_cpu.ROOT_SHA,'--hf-cni'
-        if subprocess.check_output(['systemctl','show','--property=EffectiveCPUs','--value',a.unit],text=True).strip()!=str(cohort_hf_cpu.HOST_CPU):
+        expected_trial,root_sha,cni_flag=entry['trial_id'],cohort_hf_cpu.ROOT_SHA,'--hf-cni'
+        if expected_trial not in (cohort_hf_cpu.TRIAL,cohort_hf_cpu.DEFAULT_TRIAL,cohort_hf_cpu.LOOPBACK_GUNICORN_TRIAL):
+            raise ValueError('unexpected single-source HF profile')
+        if expected_trial != cohort_hf_cpu.LOOPBACK_GUNICORN_TRIAL and subprocess.check_output(['systemctl','show','--property=EffectiveCPUs','--value',a.unit],text=True).strip()!=str(cohort_hf_cpu.HOST_CPU):
             raise ValueError('private runtime lacks the source one-core cpuset')
     else:
         expected_trial,root_sha,cni_flag=GRPC_LOOPBACK_TRIAL,GRPC_ROOT_SHA,'--pypi-cni'
@@ -46,7 +48,10 @@ def main():
     if subprocess.run(['pgrep','-x','firecracker|[.]firecracker-re'],stdout=subprocess.DEVNULL).returncode!=1:
         raise RuntimeError('worker must be idle before this single-source run')
     driver=asset/'run-reviewed-cohort.py'
-    run=asset/'runs'/(expected_trial[:8]+'-'+a.variant+'-cohort-01')
+    iteration=entry.get('run_iteration',1)
+    if type(iteration) is not int or not 1 <= iteration <= 99:
+        raise ValueError('unexpected source-qualified run iteration')
+    run=asset/'runs'/f'{expected_trial[:8]}-{a.variant}-cohort-{iteration:02d}'
     status=asset/'runs'/('cohort-'+a.variant+'-status.jsonl')
     if run.exists() or status.exists():
         raise FileExistsError('use a fresh worker-side bundle directory for each attempted primary')

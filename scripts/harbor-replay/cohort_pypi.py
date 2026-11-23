@@ -223,7 +223,7 @@ def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
         checks["inference"]["http_assertions"] = cohort_hf.assertion_evidence(events, receipt["trial_id"])
         if hf.get("single_physical_cpu"):
             import cohort_hf_cpu
-            if receipt["trial_id"] != cohort_hf_cpu.TRIAL:
+            if receipt["trial_id"] not in (cohort_hf_cpu.TRIAL, cohort_hf_cpu.DEFAULT_TRIAL):
                 raise ValueError("source CPU profile belongs to another HF trial")
             checks["source_hf_capacity"] = cohort_hf_cpu.evidence(events, states["source_task_ready"])
     return checks

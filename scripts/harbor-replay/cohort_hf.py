@@ -106,7 +106,7 @@ def _assertion_lines(output):
                     or any(not math.isfinite(v) or not 0 <= v <= 1 for v in scores.values())
                     or abs(sum(scores.values()) - 1) > 1e-5 or max(scores, key=scores.get) != response["sentiment"]):
                 raise ValueError("original HTTP assertion returned an invalid confidence or label")
-            probabilities.append(scores["positive"])
+            probabilities.append([scores["negative"], scores["positive"]])
             line = prefix + response["sentiment"]
         rows.append(re.sub(r"\bPID \d+", "PID <pid>", line))
     return rows, probabilities
@@ -128,58 +128,59 @@ def assertion_evidence(events, trial):
             raise ValueError(f"{trial} assertion subprocess printed a traceback")
         rows, scores = _assertion_lines("".join(c.get("stdout", "") for c in calls))
         digest = hashlib.sha256("\n".join(rows).encode()).hexdigest()
-        if digest != group["sha256"] or len(scores) != len(group["positive"]):
+        if digest != group["sha256"] or len(scores) != len(group["scores"]):
             raise ValueError(f"{trial} original HTTP assertion lines or completion marker differ")
-        delta = max((abs(a-b) for a, b in zip(scores, group["positive"])), default=0.0)
+        deltas = [max((abs(a[i]-b[i]) for a, b in zip(scores, group["scores"])), default=0.0) for i in (0,1)]
+        delta = max(deltas)
         if delta > 2e-6:
             raise ValueError(f"{trial} HTTP prediction probabilities differ by {delta}")
         checks.append({"source_call_ids": group["calls"], "assertion_lines": len(rows), "completion": rows[-1],
-                       "assertion_sha256": digest, "max_positive_score_difference": delta})
+                       "assertion_sha256": digest, "max_negative_score_difference": deltas[0], "max_positive_score_difference": deltas[1]})
     return checks
 
 
-# Normalized original assertion lines, call IDs, status and positive scores from the reviewed ATIF.
+# Normalized original assertion lines, call IDs, status and ordered [negative, positive] scores from the reviewed ATIF.
 _HTTP_ASSERTIONS = {'071ce48d-3de4-4c02-9e42-3eb64933acd2': [{'calls': ['call_RVX7Yd76NSEQfxM6T6783Cqa'],
                                            'exits': [0],
                                            'sha256': 'c8578a5d67e74db494f3c5a78ce232ae458c14986c3d8959ae7765026690fe52',
-                                           'positive': [0.9998770952224731,
-                                                        0.00034663110272958875,
-                                                        0.9998759031295776,
-                                                        0.9998331069946289]}],
+                                           'scores': [[0.00012293607869651169, 0.9998770952224731],
+                                                      [0.9996533393859863, 0.00034663110272958875],
+                                                      [0.00012405241432134062, 0.9998759031295776],
+                                                      [0.00016691246128175408, 0.9998331069946289]]}],
  '249f2934-972f-4c61-af3d-0315ce5003c0': [{'calls': ['call_BXiZPJzgIedKxjmoavNfGVSC',
                                                      'call_0haVTSFTqCOZeo8LhB7wryCF'],
                                            'exits': [-1, 0],
                                            'sha256': '614480a3d441a4c9adaa94a5c65890a56b78d0d8a2f5a6483a586eddddff2fe9',
-                                           'positive': [0.9998781681060791,
-                                                        0.0004967869026586413,
-                                                        0.9998834133148193,
-                                                        0.9998430013656616]},
+                                           'scores': [[0.00012185277591925114, 0.9998781681060791],
+                                                      [0.9995032548904419, 0.0004967869026586413],
+                                                      [0.00011658402218017727, 0.9998834133148193],
+                                                      [0.00015693026944063604, 0.9998430013656616]]},
                                           {'calls': ['call_9y3NHVgP4f8nyfbRIa3Mafh1'],
                                            'exits': [0],
                                            'sha256': '3f457e4fea33a2daf17eac045ff8c7e322a4a9c71703b2ea113c59833450aaf4',
-                                           'positive': [0.9998841285705566]}],
+                                           'scores': [[0.00011586165783228353, 0.9998841285705566]]}],
  '85e3b0db-f1cb-43b5-9f8a-a2333db196c1': [{'calls': ['call_ssgTQvpWFIidp7Gtcm7c2MOW',
                                                      'call_INKnZqY4Lvr9jdUsqjxcNviL'],
                                            'exits': [-1, 0],
                                            'sha256': '4b94c2a310d15e5367adaffea7352894a609254366f064f7da2737b1bc8d64f7',
-                                           'positive': [0.999871015548706,
-                                                        0.0003970198449678719,
-                                                        0.9998226761817932,
-                                                        0.9998167157173157]}],
+                                           'scores': [[0.00012899740249849856, 0.999871015548706],
+                                                      [0.9996029734611511, 0.0003970198449678719],
+                                                      [0.00017733649292495102, 0.9998226761817932],
+                                                      [0.00018335504864808172, 0.9998167157173157]]}],
  'b615a3ec-fae8-4198-ae4c-0aedf9c3e25b': [{'calls': ['call_TOVrT7o3WvteIU8VjuOMc5xs'],
                                            'exits': [0],
                                            'sha256': '8305d942f01715b08c9a60b579d13449eae6d123ac7002d6ee10e7bb73963c08',
-                                           'positive': [0.9998739957809448,
-                                                        0.0005126027390360832,
-                                                        0.9998776912689209,
-                                                        0.9998797178268433,
-                                                        0.03048323281109333,
-                                                        0.9998064637184143]}],
+                                           'scores': [[0.00012595536827575415, 0.9998739957809448],
+                                                      [0.9994874000549316, 0.0005126027390360832],
+                                                      [0.0001222549908561632, 0.9998776912689209],
+                                                      [0.00012021003931295127, 0.9998797178268433],
+                                                      [0.9695167541503906, 0.03048323281109333],
+                                                      [0.00019350594084244221, 0.9998064637184143]]}],
  'f0d5e4b5-b20d-40bf-89ec-6483b65525dc': [{'calls': ['call_CiO9Zr48IxjvxuimjMzwAXrP',
                                                      'call_8y4M5J4CQ3u8bqoXfo63OA1U'],
                                            'exits': [-1, 0],
                                            'sha256': '5c91fdac1164de1d11bd695e7de703b05639fdef12b94ce04e7ba01a7a0c090e',
-                                           'positive': [0.9998718500137329,
-                                                        0.00018933502724394202,
-                                                        0.999824583530426,
-                                                        0.999873161315918]}]}
+                                           'scores': [[0.00012810465705115348, 0.9998718500137329],
+                                                      [0.9998106360435486, 0.00018933502724394202],
+                                                      [0.00017543583817314357, 0.999824583530426],
+                                                      [0.0001267963816644624, 0.999873161315918]]}]}

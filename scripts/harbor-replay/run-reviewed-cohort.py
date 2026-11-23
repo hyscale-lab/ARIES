@@ -64,9 +64,9 @@ def main():
                 pypi_args=cohort_hf.replay_args(asset,a.hf_cni)
                 if hf.get("single_physical_cpu"):
                     import cohort_hf_cpu
-                    if trial != cohort_hf_cpu.TRIAL:
+                    if trial not in (cohort_hf_cpu.TRIAL, cohort_hf_cpu.DEFAULT_TRIAL):
                         raise ValueError("unexpected one-core HF source")
-                    pypi_args.extend(cohort_hf_cpu.replay_args(asset))
+                    pypi_args.extend(cohort_hf_cpu.replay_args(asset, trial))
             elif financial_apt is not None:
                 pypi_args=cohort_pypi.replay_args(asset,task,a.financeapt_cni,'financeapt')
             else:
@@ -96,7 +96,10 @@ def main():
             raise ValueError(f'adapter differs from validation receipt for {trial}')
         # Adapter enforces both source digests, image identity and resource contract.
         key=trial[:8]+'-'+a.variant+'-cohort'
-        first=asset/'runs'/(key+'-01')
+        iteration=entry.get('run_iteration',1)
+        if type(iteration) is not int or not 1 <= iteration <= 99:
+            raise ValueError('unexpected source-qualified run iteration')
+        first=asset/'runs'/f'{key}-{iteration:02d}'
         if first.exists():
             events=first/'events.jsonl'
             if events.exists():

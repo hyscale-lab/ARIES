@@ -78,7 +78,7 @@ def main():
                 pending.append(dict(ident, reason="named validation log digest unavailable"))
                 continue
             resource_request = {key: reviewed[key] for key in ("image", "vcpus", "memory_mib", "storage_mib")}
-            source_cpu = args.hf and trial == cohort_hf_cpu.TRIAL
+            source_cpu = args.hf and trial in (cohort_hf_cpu.TRIAL, cohort_hf_cpu.DEFAULT_TRIAL)
             if source_cpu:
                 profile = receipt.get("source_hf_cpu_profile") or {}
                 if profile.get("requested_physical_cpus") != resource_request["vcpus"] or not profile.get("source_qualified"):
@@ -127,6 +127,9 @@ def main():
         install(assets/"hf-tools.tar.gz", out/"hf-tools.tar.gz", cohort_hf_cpu.TOOLS_SHA)
         for filename in ("plugin-lineage.json","package-lineage.json"):
             install(assets/filename,out/filename)
+    if any(ident["trial_id"] == cohort_hf_cpu.DEFAULT_TRIAL for ident, *_ in ready):
+        install(args.cache/"dataset-apt/curl-debs.tar.gz",out/"curl-debs.tar.gz",cohort_hf_cpu.CURL_SHA)
+    if any(ident["trial_id"] in (cohort_hf_cpu.TRIAL,cohort_hf_cpu.DEFAULT_TRIAL,cohort_hf_cpu.LOOPBACK_GUNICORN_TRIAL) for ident, *_ in ready):
         for filename in ("cohort_hf_cpu.py","cohort_dataset.py","cohort_video.py","network-measurement-metadata.py","audit-idle-runtime.py"):
             install(replay/filename,out/filename)
         install(replay/"run-grpc-primary.py",out/"run-hf-primary.py")
@@ -165,6 +168,8 @@ def main():
             measured["financial_apt"] = financial_apt
         if hf is not None:
             measured["hf"] = hf
+            if trial in (cohort_hf_cpu.DEFAULT_TRIAL,cohort_hf_cpu.LOOPBACK_GUNICORN_TRIAL):
+                measured["run_iteration"] = 2
         manifest.append(measured)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (out / "pending.json").write_text(json.dumps(pending, indent=2) + "\n")
