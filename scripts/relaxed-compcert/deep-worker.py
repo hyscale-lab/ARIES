@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import runpy
 import tempfile
 
 STAGE = Path('/local/zb-relaxed-compcert-01')
@@ -31,5 +32,8 @@ def main(v):
     args=['bash','-s','--',str(STAGE),v,unit,runtime,plugins,'/local/zb-replacement-log-summary-01/codex-harbor-tools.tar.gz',TRIAL]
     import subprocess
     subprocess.run(args,input=script,text=True,check=True)
+    bridge_helper=STAGE/'bf3c-series-01.py'
+    assert hashlib.sha256(bridge_helper.read_bytes()).hexdigest()=='c50b3f64dc05d6e8cca70214a0b3c915fd499abf61f287fd21fb601a4f1c6b60'
+    runpy.run_path(str(bridge_helper))['retire_empty_bridge']()
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('variant',choices=DEPLOYMENTS);main(p.parse_args().variant)

@@ -1,6 +1,7 @@
 """Use the signed ordinary compiler fixture with the source-bound PID lifetime diagnostic."""
 import hashlib
 from pathlib import Path
+import runpy
 import subprocess
 STAGE=Path('/local/zb-relaxed-compcert-01')
 TRIAL='921ac918-1cd2-41af-858a-a37490ced8f4'
@@ -19,3 +20,6 @@ if __name__=='__main__':
     args=['bash','-s','--',str(STAGE),'v1','fcmod-zepbound-amd182','/local/zb-validation/runtime','/local/zb-deep-kv-v1-amd182/cni',
           '/local/zb-torch-deep-v1-amd182/assets/codex-harbor-tools.tar.gz',TRIAL]
     subprocess.run(args,input=render((STAGE/'run-series.sh').read_bytes()),text=True,check=True)
+    bridge_helper=STAGE/'bf3c-series-01.py'
+    assert hashlib.sha256(bridge_helper.read_bytes()).hexdigest()=='c50b3f64dc05d6e8cca70214a0b3c915fd499abf61f287fd21fb601a4f1c6b60'
+    runpy.run_path(str(bridge_helper))['retire_empty_bridge']()
