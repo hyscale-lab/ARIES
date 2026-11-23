@@ -1,4 +1,4 @@
-"""Attach to the restored stock Firecracker reporting handler during a traced Git replay."""
+"""Attach to the restored stock Firecracker reporting handler during a traced replay."""
 import argparse
 import hashlib
 import json
@@ -16,9 +16,8 @@ def start_ticks(proc):
     return int((proc/"stat").read_text().rsplit(")",1)[1].split()[19])
 
 
-def capture(run, output, template):
+def capture(samples, output, template):
     output.mkdir(mode=0o700)
-    samples=run/"trace/samples.jsonl"
     deadline=time.monotonic()+360
     while time.monotonic()<deadline:
         if samples.is_file():
@@ -54,5 +53,6 @@ if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ("run","output","template"):
         parser.add_argument(name,type=Path)
+    parser.add_argument("--samples",type=Path,help="Path to restored VMM samples when stored outside run/trace/")
     args=parser.parse_args()
-    capture(args.run,args.output,args.template)
+    capture(args.samples or args.run/"trace/samples.jsonl",args.output,args.template)
