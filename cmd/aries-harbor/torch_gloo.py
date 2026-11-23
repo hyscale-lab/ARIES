@@ -62,13 +62,14 @@ def listeners():
     return bound
 
 
-def gloo_address(expected):
+def gloo_address(expected, wheel, import_root):
     os.environ['OMP_NUM_THREADS'] = '1'
-    sys.path.insert(0,'/tmp/parallel-linear-deps')  # location used by e047
+    if import_root:
+        sys.path.insert(0, import_root)
     import torch
     import torch.distributed as dist
 
-    if torch.__version__ != '2.5.1+cpu':
+    if torch.__version__ != wheel:
         raise RuntimeError(f'unexpected Gloo wheel {torch.__version__}')
     torch.set_num_threads(1)
     before = listeners()
@@ -83,7 +84,7 @@ def gloo_address(expected):
             dist.destroy_process_group()
 
 
-action, = sys.argv[1:]
+action, wheel, import_root = sys.argv[1:]
 before = inspect()
 result = dict(before=before)
 if action == 'install':
@@ -102,11 +103,11 @@ if action in ('install','verify','canary'):
     if result['alias']['bindable_ipv4'] != [expected]:
         raise RuntimeError('private hostname alias did not select the guest NIC')
     if action == 'canary':
-        result['device'] = gloo_address(expected)
+        result['device'] = gloo_address(expected, wheel, import_root)
 if action == 'original-canary':
     HOSTS.write_bytes(SAVED.read_bytes())
     result['original'] = inspect()
     if result['original']['bindable_ipv4']:
         raise RuntimeError('the preserved hosts file unexpectedly resolves the hostname')
-    result['device'] = gloo_address('127.0.0.1')
+    result['device'] = gloo_address('127.0.0.1', wheel, import_root)
 print(json.dumps(result,sort_keys=True))

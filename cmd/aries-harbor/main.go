@@ -214,8 +214,8 @@ func command(ctx context.Context) error {
 	}
 	if *torchGloo != "" {
 		mode := *torchGloo == "present" || *torchGloo == "alias"
-		if !mode || r.Task != torchTask || r.Trial != torchGlooTrial || o.VCPUs != 1 || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 || (*torchGloo == "alias" && !*processDrift) {
-			return errors.New("Torch hostname diagnostics require the uninstrumented one-vCPU e047 recording, with observed process drift in alias mode")
+		if !mode || r.Task != torchTask || (r.Trial != torchGlooTrial && r.Trial != torchGlooSpawnTrial) || o.VCPUs != 1 || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 || (*torchGloo == "alias" && !*processDrift) {
+			return errors.New("Torch hostname diagnostics require a reviewed uninstrumented one-vCPU recording, with observed process drift in alias mode")
 		}
 	}
 	if *videoDifferences && (r.Task != "video-processing" || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0) {
@@ -416,7 +416,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if torchGloo == "alias" {
 			action = "install"
 		}
-		if err := readTorchGloo(ctx, m, id, "before_snapshot", action, log); err != nil {
+		if err := readTorchGloo(ctx, m, id, r.Trial, "before_snapshot", action, log); err != nil {
 			return err
 		}
 	}
@@ -472,7 +472,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if torchGloo == "alias" {
 			action = "verify"
 		}
-		if err := readTorchGloo(ctx, m, id, "after_restore", action, log); err != nil {
+		if err := readTorchGloo(ctx, m, id, r.Trial, "after_restore", action, log); err != nil {
 			return err
 		}
 		if torchGloo == "present" {
@@ -605,10 +605,10 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 		if torchGloo == "alias" {
-			if err := readTorchGloo(ctx, m, id, "after_source", "canary", log); err != nil {
+			if err := readTorchGloo(ctx, m, id, r.Trial, "after_source", "canary", log); err != nil {
 				return err
 			}
-			return readTorchGloo(ctx, m, id, "after_source", "original-canary", log)
+			return readTorchGloo(ctx, m, id, r.Trial, "after_source", "original-canary", log)
 		}
 		if hfHostCPU >= 0 {
 			return checkHFCPU(ctx, m, id, r.Trial, hfHostCPU, sourceCPU, "after_source", log)
