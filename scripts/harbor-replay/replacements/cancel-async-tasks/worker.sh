@@ -86,7 +86,8 @@ checkpoint=()
 native=()
 if [[ "$variant" == v3 || "$variant" == v4 ]]; then
     native=(-native-checkpoint)
-else
+fi
+if [[ "$kind" == deep || "$variant" == v1 || "$variant" == v2 ]]; then
     checkpoint=("ZB_CHECKPOINT_NAMESPACE_DIR=$runtime/checkpoints/aries")
 fi
 assets=/local/zb-corpus-torch-cohort-4b58-v3
