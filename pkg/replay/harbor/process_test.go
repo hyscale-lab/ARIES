@@ -166,3 +166,13 @@ func TestExpectedTerminalShellCanGenuinelyYield(t *testing.T) {
 		t.Fatalf("source-terminal live command = %+v elapsed=%s err=%v", got, time.Since(before), err)
 	}
 }
+
+func TestNativeClockRejectsTransportWithoutAcknowledgement(t *testing.T) {
+	s := NewCodexProcessSessions(t.Context(), func(context.Context, replay.Call, io.Writer, io.Writer) (core.CommandResult, error) {
+		return core.CommandResult{}, nil
+	})
+	defer s.Close()
+	if _, err := s.Execute(t.Context(), replay.Call{Operation: "Exec", YieldTime: time.Millisecond}); err == nil {
+		t.Fatal("accepted a completed native command without an acknowledged start")
+	}
+}

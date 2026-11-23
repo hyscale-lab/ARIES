@@ -44,6 +44,7 @@ type guestProcess struct {
 	result         core.CommandResult
 	err            error
 	retained       bool
+	timing         *core.CommandTimings
 }
 
 // ProcessSessions owns live foreground processes that returned a native
@@ -118,6 +119,7 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		}
 		work := s.ctx
 		if s.nativeStartClock {
+			work, p.timing = core.WithCommandTimings(work)
 			work, started = core.WithCommandStart(work)
 		}
 		s.wg.Add(1)
@@ -147,6 +149,13 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 				// The command keeps executing throughout these two windows.
 				wait = time.Until(begin.Add(codexEarlyExitGrace + call.YieldTime))
 			case <-p.done:
+				if p.err == nil {
+					select {
+					case <-started:
+					default:
+						return core.CommandResult{}, errors.New("native guest process completed without a Start acknowledgement")
+					}
+				}
 			case <-ctx.Done():
 				return core.CommandResult{}, context.Cause(ctx)
 			}
@@ -175,6 +184,10 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		}
 		s.lock.Unlock()
 	default:
+	}
+	if p.timing != nil {
+		timing := p.timing.Snapshot()
+		out.Timing = &timing
 	}
 	out.Stdout = p.stdout.take()
 	out.Stderr = p.stderr.take()

@@ -26,29 +26,31 @@ type Hooks struct {
 }
 
 type Receipt struct {
-	SourceCallID     string `json:"source_call_id,omitempty"`
-	SourceKind       string `json:"source_kind,omitempty"`
-	ParallelSize     int    `json:"parallel_size,omitempty"`
-	Event            string `json:"event"`
-	SessionID        int    `json:"source_process_session_id,omitempty"`
-	Operation        string `json:"operation,omitempty"`
-	StatusBasis      string `json:"status_basis,omitempty"`
-	Time             int64  `json:"monotonic_ns"`
-	Step             int    `json:"step_id,omitempty"`
-	Line             int    `json:"rollout_line,omitempty"`
-	Sequence         uint64 `json:"sequence,omitempty"`
-	Basis            string `json:"basis,omitempty"`
-	RequestedNS      int64  `json:"requested_ns,omitempty"`
-	Exit             *int   `json:"exit_code,omitempty"`
-	Expected         *int32 `json:"expected_exit_code,omitempty"`
-	StdoutSHA        string `json:"stdout_sha256,omitempty"`
-	StderrSHA        string `json:"stderr_sha256,omitempty"`
-	Stdout           string `json:"stdout,omitempty"`
-	Stderr           string `json:"stderr,omitempty"`
-	OutputComparison string `json:"output_comparison,omitempty"`
-	SourceOutputSHA  string `json:"source_output_sha256,omitempty"`
-	CaptureEndNS     int64  `json:"capture_end_monotonic_ns,omitempty"`
-	CaptureIndex     int    `json:"capture_index,omitempty"`
+	ProcessTiming    *core.CommandTiming `json:"guest_process_timing,omitempty"`
+	SourceYieldMS    int64               `json:"source_yield_ms,omitempty"`
+	SourceCallID     string              `json:"source_call_id,omitempty"`
+	SourceKind       string              `json:"source_kind,omitempty"`
+	ParallelSize     int                 `json:"parallel_size,omitempty"`
+	Event            string              `json:"event"`
+	SessionID        int                 `json:"source_process_session_id,omitempty"`
+	Operation        string              `json:"operation,omitempty"`
+	StatusBasis      string              `json:"status_basis,omitempty"`
+	Time             int64               `json:"monotonic_ns"`
+	Step             int                 `json:"step_id,omitempty"`
+	Line             int                 `json:"rollout_line,omitempty"`
+	Sequence         uint64              `json:"sequence,omitempty"`
+	Basis            string              `json:"basis,omitempty"`
+	RequestedNS      int64               `json:"requested_ns,omitempty"`
+	Exit             *int                `json:"exit_code,omitempty"`
+	Expected         *int32              `json:"expected_exit_code,omitempty"`
+	StdoutSHA        string              `json:"stdout_sha256,omitempty"`
+	StderrSHA        string              `json:"stderr_sha256,omitempty"`
+	Stdout           string              `json:"stdout,omitempty"`
+	Stderr           string              `json:"stderr,omitempty"`
+	OutputComparison string              `json:"output_comparison,omitempty"`
+	SourceOutputSHA  string              `json:"source_output_sha256,omitempty"`
+	CaptureEndNS     int64               `json:"capture_end_monotonic_ns,omitempty"`
+	CaptureIndex     int                 `json:"capture_index,omitempty"`
 }
 
 func Clock() (int64, error) {
@@ -195,6 +197,8 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 	receipt.Time = replyTime
 	receipt.OutputComparison = compareOutput(call.ResponseStdout, out)
 	receipt.SourceOutputSHA = digest(call.ResponseStdout)
+	receipt.ProcessTiming = out.Timing
+	receipt.SourceYieldMS = call.YieldTime.Milliseconds()
 	receipt.Exit = &out.ExitCode
 	receipt.Expected = &call.ExitCode
 	receipt.Stdout = out.Stdout

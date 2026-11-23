@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hyscale-lab/aries/pkg/core"
 	"io"
 	"net"
 	"os"
@@ -57,10 +58,13 @@ func (m *Manager) execModernShim(ctx context.Context, id, execID string, spec *a
 	if err != nil {
 		return 0, fmt.Errorf("shim exec: %w", err)
 	}
+	endStart := core.TimeCommandStage(ctx, "command.start_rpc")
 	_, err = task.Start(ctx, &taskv3.StartRequest{ID: id, ExecID: execID})
+	endStart()
 	if err != nil {
 		return 0, fmt.Errorf("shim start: %w", err)
 	}
+	core.MarkCommandTiming(ctx, "command.started")
 	if input != nil {
 		go func() {
 			select {
@@ -76,10 +80,12 @@ func (m *Manager) execModernShim(ctx context.Context, id, execID string, spec *a
 	if err != nil {
 		return 0, fmt.Errorf("shim wait: %w", err)
 	}
+	core.MarkCommandTiming(ctx, "command.exited")
 	_, err = task.Delete(ctx, &taskv3.DeleteRequest{ID: id, ExecID: execID})
 	if err != nil {
 		return 0, fmt.Errorf("shim delete: %w", err)
 	}
 	fs.Wait()
+	core.MarkCommandTiming(ctx, "command.completed")
 	return exit.ExitStatus, nil
 }

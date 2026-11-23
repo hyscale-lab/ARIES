@@ -60,10 +60,11 @@ type Command struct {
 
 // CommandResult records a completed sandbox process.
 type CommandResult struct {
-	ExitCode int           `json:"exit_code"`
-	Stdout   string        `json:"stdout,omitempty"`
-	Stderr   string        `json:"stderr,omitempty"`
-	Duration time.Duration `json:"duration"`
+	Timing   *CommandTiming `json:"timing,omitempty"`
+	ExitCode int            `json:"exit_code"`
+	Stdout   string         `json:"stdout,omitempty"`
+	Stderr   string         `json:"stderr,omitempty"`
+	Duration time.Duration  `json:"duration"`
 }
 
 // ResourceReading is one runtime-neutral resource observation. CPU usage is
