@@ -61,6 +61,7 @@ func command(ctx context.Context) error {
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
 	opamPID := flag.Bool("diagnostic-opam-pid", false, "bind the recorded compiler signal-zero check and progress reads to the observed guest installer")
 	opamLog := flag.Bool("diagnostic-opam-log", false, "bind the original compiler progress-log name to its observed OPAM file in a diagnostic")
+	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
 	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
@@ -115,6 +116,12 @@ func command(ctx context.Context) error {
 	}
 	if o.VCPUs != r.VCPUs || o.MemoryMB != r.MemoryMiB || *storage != r.StorageMiB {
 		return fmt.Errorf("trial %s requires %d vCPUs, %d MiB memory and %d MiB storage", r.Trial, r.VCPUs, r.MemoryMiB, r.StorageMiB)
+	}
+	// Both sources explicitly exercise nohup and a separate-session replacement.
+	// Every original shell in these trials receives the same backend.
+	useGroups := *groupMode || r.Trial == hfLoopbackTrial || r.Trial == "69ba9b75-cf5b-4722-94f4-7ce3ea31bbb4"
+	if useGroups && r.Task != hfTask && r.Task != kvTask {
+		return errors.New("Codex process-group helper requires a reviewed HF or gRPC Python guest")
 	}
 	if *opamPID && (!*processDrift || r.Trial != compilerWaitTrial) {
 		return errors.New("OPAM installer identity mapping requires the uninstrumented 921 process diagnostic")
@@ -179,10 +186,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -252,6 +259,26 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
+	var groups *shellGroups
+	if groupMode {
+		groups, err = newShellGroups()
+		if err != nil {
+			return err
+		}
+		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+			return m.Exec(ctx, id, command)
+		}
+		sum, err := installCodexGroups(ctx, guest)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			retErr = errors.Join(retErr, log.Encode(map[string]any{"event": "codex_process_group_releases", "releases": groups.timings}))
+		}()
+		if err := log.Encode(map[string]any{"event": "guest_prepared", "helper": "codex_process_groups", "guest_sha256": sum, "source_version": "0.151.0"}); err != nil {
+			return err
+		}
+	}
 	prepBegin, err := harbor.Clock()
 	if err != nil {
 		return err
@@ -315,7 +342,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	sessions := harbor.NewProcessSessions(ctx, func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
-		return m.ExecStream(ctx, id, sourceShellCommand(r.Trial, call), nil, stdout, stderr)
+		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call), nil, stdout, stderr)
 	})
 	defer sessions.Close()
 	h := harbor.Hooks{
@@ -336,7 +363,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			if call.Operation == "ViewImage" {
 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
 			}
-			return m.Exec(ctx, id, sourceShellCommand(r.Trial, call))
+			return m.Exec(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call))
 		},
 		Boundary: func(ctx context.Context, phase string, step int) error {
 			if observer != "" {
@@ -373,6 +400,15 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if processDrift {
 		h.FinishObservedProcess = sessions.FinishObservedProcess
 		h.WasRetained = sessions.WasRetained
+	}
+	if groups != nil {
+		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+			return m.Exec(ctx, id, command)
+		}
+		h.Exec = groups.releaseOnExit(h.Exec, guest)
+		if h.FinishObservedProcess != nil {
+			h.FinishObservedProcess = groups.releaseOnExit(h.FinishObservedProcess, guest)
+		}
 	}
 	if intraTool != nil {
 		if err := log.Encode(map[string]any{"event": "intra_tool_diagnostic", "step_id": intraTool.Step,
