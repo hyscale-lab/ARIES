@@ -26,19 +26,27 @@ def worker_driver(assets, unit, entries, temporary):
         updated = updated.replace(b'f"10.235.{match[1]}', b'f"10.{subnet_octet}.{match[1]}')
         (temporary / helper.name).write_bytes(updated)
         return temporary / driver.name, dict(module=helper.name, source_sha256=hashlib.sha256(original).hexdigest(), deployed_sha256=hashlib.sha256(updated).hexdigest(), network="zbhfm189", source_subnet="10.235.189.0/28", deployed_subnet="10.237.189.0/28")
-    if unit == "fcmod-zepbound-amd183-stockv2" and tasks <= {"kv-store-grpc", "financial-document-processor"}:
+    pypi183 = unit=="fcmod-zepbound-amd183-stockv2" and tasks <= {"kv-store-grpc","financial-document-processor"}
+    finance201 = unit=="fcmod-zepbound-tex-v3" and tasks=={"financial-document-processor"} and all(e.get("financial_apt") for e in entries)
+    if pypi183 or finance201:
+        if finance201:
+            name,profile,node,old_octet,new_octet = "zbfinanceapt201","financeapt",201,234,237
+            expected = "3b0f0c610650f0284d1ef2245f29a3018952864d0e472997d7635c9e50475015"
+        else:
+            name,profile,node,old_octet,new_octet = "zbpypi183","pypi",183,233,236
+            expected = "31597d7497db2924e2b8b1eff66a2cd6f25cd1c0fcffe8fc80f87fb68ed15bbb"
         helper = assets / "cohort_pypi.py"
         original = helper.read_bytes()
-        if hashlib.sha256(original).hexdigest() != "31597d7497db2924e2b8b1eff66a2cd6f25cd1c0fcffe8fc80f87fb68ed15bbb":
+        if hashlib.sha256(original).hexdigest() != expected:
             raise ValueError("unexpected scoped PyPI source helper")
         for module in assets.glob("*.py"):
             shutil.copyfile(module, temporary / module.name)
         target = b'    name = config["name"]\n'
         assert original.count(target) == 1
-        replacement = target + b'    if name == "zbpypi183" and profile == "pypi":\n        network = 236\n'
+        replacement = target + f'    if name == "{name}" and profile == "{profile}":\n        network = {new_octet}\n'.encode()
         updated = original.replace(target, replacement)
         (temporary / helper.name).write_bytes(updated)
-        return temporary / driver.name, dict(module=helper.name, source_sha256=hashlib.sha256(original).hexdigest(), deployed_sha256=hashlib.sha256(updated).hexdigest(), network="zbpypi183", source_subnet="10.233.183.0/28", deployed_subnet="10.236.183.0/28")
+        return temporary / driver.name, dict(module=helper.name, source_sha256=hashlib.sha256(original).hexdigest(), deployed_sha256=hashlib.sha256(updated).hexdigest(), network=name, source_subnet=f"10.{old_octet}.{node}.0/28", deployed_subnet=f"10.{new_octet}.{node}.0/28")
     if unit!="fcmod-zepbound-amd200" or not tasks.intersection({"count-dataset-tokens","video-processing"}):
         return driver, {}
     helper=assets/"cohort_dataset.py"
