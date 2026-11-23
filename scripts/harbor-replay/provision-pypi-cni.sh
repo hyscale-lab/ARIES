@@ -127,11 +127,17 @@ config={"cniVersion":"1.0.0","name":name,"plugins":[{"type":"bridge","bridge":br
 (base/"conf"/"10-video.conflist").write_text(json.dumps(config,indent=2)+"\n")
 PY
 if [[ $private_dns == true ]]; then
-    python3 - "$base/conf/dataset-hosts.json" "${tls_hosts[@]}" <<'PYTLS'
+    python3 - "$base/conf/dataset-hosts.json" "${ZB_TLS_CANDIDATES:-}" "${tls_hosts[@]}" <<'PYTLS'
 import ipaddress,json,pathlib,socket,ssl,sys
 path=pathlib.Path(sys.argv[1]); hosts={}
-for host in sys.argv[2:]:
-    addresses=sorted({a[4][0] for a in socket.getaddrinfo(host,443,socket.AF_INET,socket.SOCK_STREAM)})
+candidates=json.loads(pathlib.Path(sys.argv[2]).read_text()) if sys.argv[2] else {}
+for host in sys.argv[3:]:
+    try:
+        addresses=sorted({a[4][0] for a in socket.getaddrinfo(host,443,socket.AF_INET,socket.SOCK_STREAM)})
+    except socket.gaierror:
+        addresses=[]
+    if host in candidates and candidates[host] not in addresses:
+        addresses.append(candidates[host])
     for ip in addresses:
         if not ipaddress.ip_address(ip).is_global: raise ValueError(host)
         try:

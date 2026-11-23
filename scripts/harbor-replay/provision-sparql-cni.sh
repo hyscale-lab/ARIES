@@ -20,6 +20,7 @@ case "$profile" in
         ;;
     financeapt)
         subnet=10.234.$octet.0/28
+        if [[ "$worker" == amd201 ]]; then subnet=10.237.$octet.0/28; fi
         hosts=(snapshot.ubuntu.com pypi.org files.pythonhosted.org)
         ;;
     pypi)
