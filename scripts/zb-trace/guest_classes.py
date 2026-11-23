@@ -68,8 +68,21 @@ def cross_tab(e, absent):
                     conflicts.add(gfn)
         verified = identities.keys()-conflicts
         present_ends = [b for _,b in present]
+        # Older probes export extents without the optional file-name dictionary.
+        per_file = {}
+        named = "files" in regular
+        if named:
+            paths = {(row["device"], row["inode"]): sorted(set(row["paths"])) for row in regular["files"]}
         resident_by_class = Counter()
         for gfn in verified:
+            if named:
+                device, inode, _ = identities[gfn]
+                key = (device, inode)
+                if key not in per_file:
+                    per_file[key] = dict(device=device, inode=inode, paths=paths.get(key, []),
+                                         guest_mapped_pages=0, resident_bytes_by_flag_class=Counter())
+                file = per_file[key]
+                file["guest_mapped_pages"] += 1
             address = gfn*p
             i = bisect_right(present_ends,address)
             if i>=len(present) or address<present[i][0]:
@@ -77,9 +90,13 @@ def cross_tab(e, absent):
             j = bisect_right(ends,gfn)
             label = runs[j]["class"] if j<len(runs) and runs[j]["start_pfn"]<=gfn else "outside_guest_scan"
             resident_by_class[label]+=p
+            if named:
+                file["resident_bytes_by_flag_class"][label] += p
         out["mapped_regular"] = dict(guest_mapped_pages=len(verified),conflicting_pages=len(conflicts),
                     resident_bytes_by_flag_class=dict(resident_by_class),skipped=regular["skipped"],
                     processes=regular["processes"],scan_duration_ns=regular["end_ns"]-regular["begin_ns"])
+        if named:
+            out["mapped_regular"]["files"] = [per_file[key] for key in sorted(per_file)]
     tagged=[]
     for s in e.get("content_sample",[]):
         ix=bisect_right(ends,s["gfn"])
