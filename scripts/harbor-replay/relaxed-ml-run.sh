@@ -6,7 +6,8 @@ variant=$2
 attempt=${ZB_RELAXED_ML_ATTEMPT:-01}
 adapter="$stage/aries-relaxed-ml"
 if [[ $attempt != 01 ]]; then
-    [[ "$attempt:$variant:${3:-}:$#" == "02:v2:e047ddea:3" ]]
+    [[ "$attempt:$variant:${3:-}:$#" == "02:v2:e047ddea:3" ||
+       "$attempt:$variant:${3:-}:$#" == "02:v4:e047ddea:3" ]]
     adapter="$stage/aries-relaxed-ml.retry"
     (cd "$stage" && sha256sum --quiet -c retry-SHA256SUMS)
 fi
@@ -14,6 +15,11 @@ node=$(cat /var/emulab/boot/nodeid)
 case "$node:$variant" in
     amd200:v2) runtime=/local/zb-v2/runtime; unit=fcmod-zepbound-amd200 ;;
     amd201:v3) runtime=/local/zb-texpilot/v3/runtime; unit=fcmod-zepbound-tex-v3 ;;
+    amd201:v4)
+        [[ $attempt == 02 ]]
+        runtime=/local/zb-texpilot/v4/runtime
+        unit=fcmod-zepbound-tex-v4
+        ;;
     amd200:v4|amd201:v1)
         runtime=$stage/stack-$variant/runtime
         unit=fcmod-zepbound-relaxed-ml-$variant
@@ -103,6 +109,9 @@ for task in "$@"; do
     fi
     sha256sum "$tools" "$torch/codex-harbor-tools.tar.gz" "$cni"/conf/*.conflist > "$run/assets.sha256"
     sha256sum "$adapter" > "$run/executed-adapter.sha256"
+    if [[ $attempt == 02 ]]; then
+        cp "$runtime/runtime.json" "$run/runtime-config.json"
+    fi
     systemctl show "$unit" -p EffectiveCPUs -p AllowedCPUs -p CPUQuotaPerSecUSec > "$run/host-capacity.txt"
     sudo -n python3 -B "$stage/audit-idle-runtime.py" "$unit" "$runtime" > "$run/deployment-before.json"
     args=(-relaxed-ml -guest-task-v3 "${native[@]}" -trajectory "$stage/sources/$task/trajectory.json"
