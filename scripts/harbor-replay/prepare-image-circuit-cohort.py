@@ -23,6 +23,7 @@ def main():
     cli.add_argument("receipts", type=Path)
     cli.add_argument("output", type=Path)
     cli.add_argument("--exclude-manifest", type=Path, help="omit earlier published trial IDs")
+    cli.add_argument("--trial", help="package one source-validated trial UUID")
     task_group = cli.add_mutually_exclusive_group()
     task_group.add_argument("--dataset", action="store_true", help="package validated token-count recordings")
     task_group.add_argument("--video", action="store_true", help="package strict video recordings with byte-identical guest frames")
@@ -75,7 +76,7 @@ def main():
             continue
         for item in spec["trials"]:
             trial = item["trial"]
-            if trial in prior:
+            if trial in prior or (a.trial and a.trial != trial):
                 continue
             suffix = "-guest-codec" if task == "code-from-image" else ""
             reference = a.receipts / f"{task}-{trial}{suffix}.json"
@@ -132,6 +133,8 @@ def main():
                             "unobserved_external_actions":receipt.get("external_actions",[]),
                             "fidelity_scope":"guest_calls_external_responses_unavailable" if receipt.get("external_actions") else "guest_calls",
                             "original_guest_post_checks":checks, "boundary_attribution":boundaries(target/"trajectory.json")})
+    if a.trial and len(entries) != 1:
+        raise ValueError(f"missing admitted native source receipt for {a.trial}")
     (output/"manifest.json").write_text(json.dumps(entries,indent=2)+"\n")
     (output/"pending.json").write_text(json.dumps(pending,indent=2)+"\n")
     (output/"runs").mkdir()
