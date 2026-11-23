@@ -26,8 +26,9 @@ def render(src):
 def main(v):
     node,unit,runtime,plugins=DEPLOYMENTS[v]
     tools='/local/zb-replacement-log-summary-01/codex-harbor-tools.tar.gz'
-    if v=='v4' and Path('/var/emulab/boot/nodeid').read_text().strip()=='amd201':
-        node='amd201';unit='fcmod-zepbound-cancel-async-deep-v4';runtime='/local/zb-cancel-async-deep-v4-amd201/runtime'
+    if Path('/var/emulab/boot/nodeid').read_text().strip()=='amd201':
+        node='amd201';unit='fcmod-zepbound-cancel-async-deep-'+v
+        runtime={'v1':'/local/zb-cancel-async-01/deep-v1/runtime','v4':'/local/zb-cancel-async-deep-v4-amd201/runtime'}[v]
         plugins='/local/zb-corpus-pypi-cohort-v3/cni';tools='/local/zb-corpus-pypi-cohort-v3/codex-harbor-tools.tar.gz'
     assert Path('/var/emulab/boot/nodeid').read_text().strip()==node
     assert not (STAGE/f'deep-{v}-01').exists()

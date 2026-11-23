@@ -18,6 +18,9 @@ def sha(p):
 def main(root):
     cache=root/'repo/ARIES/.cache'
     while not (cache/'zb-raw/relaxed-compcert-deep/v1/worker.sha256').is_file():time.sleep(40)
+    # A deep prerequisite can be relocated while native ordinary replay still owns amd182.
+    while not (cache/'harbor/log-summary-replacement/amd182.complete.json').is_file() or not (cache/'zb-raw/relaxed-compcert/v4/extracted').is_file():time.sleep(40)
+    assert ssh('systemctl','show','-p','ActiveState','--value','zb-relaxed-compcert-v4',capture_output=True).stdout.strip()==b'inactive'
     original=json.loads((root/'plan/result/1_opportunity/relaxed-compcert/runs/921ac918-v1/receipt.json').read_bytes())
     assert original['source_trial']==ID and original['source_complete'] and not original['compiler_artifact_verified']
     paths={cache/'harbor/relaxed-compcert-pid/aries-pid-lifetime':'aries-921a-pid-lifetime',Path(__file__).with_name('pid-worker.py'):'pid-worker-01.py'}

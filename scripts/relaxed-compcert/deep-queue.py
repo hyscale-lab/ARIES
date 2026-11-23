@@ -39,16 +39,16 @@ def main(root,variant,relocated=False):
         return
     assert old['first_divergent_step']==6 and old['driver_exit']==1
     cache=root/'repo/ARIES/.cache'
-    placement=result/'relaxed-compcert/deep/relocated-v4.json'
+    placement=result/f'relaxed-compcert/deep/relocated-{variant}.json'
     if relocated:
-        assert variant=='v4' and read(placement)['active_node']=='amd201' and read(placement)['source_trial']==TRIAL
+        assert variant in ('v1','v4') and read(placement)['active_node']=='amd201' and read(placement)['source_trial']==TRIAL
         node='amd201'
-        oldunit='zb-relaxed-compcert-deep-queue-v4'
+        oldunit='zb-relaxed-compcert-deep-queue-'+variant
         assert subprocess.check_output(['systemctl','--user','show',oldunit,'-p','ActiveState','--value'],text=True).strip()=='inactive'
-        assert state('amd189','zb-relaxed-compcert-deep-v4-01')=='inactive'
-    elif variant=='v4' and placement.is_file():
+        assert state({'v1':'amd182','v4':'amd189'}[variant],f'zb-relaxed-compcert-deep-{variant}-01')=='inactive'
+    elif placement.is_file():
         assert read(placement)['active_node']=='amd201' and read(placement)['source_trial']==TRIAL
-        print('Superseded by unique amd201 v4 submission',flush=True)
+        print('Superseded by unique amd201 '+variant+' submission',flush=True)
         return
     else:
         prior=cache/'harbor/log-summary-replacement'/f'{node}.complete.json'
