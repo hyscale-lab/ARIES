@@ -58,6 +58,7 @@ func command(ctx context.Context) error {
 	intraStep := flag.Int("intra-tool-step", 0, "recorded step for experimental intra-tool tracing")
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
+	hfHostCPU := flag.Int("diagnostic-hf-host-cpu", -1, "verify two HF guest vCPUs on the selected single host CPU in an isolated diagnostic deployment")
 	hfHarness := flag.String("hf-harness", "", "directory with the approved Debian utility and curated marketplace archives for the two HF inspection trials")
 	grpcTools := flag.String("grpc-tools", "", "signed, date-matched Debian git/patch package bundle for the 69ba source")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
@@ -110,8 +111,15 @@ func command(ctx context.Context) error {
 	if *image == "" {
 		return json.NewEncoder(os.Stdout).Encode(r)
 	}
+	requestedVCPUs := r.VCPUs
+	if *hfHostCPU >= 0 {
+		if r.Trial != hfInspectionTrial || *hfHarness == "" || *observer != "" || *sampler != "" {
+			return errors.New("two-vCPU diagnostic requires the uninstrumented HF inspection source and fixture")
+		}
+		requestedVCPUs = 2
+	}
 	if o.VCPUs == 0 {
-		o.VCPUs = r.VCPUs
+		o.VCPUs = requestedVCPUs
 	}
 	if o.MemoryMB == 0 {
 		o.MemoryMB = r.MemoryMiB
@@ -119,8 +127,8 @@ func command(ctx context.Context) error {
 	if *storage == 0 {
 		*storage = r.StorageMiB
 	}
-	if o.VCPUs != r.VCPUs || o.MemoryMB != r.MemoryMiB || *storage != r.StorageMiB {
-		return fmt.Errorf("trial %s requires %d vCPUs, %d MiB memory and %d MiB storage", r.Trial, r.VCPUs, r.MemoryMiB, r.StorageMiB)
+	if o.VCPUs != requestedVCPUs || o.MemoryMB != r.MemoryMiB || *storage != r.StorageMiB {
+		return fmt.Errorf("trial %s requires %d vCPUs, %d MiB memory and %d MiB storage", r.Trial, requestedVCPUs, r.MemoryMiB, r.StorageMiB)
 	}
 	// Both sources explicitly exercise nohup and a separate-session replacement.
 	// Every original shell in these trials receives the same backend.
@@ -203,10 +211,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -218,7 +226,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if err != nil {
 			return err
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "diagnostic_hf_host_cpu": hfHostCPU, "source_requested_cpus": r.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
@@ -326,6 +334,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
+	if hfHostCPU >= 0 {
+		if err := checkHFCPU(ctx, m, id, hfHostCPU, "before_snapshot", log); err != nil {
+			return err
+		}
+	}
 	if err = m.Start(ctx, id); err != nil {
 		return err
 	}
@@ -357,6 +370,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			}
 		}
 		if err = networkEvidence(ctx, m, id, "after_restore", r, log); err != nil {
+			return err
+		}
+	}
+	if hfHostCPU >= 0 {
+		if err := checkHFCPU(ctx, m, id, hfHostCPU, "after_restore", log); err != nil {
 			return err
 		}
 	}
@@ -456,7 +474,12 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	if r.Task != "fix-git" {
-		return captureTaskOutput(ctx, m, id, r, log, grpcTools != "")
+		if err := captureTaskOutput(ctx, m, id, r, log, grpcTools != ""); err != nil {
+			return err
+		}
+		if hfHostCPU >= 0 {
+			return checkHFCPU(ctx, m, id, hfHostCPU, "after_source", log)
+		}
 	}
 	return nil
 }
