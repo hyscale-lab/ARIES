@@ -43,17 +43,18 @@ def replay_args(asset, cni):
     match = re.fullmatch(r"zbhfm(182|183|189|191|198|200|201|203)", name)
     if match is None:
         raise ValueError("unexpected measured inference CNI profile")
+    subnet_octet = 237 if name == "zbhfm189" else 235
     bridge, firewall, redirect, loopback = config["plugins"]
     if ([p["type"] for p in (bridge, firewall, redirect, loopback)] !=
             ["bridge", "firewall", "tc-redirect-tap", "loopback"] or bridge["bridge"] != name or
-            bridge["ipam"]["subnet"] != f"10.235.{match[1]}.0/28" or
+            bridge["ipam"]["subnet"] != f"10.{subnet_octet}.{match[1]}.0/28" or
             Path(bridge["ipam"]["dataDir"]) != cni / "ipam" or
             Path(bridge["ipam"]["resolvConf"]) != cni / "resolv.conf"):
         raise ValueError("inference subnet, CNI plugin or resolver path differs")
     host_map = json.loads((cni / "conf/dataset-hosts.json").read_bytes())
     if set(host_map) != ENDPOINTS or not all(ipaddress.ip_address(addr).is_global for addr in host_map.values()):
         raise ValueError("unexpected inference endpoints")
-    if (cni / "resolv.conf").read_text().split() != ["nameserver", f"10.235.{match[1]}.1"]:
+    if (cni / "resolv.conf").read_text().split() != ["nameserver", f"10.{subnet_octet}.{match[1]}.1"]:
         raise ValueError("inference must use the private DNS service")
     for line in pinned(cni / "SHA256SUMS", CNI_SUMS).read_text().splitlines():
         sha, binary = line.split()

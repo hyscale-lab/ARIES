@@ -44,6 +44,10 @@ case "${3:-video}" in
         chain=ZB${node}HF235
         name=zbhfm$node
         dns_unit=zb-hf-dns-amd$node
+        if [[ $node == 189 ]]; then
+            subnet=10.237.189.0/28
+            chain=ZB189HF237
+        fi
         if [[ $3 == inference-amd182 ]]; then
             bridge=zbhf182
             subnet=10.232.182.0/28

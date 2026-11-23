@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 
 import cohort_hf
+import cohort_hf_cpu
 import cohort_pypi
 from cohort_image_circuit import IMAGE_HELPER, digest
 from cohort_pypi import (CNI_SUMS, CODEX_TOOLS, FINANCIAL, GRPC, IMAGE_HELPER_FILE, OS_TOOLS,
@@ -76,12 +77,21 @@ def main():
             if log is None:
                 pending.append(dict(ident, reason="named validation log digest unavailable"))
                 continue
-            for aliases in (ident, {key: reviewed[key] for key in ("image", "vcpus", "memory_mib", "storage_mib")},
+            resource_request = {key: reviewed[key] for key in ("image", "vcpus", "memory_mib", "storage_mib")}
+            source_cpu = args.hf and trial == cohort_hf_cpu.TRIAL
+            if source_cpu:
+                profile = receipt.get("source_hf_cpu_profile") or {}
+                if profile.get("requested_physical_cpus") != resource_request["vcpus"] or not profile.get("source_qualified"):
+                    raise ValueError("normal source-qualified physical CPU resource required")
+                resource_request["vcpus"] = profile["guest_vcpus"]
+            for aliases in (ident, resource_request,
                             {key: entry[key] for key in ("trajectory_sha256", "rollout_sha256")}):
                 if any(receipt[k] != expected for k, expected in aliases.items()):
                     raise ValueError(f"reviewed identity differs from the native receipt for {trial}")
             reference = boundaries(events_from(log))
             hf = dict(hf_trials[trial], **hf_environment) if args.hf else None
+            if source_cpu:
+                hf["single_physical_cpu"] = True
             checks = verify(log, receipt, reference, financial_apt=financial_apt, hf=hf)
             initial, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
             if initial["codex_prefix_sha256"] != CODEX_TOOLS:
@@ -111,6 +121,15 @@ def main():
         install(assets / "package-lineage.json",out / "package-lineage.json")
         for name in ("run-grpc-primary.py","network-measurement-metadata.py","cohort_dataset.py","cohort_video.py","audit-idle-runtime.py"):
             install(replay / name,out / name)
+    if any(ident["trial_id"] == cohort_hf_cpu.TRIAL for ident, *_ in ready):
+        assets = args.cache / "hf-harness-20260831"
+        install(assets/"upstream.tar.gz", out/"upstream.tar.gz", cohort_hf_cpu.PLUGINS_SHA)
+        install(assets/"hf-tools.tar.gz", out/"hf-tools.tar.gz", cohort_hf_cpu.TOOLS_SHA)
+        for filename in ("plugin-lineage.json","package-lineage.json"):
+            install(assets/filename,out/filename)
+        for filename in ("cohort_hf_cpu.py","cohort_dataset.py","cohort_video.py","network-measurement-metadata.py","audit-idle-runtime.py"):
+            install(replay/filename,out/filename)
+        install(replay/"run-grpc-primary.py",out/"run-hf-primary.py")
     if FINANCIAL in cases:
         install(args.cache / "sparql/sparql-university-packages.tar.gz", out / f"{FINANCIAL}-debs.tar.gz", OS_TOOLS)
         install(args.cache / IMAGE_HELPER_FILE, out / IMAGE_HELPER_FILE, IMAGE_HELPER)

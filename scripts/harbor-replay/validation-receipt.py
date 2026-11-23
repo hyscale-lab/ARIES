@@ -97,10 +97,16 @@ def summarize(log, trajectory, host, task, revision, binary_sha, configuration="
         **({"source_guest_network_profile": "ipv4-addresses-only", "source_guest_network_readback":[
             e for e in events if e["event"]=="source_grpc_network"
         ]} if any(e["event"]=="source_grpc_network" for e in events) else {}),
+        **({"source_hf_cpu_profile": first["hf_cpu_profile"],
+            "source_hf_cpu_readbacks": [e for e in events if e["event"] == "source_hf_cpu_readback"]}
+           if first.get("hf_cpu_profile", {}).get("source_qualified") else {}),
         **({"diagnostic_hf_host_cpu": first["diagnostic_hf_host_cpu"],
             "source_requested_cpus": first["source_requested_cpus"],
             "diagnostic_cpu_readbacks": [e for e in events if e["event"] == "diagnostic_hf_cpu_readback"],
             "primary_eligible": False} if first.get("diagnostic_hf_host_cpu", -1) >= 0 else {}),
+        **({"diagnostic_hf_cpu_profile": first["hf_cpu_profile"],
+            "diagnostic_cpu_readbacks": [e for e in events if e["event"] == "diagnostic_hf_cpu_readback"],
+            "primary_eligible": False} if first.get("hf_cpu_profile") and not first["hf_cpu_profile"]["source_qualified"] else {}),
         "diagnostic_process_drift": first.get("diagnostic_process_drift",False),
         **({"diagnostic_grpc_loopback": True, "diagnostic_grpc_ipv4_addresses_only": first.get("diagnostic_grpc_ipv4_addresses_only",False), "diagnostic_guest_network_readback": [
             e for e in events if e["event"]=="diagnostic_grpc_network"

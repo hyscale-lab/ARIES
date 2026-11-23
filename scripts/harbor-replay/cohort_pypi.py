@@ -220,4 +220,9 @@ def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
         if receipt["task"] != cohort_hf.TASK or not re.fullmatch(r"zb(hfm|inference)[1-9][0-9]{1,2}", first["cni_network"]):
             raise ValueError("inference digest evidence lacks its dedicated network")
         checks["inference"] = cohort_hf.evidence(states["source_task_ready"], states["final_task_state"], connectivity, hf)
+        if hf.get("single_physical_cpu"):
+            import cohort_hf_cpu
+            if receipt["trial_id"] != cohort_hf_cpu.TRIAL:
+                raise ValueError("source CPU profile belongs to another HF trial")
+            checks["source_hf_capacity"] = cohort_hf_cpu.evidence(events, states["source_task_ready"])
     return checks

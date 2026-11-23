@@ -62,6 +62,11 @@ def main():
                 if hf is None:
                     raise ValueError('inference trial is missing its source-bound artifact inventory')
                 pypi_args=cohort_hf.replay_args(asset,a.hf_cni)
+                if hf.get("single_physical_cpu"):
+                    import cohort_hf_cpu
+                    if trial != cohort_hf_cpu.TRIAL:
+                        raise ValueError("unexpected one-core HF source")
+                    pypi_args.extend(cohort_hf_cpu.replay_args(asset))
             elif financial_apt is not None:
                 pypi_args=cohort_pypi.replay_args(asset,task,a.financeapt_cni,'financeapt')
             else:
