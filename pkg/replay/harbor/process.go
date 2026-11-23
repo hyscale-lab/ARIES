@@ -107,13 +107,15 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 	p := s.active[call.SessionID]
 	var started <-chan time.Time
 	switch call.Operation {
-	case "StartProcess":
-		if p != nil {
+	case "Exec", "StartProcess":
+		if call.Operation == "StartProcess" && p != nil {
 			s.lock.Unlock()
 			return core.CommandResult{}, fmt.Errorf("duplicate live session %d", call.SessionID)
 		}
 		p = &guestProcess{done: make(chan struct{})}
-		s.active[call.SessionID] = p
+		if call.Operation == "StartProcess" {
+			s.active[call.SessionID] = p
+		}
 		work := s.ctx
 		if s.nativeStartClock {
 			work, started = core.WithCommandStart(work)
@@ -168,7 +170,7 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		s.lock.Lock()
 		if retain && call.ExitCode == ProcessRunning && err == nil {
 			p.retained = true
-		} else {
+		} else if call.Operation != "Exec" {
 			delete(s.active, call.SessionID)
 		}
 		s.lock.Unlock()

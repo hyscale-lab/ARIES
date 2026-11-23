@@ -380,17 +380,17 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		}
 		return replay.Call{Operation: "ApplyPatch", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Body: []byte(patch), ResponseStdout: []byte(body)}, nil
 	}
+	// Codex uses the same initial window regardless of the eventual source reply.
+	yield := uint64(10000)
+	if args.YieldMs != nil {
+		yield = min(30000, max(250, *args.YieldMs))
+	}
 	login := args.Login == nil || *args.Login
 	header, body, found := strings.Cut(c.output, "\nOutput:\n")
 	if state := runningHeader.FindStringSubmatch(header); len(state) == 2 && found && args.Cmd != "" && path.IsAbs(args.Workdir) {
 		id, err := strconv.Atoi(state[1])
 		if err != nil || id == 0 {
 			return replay.Call{}, errors.New("invalid running session ID")
-		}
-		// Codex 0.151.0 default_exec_yield_time_ms and Linux clamp_yield_time.
-		yield := uint64(10000)
-		if args.YieldMs != nil {
-			yield = min(30000, max(250, *args.YieldMs))
 		}
 		return replay.Call{Operation: "StartProcess", SessionID: id, YieldTime: time.Duration(yield) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: login, ExitCode: ProcessRunning, ResponseStdout: []byte(body)}, nil
 	}
@@ -402,7 +402,7 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 	if err != nil {
 		return replay.Call{}, err
 	}
-	return replay.Call{Operation: "Exec", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: login, ExitCode: int32(exit), ResponseStdout: []byte(body)}, nil
+	return replay.Call{Operation: "Exec", YieldTime: time.Duration(yield) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: login, ExitCode: int32(exit), ResponseStdout: []byte(body)}, nil
 }
 
 func processPoll(c indexedCall, origin, ts time.Time, sequence uint64) (replay.Call, error) {

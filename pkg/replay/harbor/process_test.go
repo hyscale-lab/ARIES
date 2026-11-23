@@ -150,3 +150,19 @@ func TestCodexLaunchFailureDoesNotWaitForStart(t *testing.T) {
 		t.Fatalf("launch failure = %v", err)
 	}
 }
+
+func TestExpectedTerminalShellCanGenuinelyYield(t *testing.T) {
+	finished := make(chan struct{})
+	group := NewCodexProcessSessions(t.Context(), func(ctx context.Context, _ replay.Call, _, _ io.Writer) (core.CommandResult, error) {
+		core.MarkCommandTiming(ctx, "command.started")
+		<-finished
+		return core.CommandResult{ExitCode: 0}, nil
+	})
+	defer group.Close()
+	defer close(finished)
+	before := time.Now()
+	got, err := group.Execute(t.Context(), replay.Call{Operation: "Exec", ExitCode: 0, YieldTime: 10 * time.Millisecond})
+	if err != nil || got.ExitCode != ProcessRunning || time.Since(before) < codexEarlyExitGrace+10*time.Millisecond {
+		t.Fatalf("source-terminal live command = %+v elapsed=%s err=%v", got, time.Since(before), err)
+	}
+}

@@ -436,7 +436,8 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			if call.Operation == "ViewImage" {
 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
 			}
-			return m.Exec(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call))
+			// Source-terminal exec_command launches still have a real initial yield.
+			return sessions.Execute(ctx, call)
 		},
 		Boundary: func(ctx context.Context, phase string, step int) error {
 			if observer != "" {
