@@ -26,10 +26,11 @@ def idle(ctr, sockets):
             continue
         try:
             filename = os.readlink(process / "exe")
+            comm = (process / "comm").read_text().strip()
         except FileNotFoundError:
             continue
         name = Path(filename.removesuffix(" (deleted)")).name
-        if name == "firecracker" or name.startswith(".firecracker-real"):
+        if comm in {"firecracker", ".firecracker-re"} or name == "firecracker" or name.startswith((".firecracker-real", ".firecracker-restore")):
             vmms[process.name] = filename
     if vmms:
         raise RuntimeError(f"active VMM processes: {vmms}")
