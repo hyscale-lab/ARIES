@@ -58,6 +58,8 @@ type Request struct {
 	// AllowNetwork carries benchmark policy to VM providers. Container providers
 	// enforce it through their task attachment instead.
 	AllowNetwork bool
+	// PrivateHostsFile keeps /etc/hosts on the task root filesystem in a vHive guest.
+	PrivateHostsFile bool `json:",omitempty"`
 	// InternalPort is exposed only on the task attachment, without host publication.
 	InternalPort int
 	// Mounts grants access only to the host paths explicitly supplied by wiring.

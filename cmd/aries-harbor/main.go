@@ -196,6 +196,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	req := deployment.Request{Name: name, AllowNetwork: r.NeedsNetwork, Image: image, StorageMB: storage, Workdir: r.Workdir, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
+	req.PrivateHostsFile = r.Task == hfTask && r.Trial == hfLoopbackTrial
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {

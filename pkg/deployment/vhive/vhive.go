@@ -370,6 +370,9 @@ func sandboxSpecOptions(r deployment.Request) []oci.SpecOpts {
 		// "Host" here means the guest VM, never the worker host.
 		firecrackeroci.WithVMNetwork,
 	}
+	if r.PrivateHostsFile {
+		opts = append(opts, oci.WithoutMounts("/etc/hosts"))
+	}
 	if r.Workdir != "" {
 		opts = append(opts, oci.WithProcessCwd(r.Workdir))
 	}
@@ -536,6 +539,9 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		}
 	}
 	for _, mount := range spec.Mounts {
+		if r.PrivateHostsFile && mount.Destination == "/etc/hosts" {
+			return errors.New("vHive private hosts file is covered by a mount")
+		}
 		switch mount.Type {
 		case "proc", "tmpfs", "devpts", "mqueue", "sysfs", "cgroup", "cgroup2":
 		case "bind":
