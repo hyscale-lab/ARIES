@@ -18,8 +18,21 @@ def sha(p):
 def main(root):
     cache=root/'repo/ARIES/.cache'
     while not (cache/'zb-raw/relaxed-compcert-deep/v1/worker.sha256').is_file():time.sleep(40)
-    # A deep prerequisite can be relocated while native ordinary replay still owns amd182.
-    while not (cache/'harbor/log-summary-replacement/amd182.complete.json').is_file() or not (cache/'zb-raw/relaxed-compcert/v4/extracted').is_file():time.sleep(40)
+    logs=cache/'harbor/log-summary-replacement'
+    decision=root/'plan/result/1_opportunity/replacements/log-summary-date-ranges/relocated-modes.json'
+    expected={('ordinary','v1'),('ordinary','v4'),('deep','v1')}
+    skipped=json.loads((logs/'amd182.skip.json').read_bytes())
+    assert skipped['node']=='amd182' and skipped['decision_sha256']==sha(decision)
+    assert set(map(tuple,skipped['skipped']))==expected
+    archive=cache/'zb-raw/relaxed-compcert/v4'
+    while not (logs/'amd201.complete.json').is_file() or not (archive/'worker.sha256').is_file():time.sleep(30)
+    completed=json.loads((logs/'amd201.complete.json').read_bytes())
+    for mode,variant in expected:
+        entry,=[r for r in completed if (r['level'],r['variant'])==(mode,variant)]
+        assert entry['node']=='amd201' and len(entry['statuses'])==(5 if mode=='ordinary' else 1)
+        assert all(row.endswith(' 0') for row in entry['statuses'])
+    # collect-series.sh writes the digest after receiving and validating every tar member.
+    assert sha(archive/'worker.tar.gz')==(archive/'worker.sha256').read_text().split()[0]
     assert ssh('systemctl','show','-p','ActiveState','--value','zb-relaxed-compcert-v4',capture_output=True).stdout.strip()==b'inactive'
     original=json.loads((root/'plan/result/1_opportunity/relaxed-compcert/runs/921ac918-v1/receipt.json').read_bytes())
     assert original['source_trial']==ID and original['source_complete'] and not original['compiler_artifact_verified']
