@@ -3,12 +3,23 @@
 set -euo pipefail
 stage=$(realpath "$1")
 node=$(cat /var/emulab/boot/nodeid)
-case "$node" in
-    amd201)
+role=${2:-original}
+worker_entry=${3:-"$stage/worker.sh"}
+decision_log=$stage/retry-decisions.tsv
+case "$node:$role" in
+    amd201:relocated-v4)
+        variants=(v4)
+        units=(zb-cancel-async-ordinary-v4-amd201 zb-cancel-async-deep-v4-amd201 zb-cancel-async-diagnostic-02)
+        handoff=/local/zb-cancel-async-ordinary-v4-handoff
+        test "$(wc -l < "$handoff/amd201-accepted.tsv")" = 5
+        diff -u <(cut -f3 "$handoff/skip-ack.tsv") <(cut -f3 "$handoff/amd201-accepted.tsv")
+        decision_log=$stage/retry-decisions-v4-relocated.tsv
+        ;;
+    amd201:original)
         variants=(v1 v3)
         units=(zb-cancel-async-amd201-01 zb-relaxed-ml-e047-v4-retry-02)
         ;;
-    amd200)
+    amd200:original)
         variants=(v2 v4)
         units=(zb-cancel-async-amd200-01 zb-sanitize-retry-02 zb-ocr-v2-recovery zb-marker-rest-01)
         ;;
@@ -51,8 +62,8 @@ PY
 )
         status=0
         if [[ $decision == retry ]]; then
-            bash "$stage/worker.sh" "$stage" "$variant" ordinary "$trial" || status=$?
+            bash "$worker_entry" "$stage" "$variant" ordinary "$trial" || status=$?
         fi
-        printf '%s\t%s\t%s\t%s\n' "$trial" "$variant" "$decision" "$status" >> "$stage/retry-decisions.tsv"
+        printf '%s\t%s\t%s\t%s\n' "$trial" "$variant" "$decision" "$status" >> "$decision_log"
     done
 done
