@@ -61,6 +61,8 @@ func command(ctx context.Context) error {
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
 	opamPID := flag.Bool("diagnostic-opam-pid", false, "bind the recorded compiler signal-zero check and progress reads to the observed guest installer")
 	opamLog := flag.Bool("diagnostic-opam-log", false, "bind the original compiler progress-log name to its observed OPAM file in a diagnostic")
+	ipv4Addrs := flag.Bool("diagnostic-grpc-ipv4-addresses-only", false, "require the isolated 69ba guest to have IPv4 addresses only with its IPv6 stack enabled")
+	routeOnly := flag.Bool("diagnostic-grpc-network-only", false, "collect the prepared and restored 69ba guest network readbacks without dispatching a recording")
 	grpcNetDiag := flag.Bool("diagnostic-grpc-loopback", false, "verify the private 69ba guest with its IPv6 loopback address omitted")
 	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
@@ -121,6 +123,9 @@ func command(ctx context.Context) error {
 	// Both sources explicitly exercise nohup and a separate-session replacement.
 	// Every original shell in these trials receives the same backend.
 	useGroups := *groupMode || r.Trial == hfLoopbackTrial || r.Trial == grpcLoopbackTrial
+	if (*routeOnly || *ipv4Addrs) && !*grpcNetDiag {
+		return errors.New("69ba network-only readback requires -diagnostic-grpc-loopback")
+	}
 	if *grpcNetDiag && (r.Trial != grpcLoopbackTrial || *observer != "" || *processDrift) {
 		return errors.New("guest loopback calibration requires an uninstrumented 69ba replay with strict process checks")
 	}
@@ -190,10 +195,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -205,7 +210,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if err != nil {
 			return err
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
@@ -305,7 +310,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
 				return m.Exec(ctx, id, command)
 			}
-			if err := readGRPCLoopback(ctx, guest, "before_snapshot", log); err != nil {
+			if err := readGRPCLoopback(ctx, guest, "before_snapshot", log, ipv4Addrs); err != nil {
 				return err
 			}
 		}
@@ -339,13 +344,16 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
 				return m.Exec(ctx, id, command)
 			}
-			if err := readGRPCLoopback(ctx, guest, "after_restore", log); err != nil {
+			if err := readGRPCLoopback(ctx, guest, "after_restore", log, ipv4Addrs); err != nil {
 				return err
 			}
 		}
 		if err = networkEvidence(ctx, m, id, "after_restore", r, log); err != nil {
 			return err
 		}
+	}
+	if routeOnly {
+		return log.Encode(map[string]any{"event": "diagnostic_network_only_complete", "source_tools_dispatched": 0})
 	}
 	socket, err := m.VMMSocket(ctx, id)
 	if err != nil {
