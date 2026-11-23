@@ -167,8 +167,17 @@ release manifest records the upstream archive URL, the official OPAM cache
 URL, the archive checksum and the metadata bytes inspected for each source
 release. The live guest reads OPAM metadata, executes the original install
 and build, and records its resolved switch and cache hashes. The direct Coq
-source trial uses its original Git clone instead. The current Ubuntu mirror
-and OPAM index can have newer metadata than the recorded session.
+source trial uses its original Git clone. OPAM still reads its live upstream
+index. For the Ubuntu environment, build the small CA bootstrap with
+`prepare-compiler-ca.py compile-compcert-debs.tar.gz compile-compcert-ca.tar.gz`
+and pass `-os-tools compile-compcert-ca.tar.gz`. The adapter authenticates
+Ubuntu's signed snapshot at the original rollout start, prepares the
+source-observed build-essential and CA versions, and seeds the ncurses
+runtime version present before the original install. The workload downloads
+and compiles its own dependencies. The scoped `compiler-snapshot-amd183`
+CNI profile permits GitHub, OPAM and the Ubuntu snapshot service.
+The audit helper takes the Harbor cache and validation-attempt directories
+and emits the per-original APT transactions and poll comparisons as JSON.
 
 For an uninstrumented timing investigation, `-diagnostic-process-drift`
 retains an early real exit for later empty source polls. If a source
