@@ -253,6 +253,9 @@ def provenance_section(meta, spec):
            "| Recordings | %s |" % meta.get("recordings", {}).get("source", "?")]
     for harness, digest in sorted(meta.get("recordings", {}).get("sha256", {}).items()):
         out.append("| Recording `%s` | sha256 `%s` |" % (harness, digest[:16]))
+    for label, facts in sorted((meta.get("workers") or {}).items()):
+        if facts.get("bridge_image"):
+            out.append("| Bridge image, %s once prepared again | `%s` |" % (label, facts["bridge_image"]))
     if meta.get("note"):
         out.append("| Note | %s |" % meta["note"])
     workers = meta.get("workers") or {}

@@ -670,8 +670,9 @@ def cmd_resume(args):
         commit = git("rev-parse", "HEAD")
         revision = subprocess.run([os.path.join(ROOT, "scripts", "bridge-revision.sh")], check=True,
                                   stdout=subprocess.PIPE, cwd=ROOT).stdout.decode().strip()
-        if revision != meta["bridge_revision"]:
-            fail("this checkout's bridge revision is %s, but the campaign runs %s" % (revision, meta["bridge_revision"]))
+        if revision != meta["bridge_revision"] and not getattr(args, "new_bridge_revision", False):
+            fail("this checkout's bridge revision is %s, but the campaign runs %s; pass --new-bridge-revision "
+                 "if the workers should run it from now on" % (revision, meta["bridge_revision"]))
         tasks = packed_tasks()
         for label, worker in workers.items():
             print("==> %s: shipping %s and building" % (label, commit[:12]), flush=True)
@@ -680,6 +681,8 @@ def cmd_resume(args):
             # A worker prepared again runs a later commit than the campaign
             # started at; the report names it.
             meta["workers"].setdefault(label, {})["aries_commit"] = commit
+            if revision != meta["bridge_revision"]:
+                meta["workers"][label]["bridge_image"] = meta["bridge_image"][:-len(meta["bridge_revision"])] + revision
         write_json(campaign_paths(args.campaign)["meta.json"], meta)
     for label, worker in workers.items():
         base = remote_campaign(meta["experiment"], meta["campaign"])
@@ -775,6 +778,9 @@ def main():
         if name == "resume":
             command.add_argument("--prepare", action="store_true", help="ship and build the tree again first")
             command.add_argument("--worker", action="append", help="only this worker (repeatable)")
+            command.add_argument("--new-bridge-revision", action="store_true",
+                                 help="with --prepare, accept a bridge revision other than the campaign's; "
+                                      "the report names each worker's")
     rerun = commands.add_parser("rerun", help="supersede a run and run its step again")
     rerun.add_argument("campaign")
     rerun.add_argument("run", help="the run's path in the campaign, such as runs/hermes/k8s/1")
