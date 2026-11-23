@@ -79,6 +79,20 @@ if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     for address in "${addresses[@]}"; do "${ipt[@]}" -A "$chain" -d "$address" -p tcp --dport 443 -j RETURN; done
     "${ipt[@]}" -A "$chain" -j DROP
 fi
+if [[ "$profile" == marksrc ]]; then
+    for region in 112 113 114; do
+        for frontend in 3 4; do
+            address=140.82.$region.$frontend
+            if curl --noproxy '*' --fail --silent --max-time 6 --resolve "github.com:443:$address" \
+                --output /dev/null 'https://github.com/primer3-org/primer3.git/info/refs?service=git-upload-pack'; then
+                rule=(-d "$address" -p tcp --dport 443 -j RETURN)
+                if ! "${ipt[@]}" -C "$chain" "${rule[@]}" 2>/dev/null; then
+                    "${ipt[@]}" -I "$chain" 1 "${rule[@]}"
+                fi
+            fi
+        done
+    done
+fi
 if ! "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
     "${ipt[@]}" -I PREROUTING 1 "${jump[@]}"
 fi
