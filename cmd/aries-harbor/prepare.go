@@ -377,7 +377,13 @@ with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/I
 		python = "/usr/bin/python3"
 	}
 	if task == datasetTask {
-		probe = datasetNetworkProbe
+		// This recording times both mutable API URLs at step 7. Its own guest
+		// process should make those requests first on a freshly created VM.
+		mode := "False"
+		if recording.Trial == datasetPythonTrial {
+			mode = "True"
+		}
+		probe = "use_revision_endpoint = " + mode + "\n" + datasetNetworkProbe
 	}
 	if task == "compile-compcert" {
 		python, probe = "/usr/bin/python3", compilerNetworkCheck(recording.Trial)

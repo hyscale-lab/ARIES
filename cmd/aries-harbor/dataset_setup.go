@@ -94,11 +94,13 @@ const datasetNetworkProbe = `import json,socket,urllib.request
 from pathlib import Path
 sites={"dataset":"https://huggingface.co/api/datasets/ryanmarten/OpenThoughts-1k-sample","tokenizer":"https://huggingface.co/api/models/Qwen/Qwen2.5-1.5B-Instruct"}
 expected={"dataset":"a82400884621626d41bef89b7604f8054e7e00e0","tokenizer":"989aa7980e4cf806f80c7fef2b1adb7bc71aa306"}
+if use_revision_endpoint:
+    sites = {key: url + "/revision/" + expected[key] for key, url in sites.items()}
 for key,url in sites.items():
     with urllib.request.urlopen(url,timeout=15) as response:
         assert json.load(response)["sha"] == expected[key], key
 hosts=("huggingface.co","us.aws.cdn.hf.co","files.pythonhosted.org","pypi.org")
-print(json.dumps({"route":Path("/proc/net/route").read_text(),"resolver":Path("/etc/resolv.conf").read_text(),"checked_revisions":expected,"resolved_endpoints":{h:sorted({x[4][0] for x in socket.getaddrinfo(h,443)}) for h in hosts}}))`
+print(json.dumps({"route":Path("/proc/net/route").read_text(),"resolver":Path("/etc/resolv.conf").read_text(),"checked_revisions":expected,"checked_urls":sites,"resolved_endpoints":{h:sorted({x[4][0] for x in socket.getaddrinfo(h,443)}) for h in hosts}}))`
 
 const datasetFinal = `
 python - <<'PYFINAL'
