@@ -7,6 +7,12 @@ from cohort_image_circuit import IMAGE_HELPER, digest
 from cohort_sparql import CNI_SUMS, CODEX_TOOLS, OS_TOOLS
 
 
+GRPC_LOOPBACK_TRIAL = "69ba9b75-cf5b-4722-94f4-7ce3ea31bbb4"
+GRPC_SYSTEM_TOOLS_SHA = "7c8865278b830ee7155fe18acf5c369734d3fe3f8413c5f5b4be863a7c5e7f2c"
+GRPC_ROOT_SHA = "24175876cee2a345d56af2cc997a8f7c3a1565777eac817eff17412b7b80fb21"
+GRPC_MODULE_PREFIX = "/root/.nvm/versions/node/v22.23.2"
+GRPC_SOURCE_PATH = (GRPC_MODULE_PREFIX + "/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64"
+                    "/vendor/x86_64-unknown-linux-musl/codex-path:" + GRPC_MODULE_PREFIX + "/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 GRPC = "kv-store-grpc"
 FINANCIAL = "financial-document-processor"
 TASKS = {GRPC, FINANCIAL, "hf-model-inference"}
@@ -44,12 +50,15 @@ def network_args(cni, profile):
     match = re.fullmatch(fr"zb{profile}([1-9][0-9]{{1,2}})", name)
     if match is None or int(match[1]) > 254 or config["cniVersion"] != "1.0.0":
         raise ValueError(f"unexpected {profile} CNI profile name")
+    subnets = {f"10.{network}.{match[1]}.0/28"}
+    if profile == "pypi" and match[1] == "183":
+        subnets.add("10.236.183.0/28")  # Existing reviewed amd183 bridge.
     bridge, firewall, redirect, loopback = config["plugins"]
     ipam = bridge["ipam"]
     if ([p["type"] for p in (bridge, firewall, redirect, loopback)] !=
             ["bridge", "firewall", "tc-redirect-tap", "loopback"] or
             not bridge["ipMasq"] or not bridge["isDefaultGateway"] or bridge["bridge"] != name or
-            ipam["subnet"] != f"10.{network}.{match[1]}.0/28" or ipam["type"] != "host-local" or
+            ipam["subnet"] not in subnets or ipam["type"] != "host-local" or
             Path(ipam["dataDir"]) != cni / "ipam" or Path(ipam["resolvConf"]) != cni / "resolv.conf"):
         raise ValueError("unexpected PyPI CNI scope or plugin configuration")
     for row in pinned(cni / "SHA256SUMS", CNI_SUMS).read_text().splitlines():
@@ -59,13 +68,16 @@ def network_args(cni, profile):
             "-cni-cache-dir", str(cni / "cache"), "-cni-bin-dir", str(cni / "bin")]
 
 
-def replay_args(asset, task, cni, profile="pypi"):
+def replay_args(asset, task, cni, profile="pypi", trial=None):
     if profile == "financeapt" and task != FINANCIAL:
         raise ValueError("signed Ubuntu snapshots are scoped to their financial trials")
     pinned(asset / "codex-harbor-tools.tar.gz", CODEX_TOOLS)
     args = network_args(cni, profile)
     if task == GRPC:
-        return [*args, "-os-tools", str(pinned(asset / "kv-python.tar.gz", PYTHON_ARCHIVE))]
+        args.extend(["-os-tools", str(pinned(asset / "kv-python.tar.gz", PYTHON_ARCHIVE))])
+        if trial == GRPC_LOOPBACK_TRIAL:
+            args.extend(["-grpc-tools", str(pinned(asset / "grpc-git-patch.tar.gz", GRPC_SYSTEM_TOOLS_SHA))])
+        return args
     if task == FINANCIAL:
         return [*args, "-os-tools", str(pinned(asset / f"{task}-debs.tar.gz", OS_TOOLS)),
                 "-image-helper", str(pinned(asset / IMAGE_HELPER_FILE, IMAGE_HELPER))]
@@ -101,6 +113,37 @@ def signed_apt_evidence(ready, final, profile):
     return {"snapshot": snapshot, "package_versions": packages}
 
 
+def service_lines(text):
+    # Preserve content and multiplicity, ignoring blank separator lines, dynamic
+    # process IDs, and stdout/stderr interleaving in the combined ATIF result.
+    return sorted(re.sub(r"(?i)(PID\s+|kill: \()\d+", r"\1<PID>", line) for line in text.splitlines() if line.strip())
+
+
+def verify_grpc_loopback(events, receipt):
+    profile = [e for e in events if e["event"] == "source_grpc_network"]
+    if [e["phase"] for e in profile] != ["before_snapshot", "after_restore"]:
+        raise ValueError("normal 69ba guest network readbacks missing")
+    for event in profile:
+        r = event["readback"]
+        if (r["ipv6_interface_addresses"] or any(r["sysctls"].values()) or
+                not (r["ipv4_loopback_bind"] and r["ipv6_wildcard_bind"]) or r["SOCK_STREAM"]["errno"] != 99 or
+                r["address_generation_mode"]["default"] != 1 or r["address_generation_mode"]["eth0"] != 1):
+            raise ValueError("69ba guest address assignment or raw socket behavior differs")
+    calls = {e["step_id"]: e for e in events if e["event"] == "tool_reply"}
+    tool_listing = calls[10]["stdout"].splitlines()
+    if not all(s in tool_listing for s in ("/usr/bin/git", "/usr/bin/patch", "PATH=" + GRPC_SOURCE_PATH)):
+        raise ValueError("69ba source-discovered tools or PATH differ")
+    expected = receipt["source_service_output_lines"]
+    if set(expected) != set(map(str,range(14,21))):
+        raise ValueError("69ba original service observations incomplete")
+    for step, lines in expected.items():
+        call = calls[int(step)]
+        if lines != service_lines(call.get("stdout","") + "\n" + call.get("stderr","")):
+            raise ValueError(f"69ba original service output differs at step {step}")
+    return {"all_original_service_steps": list(range(14,21)), "tcp_ipv6_errno": 99,
+            "package_archive_sha256": GRPC_SYSTEM_TOOLS_SHA, "source_tool_lookup_and_path": True}
+
+
 def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
     events = events_from(log)
     phases = ("create_start", "snapshot_start", "snapshot_complete", "restore_start", "restore_complete",
@@ -108,6 +151,8 @@ def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
     if [e["event"] for e in events if e["event"] in phases] != list(phases) or events[-1]["event"] != "removed":
         raise ValueError("PyPI replay lifecycle is incomplete")
     first = events[0]
+    if first.get("diagnostic_grpc_loopback") or receipt.get("diagnostic_grpc_loopback") or receipt.get("primary_eligible") is False:
+        raise ValueError("diagnostic network calibration cannot provide a primary measurement")
     if first.get("diagnostic_process_drift") or receipt.get("diagnostic_process_drift"):
         raise ValueError("process timing diagnostics cannot provide a primary measurement")
     fields = ("task", "trial_id", "job_id", "row_id", "image", "trajectory_sha256", "rollout_sha256",
@@ -164,6 +209,8 @@ def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
             "external_and_rejected_boundaries": reference["external"], "cni_network": first["cni_network"],
             "pypi_http_status": {e["phase"]: e["network"]["pypi_status"] for e in connectivity},
             "final_checks": states["final_task_state"]}
+    if receipt["trial_id"] == GRPC_LOOPBACK_TRIAL:
+        checks["source_network_and_process_groups"] = verify_grpc_loopback(events, receipt)
     if financial_apt is not None:
         if receipt["task"] != FINANCIAL or not re.fullmatch(r"zbfinanceapt[1-9][0-9]{1,2}", first["cni_network"]):
             raise ValueError("signed Ubuntu evidence lacks its dedicated network")

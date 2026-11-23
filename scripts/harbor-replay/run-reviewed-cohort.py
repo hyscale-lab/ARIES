@@ -65,7 +65,7 @@ def main():
             elif financial_apt is not None:
                 pypi_args=cohort_pypi.replay_args(asset,task,a.financeapt_cni,'financeapt')
             else:
-                pypi_args=cohort_pypi.replay_args(asset,task,a.pypi_cni)
+                pypi_args=cohort_pypi.replay_args(asset,task,a.pypi_cni,trial=trial)
             pypi_network=pypi_args[pypi_args.index('-cni-network')+1]
         else:
             receipt=entry['receipt']
@@ -73,6 +73,10 @@ def main():
             raise ValueError('diagnostic replay cannot qualify for a primary measurement')
         if not (receipt['session_completed'] and receipt['all_observed_tool_exits_match'] and receipt['trial_id']==trial and receipt['task']==task):
             raise ValueError('missing successful source-specific fidelity evidence')
+        if task == 'kv-store-grpc' and trial == cohort_pypi.GRPC_LOOPBACK_TRIAL:
+            effective = json.loads((work/'runtime.json').read_bytes())
+            if file_digest(Path(effective['root_drive'])) != cohort_pypi.GRPC_ROOT_SHA:
+                raise ValueError('69ba primary requires its source-validated guest OS')
         folder=asset/'sources'/task/trial
         direct=['-trajectory',str(folder/'trajectory.json'),'-rollout',str(folder/'rollout.jsonl')]
         digest=receipt['adapter_binary_sha256']

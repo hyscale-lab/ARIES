@@ -25,6 +25,7 @@ case "$profile" in
         ;;
     pypi)
         subnet=10.233.$octet.0/28
+        if [[ "$worker" == amd183 ]]; then subnet=10.236.183.0/28; fi
         hosts=(pypi.org files.pythonhosted.org)
         ;;
     *) exit 2 ;;

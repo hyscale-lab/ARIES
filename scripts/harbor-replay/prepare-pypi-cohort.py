@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 
 import cohort_hf
+import cohort_pypi
 from cohort_image_circuit import IMAGE_HELPER, digest
 from cohort_pypi import (CNI_SUMS, CODEX_TOOLS, FINANCIAL, GRPC, IMAGE_HELPER_FILE, OS_TOOLS,
                          PYTHON_ARCHIVE, TASKS, boundaries, events_from, pinned, receipt_path, verify)
@@ -29,6 +30,7 @@ def main():
     profile = cli.add_mutually_exclusive_group()
     profile.add_argument("--financeapt", action="store_true", help="package only signed-snapshot financial trials")
     profile.add_argument("--hf", action="store_true", help="package only model-inference trials")
+    cli.add_argument("--trial",help="package only the named, source-reviewed trial")
     cli.add_argument("--validation-log", type=Path, action="append", required=True,
                      help="original live diagnostic JSONL named by a validated receipt digest (repeatable)")
     args = cli.parse_args()
@@ -54,6 +56,8 @@ def main():
             raise ValueError(f"{task} lacks source-bound network requirements")
         for entry in reviewed["trials"]:
             trial = entry["trial"]
+            if args.trial and trial != args.trial:
+                continue
             financial_apt = apt.get(trial)
             if args.financeapt != (financial_apt is not None):
                 continue
@@ -65,7 +69,7 @@ def main():
             receipt_bytes = path.read_bytes()
             receipt = json.loads(receipt_bytes)
             if (not receipt["session_completed"] or not receipt["all_observed_tool_exits_match"] or
-                    receipt.get("diagnostic_process_drift") or receipt.get("diagnostic_video_images")):
+                    receipt.get("diagnostic_process_drift") or receipt.get("diagnostic_video_images") or receipt.get("diagnostic_grpc_loopback") or receipt.get("primary_eligible") is False):
                 pending.append(dict(ident, reason="successful original live fidelity unavailable"))
                 continue
             log = logs.get(receipt["diagnostic_log_sha256"])
@@ -101,6 +105,12 @@ def main():
     cases = {ident["task"] for ident, *_ in ready}
     if GRPC in cases:
         install(args.cache / "kv-fixture/kv-python.tar.gz", out / "kv-python.tar.gz", PYTHON_ARCHIVE)
+    if any(ident["trial_id"] == cohort_pypi.GRPC_LOOPBACK_TRIAL for ident, *_ in ready):
+        assets = args.cache / "grpc69ba-assets"
+        install(assets / "grpc-git-patch.tar.gz",out / "grpc-git-patch.tar.gz",cohort_pypi.GRPC_SYSTEM_TOOLS_SHA)
+        install(assets / "package-lineage.json",out / "package-lineage.json")
+        for name in ("run-grpc-primary.py","network-measurement-metadata.py","cohort_dataset.py","cohort_video.py","audit-idle-runtime.py"):
+            install(replay / name,out / name)
     if FINANCIAL in cases:
         install(args.cache / "sparql/sparql-university-packages.tar.gz", out / f"{FINANCIAL}-debs.tar.gz", OS_TOOLS)
         install(args.cache / IMAGE_HELPER_FILE, out / IMAGE_HELPER_FILE, IMAGE_HELPER)
