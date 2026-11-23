@@ -31,13 +31,24 @@ def main(root):
         assert ssh('sudo','-n','sha256sum',REMOTE+'/package.tar.gz',capture_output=True,text=True).stdout.split()[0]==BUNDLE
         ssh('sudo','-n','tar','-C',REMOTE,'-xzf',REMOTE+'/package.tar.gz')
     raw=cache/'zb-raw/e047-hostname';raw.mkdir(exist_ok=True,parents=True)
+    assets=cache/'harbor/e047-hostname-03'
     for arm in ('v2','v4'):
-        rid=f'e047ddea-{arm}-relaxed-ml-03';unit='zb-e047-hostname-'+arm+'-03'
+        old=raw/f'e047ddea-{arm}-relaxed-ml-03'
+        events=[json.loads(l) for l in (old/'raw/events.jsonl').open()]
+        assert not any(e['event'] in ('session_start','tool_dispatch','snapshot_start') for e in events)
+        assert events[-1]['event']=='removed' and "Read-only file system: '/etc/hosts'" in (old/'driver.log').read_text()
+    for name in ('aries-e047-04','worker-04.py','SHA256SUMS-04'):
+        local=assets/name
+        with local.open('rb') as f:ssh('sudo','-n','tee',REMOTE+'/'+name,stdin=f,stdout=subprocess.DEVNULL)
+        assert ssh('sudo','-n','sha256sum',REMOTE+'/'+name,capture_output=True,text=True).stdout.split()[0]==sha(local)
+    ssh('sudo','-n','chmod','0755',REMOTE+'/aries-e047-04')
+    for arm in ('v2','v4'):
+        rid=f'e047ddea-{arm}-relaxed-ml-04';unit='zb-e047-hostname-'+arm+'-04'
         marker=raw/(rid+'.sha256')
         if marker.exists():continue
         started=ssh('sudo','-n','sh','-c','test -d "$1" && echo yes || echo no','sh',REMOTE+'/'+rid,capture_output=True,text=True).stdout.strip()
         if started=='no' and state(unit)=='inactive':
-            ssh('sudo','-n','systemd-run','--unit='+unit,'--property=RuntimeMaxSec=2700','/usr/bin/python3','-B',REMOTE+'/worker.py',arm)
+            ssh('sudo','-n','systemd-run','--unit='+unit,'--property=RuntimeMaxSec=2700','/usr/bin/python3','-B',REMOTE+'/worker-04.py',arm)
         while state(unit) in ('active','activating','deactivating'):time.sleep(20)
         status=state(unit)
         if status!='inactive':raise RuntimeError(f'{unit} {status}; inspect native command preflight before any recovery')

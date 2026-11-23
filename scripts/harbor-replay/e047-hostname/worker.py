@@ -25,8 +25,9 @@ def main(arm):
              'v4':('/local/zb-relaxed-ml-01/stack-v4/runtime','fcmod-zepbound-relaxed-ml-v4')}[arm]
     rt=Path(rt);socket='/run/'+unit+'/containerd.sock'
     invoke(['sha256sum','--quiet','-c',STAGE/'SHA256SUMS'],cwd=STAGE)
+    invoke(['sha256sum','--quiet','-c',STAGE/'SHA256SUMS-04'],cwd=STAGE)
     idle()
-    out=STAGE/('e047ddea-'+arm+'-relaxed-ml-03');out.mkdir()
+    out=STAGE/('e047ddea-'+arm+'-relaxed-ml-04');out.mkdir()
     previous=json.loads((STAGE/(arm+'-deployment.json')).read_bytes())
     def deployment(phase):
         actual=json.loads(subprocess.check_output(['python3','-B',STAGE/'audit-idle-runtime.py',unit,rt]))
@@ -40,7 +41,7 @@ def main(arm):
     assert sha(cni)=='e82ae4a08d96e36343838c07a03b3aadfea8abf01db337be2c6397bcc233a1aa'
     assets=[STAGE/'torch-tensor-parallelism-debs.tar.gz',STAGE/'codex-harbor-tools.tar.gz',cni]
     (out/'assets.sha256').write_text(''.join(sha(f)+'  '+str(f)+'\n' for f in assets))
-    cli=STAGE/'aries-e047'
+    cli=STAGE/'aries-e047-04'
     (out/'executed-adapter.sha256').write_text(sha(cli)+'  '+str(cli)+'\n')
     cpu=subprocess.check_output(['systemctl','show',unit,'-p','EffectiveCPUs','-p','AllowedCPUs','-p','CPUQuotaPerSecUSec'],text=True)
     assert 'EffectiveCPUs=0-15\n' in cpu and 'CPUQuotaPerSecUSec=infinity\n' in cpu

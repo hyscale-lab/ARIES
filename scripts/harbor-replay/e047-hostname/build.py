@@ -27,6 +27,7 @@ def main(go,target):
             nonlocal data
             assert data.count(anchor)==1,anchor
             data=data.replace(anchor,insert+anchor)
+        once('\tid, err := m.Create(ctx, req)', '\tif *e047Alias { req.PrivateHostsFile = true }\n')
         once('\tif *relaxedML {','''\tif *e047Alias && (!*relaxedML || r.Trial != torchGlooTrial || *observer == "" || *sampler == "") {
         return errors.New("e047 hostname calibration requires its reviewed measured original")
     }
