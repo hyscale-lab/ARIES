@@ -1,0 +1,349 @@
+diff --git i/cmd/aries-harbor/main.go w/cmd/aries-harbor/main.go
+index 596a0da..0763867 100644
+--- i/cmd/aries-harbor/main.go
++++ w/cmd/aries-harbor/main.go
+@@ -72,6 +72,7 @@ func command(ctx context.Context) error {
+ 	ipv4Addrs := flag.Bool("diagnostic-grpc-ipv4-addresses-only", false, "require the isolated 69ba guest to have IPv4 addresses only with its IPv6 stack enabled")
+ 	routeOnly := flag.Bool("diagnostic-grpc-network-only", false, "collect the prepared and restored 69ba guest network readbacks without dispatching a recording")
+ 	grpcNetDiag := flag.Bool("diagnostic-grpc-loopback", false, "verify the private 69ba guest with its IPv6 loopback address omitted")
++	sanitizeObservation := flag.Bool("relaxed-sanitize-git-repo", false, "observe native divergence in the five reviewed repository sanitization trials")
+ 	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
+ 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
+ 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
+@@ -116,6 +117,9 @@ func command(ctx context.Context) error {
+ 	if *image == "" {
+ 		return json.NewEncoder(os.Stdout).Encode(r)
+ 	}
++	if *sanitizeObservation && (r.Task != sanitizeTask || *processDrift || *videoDifferences || *probe != "" || *intraStep != 0) {
++		return errors.New("relaxed repository sanitization requires its reviewed manifest and standard capture")
++	}
+ 	sourceCPU := *hfSourceCPU >= 0
+ 	if sourceCPU {
+ 		if *hfHostCPU >= 0 || *processDrift {
+@@ -227,10 +231,10 @@ func command(ctx context.Context) error {
+ 		return err
+ 	}
+ 	defer f.Close()
+-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
++	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *sanitizeObservation, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
+ }
+ 
+-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
++func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, sanitizeObservation, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+ 	m, err := vhive.New(o)
+ 	if err != nil {
+ 		return err
+@@ -249,7 +253,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 			cpuProfile["requested_physical_cpus"] = r.VCPUs
+ 			cpuProfile["source_qualified"] = sourceCPU
+ 		}
+-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
++		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_relaxed_sanitize_git_repo": sanitizeObservation, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
+ 	}
+ 	if err = lifecycle("create_start"); err != nil {
+ 		return err
+@@ -423,12 +427,13 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 	})
+ 	defer sessions.Close()
+ 	h := harbor.Hooks{
++		SanitizeObservation:   sanitizeObservation,
+ 		DiagnosticVideoImages: videoDifferences,
+ 		IntraTool:             intraTool,
+ 		Record:                func(e harbor.Receipt) error { return log.Encode(e) },
+ 		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+ 			if call.Operation == "StartProcess" || call.Operation == "PollProcess" {
+-				if processDrift {
++				if processDrift || sanitizeObservation {
+ 					return sessions.ObserveDrift(ctx, call)
+ 				}
+ 				return sessions.Execute(ctx, call)
+@@ -440,6 +445,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 			if call.Operation == "ViewImage" {
+ 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
+ 			}
++			if sanitizeObservation && call.Operation == "Exec" {
++				return sessions.ObserveDrift(ctx, harbor.SanitizeForegroundSession(call))
++			}
+ 			// Source-terminal exec_command launches still have a real initial yield.
+ 			return sessions.Execute(ctx, call)
+ 		},
+@@ -479,6 +487,16 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 		h.FinishObservedProcess = sessions.FinishObservedProcess
+ 		h.WasRetained = sessions.WasRetained
+ 	}
++	if sanitizeObservation {
++		h.WasRetained = sessions.WasRetained
++		h.FinishObservedProcess = func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
++			if call.Operation == "Exec" {
++				call = harbor.SanitizeForegroundSession(call)
++				call.Operation = "PollProcess"
++			}
++			return sessions.FinishObservedProcess(ctx, call)
++		}
++	}
+ 	if groups != nil {
+ 		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+ 			return m.Exec(ctx, id, command)
+@@ -498,7 +516,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 		return err
+ 	}
+ 	if r.Task != "fix-git" {
+-		if err := captureTaskOutput(ctx, m, id, r, log, grpcTools != ""); err != nil {
++		if err := captureTaskOutput(ctx, m, id, r, log, grpcTools != "", sanitizeObservation); err != nil {
+ 			return err
+ 		}
+ 		if hfHostCPU >= 0 {
+diff --git i/cmd/aries-harbor/prepare.go w/cmd/aries-harbor/prepare.go
+index edd22a4..aa377ce 100644
+--- i/cmd/aries-harbor/prepare.go
++++ w/cmd/aries-harbor/prepare.go
+@@ -62,7 +62,9 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
+ // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
+ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
+ 	task, ok := taskSetups[r.Task]
+- if r.Task == "git-leak-recovery" { task.initialCheck += gitRecoveryTemp(r.Trial) }
++	if r.Task == "git-leak-recovery" {
++		task.initialCheck += gitRecoveryTemp(r.Trial)
++	}
+ 	if r.Task == "compile-compcert" {
+ 		task.initialCheck = compilerAPT(r.Plan.StartedAt) + task.initialCheck
+ 	}
+@@ -328,7 +330,7 @@ chmod 0755 /usr/local/bin/mktemp
+ sha256sum /usr/local/bin/mktemp
+ printf '%s\n' 'SOURCE_TEMPLATE -> SOURCE_DIR'`
+ 
+-func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools bool) error {
++func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools, sanitizeObservation bool) error {
+ 	task := taskSetups[r.Task]
+ 	begin, err := harbor.Clock()
+ 	if err != nil {
+@@ -338,7 +340,10 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
+ 	if r.Task == hfTask {
+ 		cmd += hfFinalCheck(r.Trial)
+ 	}
+-	if r.Task == "sanitize-git-repo" {
++	if sanitizeObservation {
++		return captureSanitizeResult(ctx, m, id, r, log, begin)
++	}
++	if r.Task == sanitizeTask {
+ 		cmd += "\nfind . -type f -not -path './.git/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
+ 	}
+ 	if r.Task == markerTask {
+diff --git i/cmd/aries-harbor/sanitize_observation.go w/cmd/aries-harbor/sanitize_observation.go
+new file mode 100644
+index 0000000..fd2ba9d
+--- /dev/null
++++ w/cmd/aries-harbor/sanitize_observation.go
+@@ -0,0 +1,68 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
++	"github.com/hyscale-lab/aries/pkg/replay/harbor"
++)
++
++const sanitizeTask = "sanitize-git-repo"
++
++// Reference hashes bind the three clean files in terminal-bench-2-1
++// 12b7565679ce5006230b820666353673a133db93. The report contains no paths,
++// original values, file contents, or source-process output.
++const sanitizeFinalCheck = `
++import hashlib
++import json
++from pathlib import Path
++import subprocess
++
++expected = {
++    "ray_processing/ray_cluster.yaml": "4827a78e929c005853df1af502f1a5aae2e2e9ce721ee0d33ab0731eefa128a5",
++    "ray_processing/process.py": "3525f32100c994ee517ba06a355f6d2130c332857da017d921aa8d9252b7022d",
++    "exp_data/datasets/tokenized/rw_v2_fasttext_openhermes_vs_rw_v2_bigram_0.1_arcade100k.json": "2d281c309cb03e9802f532931ac6c1eca129f75c4583ae48996dbb4130f57c0f",
++}
++reference = "d6987af002b122fef54bc0be402062c76488a4d9"
++matches = sum(
++    Path(name).is_file() and hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest
++    for name, digest in expected.items()
++)
++def files(*args):
++    return set(filter(None, subprocess.check_output(["git", *args]).decode().split("\0")))
++
++changed = files("diff", "--no-renames", "--name-only", "-z", reference, "--")
++untracked = files("ls-files", "-z", "--others", "--exclude-standard")
++print(json.dumps({"exact_clean_references": matches, "expected_clean_references": len(expected),
++                  "changed_expected_tracked_files": len(changed & expected.keys()),
++                  "unexpected_tracked_changes": len(changed - expected.keys()),
++                  "untracked_paths": len(untracked)}))
++`
++
++func captureSanitizeResult(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, begin int64) error {
++	out, execErr := m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", sanitizeFinalCheck}, Dir: r.Workdir})
++	end, clockErr := harbor.Clock()
++	if err := errors.Join(execErr, clockErr); err != nil {
++		return err
++	}
++	state := map[string]any{"event": "final_task_state_deviation", "exit_code": out.ExitCode,
++		"begin_monotonic_ns": begin, "end_monotonic_ns": end}
++	if out.ExitCode == 0 && json.Valid([]byte(out.Stdout)) {
++		var report struct {
++			Exact      int `json:"exact_clean_references"`
++			Expected   int `json:"expected_clean_references"`
++			Unexpected int `json:"unexpected_tracked_changes"`
++		}
++		if err := json.Unmarshal([]byte(out.Stdout), &report); err != nil {
++			return err
++		}
++		state["checks"] = json.RawMessage(out.Stdout)
++		if report.Expected == 3 && report.Exact == report.Expected && report.Unexpected == 0 {
++			state["event"] = "final_task_state"
++		}
++	}
++	return log.Encode(state)
++}
+diff --git i/pkg/replay/harbor/run.go w/pkg/replay/harbor/run.go
+index 7ebdd74..53850a1 100644
+--- i/pkg/replay/harbor/run.go
++++ w/pkg/replay/harbor/run.go
+@@ -18,6 +18,7 @@ type Hooks struct {
+ 	deferProcessJoin      func(func() error)
+ 	WasRetained           func(int) bool
+ 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
++	SanitizeObservation   bool
+ 	DiagnosticVideoImages bool
+ 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
+ 	Boundary              func(context.Context, string, int) error
+@@ -85,6 +86,9 @@ func compareOutput(source []byte, result core.CommandResult) string {
+ // Run follows source order, substituting live elapsed time for each recorded
+ // guest call interval. There is no verifier, benchmark deadline or LLM client.
+ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
++	if h.SanitizeObservation && r.Task != "sanitize-git-repo" {
++		return errors.New("unreviewed repository sanitization observation")
++	}
+ 	if h.DiagnosticVideoImages && r.Task != "video-processing" {
+ 		return errors.New("unreviewed video diagnostic")
+ 	}
+@@ -208,6 +212,9 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
+ 	if err := errors.Join(callErr, h.Record(receipt)); err != nil {
+ 		return err
+ 	}
++	if h.SanitizeObservation {
++		return recordSanitizeObservation(ctx, h, call, receipt, out)
++	}
+ 	if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
+ 		if h.DiagnosticVideoImages && out.ExitCode == 0 && comparableLiveImage(call, out.Stdout) {
+ 			return nil
+diff --git i/pkg/replay/harbor/sanitize_observation.go w/pkg/replay/harbor/sanitize_observation.go
+new file mode 100644
+index 0000000..4aada4d
+--- /dev/null
++++ w/pkg/replay/harbor/sanitize_observation.go
+@@ -0,0 +1,61 @@
++package harbor
++
++import (
++	"context"
++	"errors"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/replay"
++)
++
++// A source-terminal shell that actually yields needs an internal key for
++// its real process. Source process handles remain positive, and the
++// private key is never written into a source call or source receipt.
++func SanitizeForegroundSession(call replay.Call) replay.Call {
++	call.Operation = "StartProcess"
++	call.SessionID = -int(call.Sequence)
++	return call
++}
++
++func recordSanitizeObservation(ctx context.Context, h Hooks, call replay.Call, reply Receipt, observed core.CommandResult) error {
++	differs := int32(observed.ExitCode) != call.ExitCode
++	if !differs && (call.Operation != "ViewImage" || observed.Stdout == string(call.ResponseStdout)) {
++		return nil
++	}
++	reply.Event = "relaxed_live_deviation"
++	reply.StatusBasis = "observed_first_reply_differs"
++	// The original tool_reply retains the genuine streams. Only the
++	// continuation event can contain additional data from the same process.
++	reply.Stdout, reply.Stderr = "", ""
++	if err := emit(h, reply); err != nil {
++		return err
++	}
++	if observed.ExitCode != ProcessRunning || call.ExitCode < 0 ||
++		(call.Operation != "PollProcess" && call.Operation != "Exec") {
++		return nil
++	}
++	if h.FinishObservedProcess == nil {
++		return errors.New("missing continuation for a genuinely running source-terminal shell")
++	}
++	join := func() error {
++		receipt := reply
++		receipt.Event = "relaxed_continuation_start"
++		receipt.StatusBasis = "actual_process_wait_after_first_reply"
++		if err := emit(h, receipt); err != nil {
++			return err
++		}
++		terminal, err := h.FinishObservedProcess(ctx, call)
++		receipt.Event = "relaxed_continuation_end"
++		receipt.Exit = &terminal.ExitCode
++		receipt.Stdout, receipt.Stderr = terminal.Stdout, terminal.Stderr
++		receipt.StdoutSHA, receipt.StderrSHA = digest([]byte(terminal.Stdout)), digest([]byte(terminal.Stderr))
++		receipt.ProcessTiming = terminal.Timing
++		receipt.OutputComparison = "additional_live_streams"
++		return errors.Join(err, emit(h, receipt))
++	}
++	if h.deferProcessJoin != nil {
++		h.deferProcessJoin(join)
++		return nil
++	}
++	return join()
++}
+diff --git i/pkg/replay/harbor/sanitize_observation_test.go w/pkg/replay/harbor/sanitize_observation_test.go
+new file mode 100644
+index 0000000..9ea5f3c
+--- /dev/null
++++ w/pkg/replay/harbor/sanitize_observation_test.go
+@@ -0,0 +1,39 @@
++package harbor
++
++import (
++	"context"
++	"testing"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/replay"
++)
++
++func TestSanitizeOriginalTerminalShellKeepsItsRealFirstAndAdditionalReplies(t *testing.T) {
++	var records []Receipt
++	call := replay.Call{Operation: "Exec", Sequence: 3, ExitCode: 0, ResponseStdout: []byte("recorded")}
++	ctx := context.Background()
++	hooks := Hooks{
++		SanitizeObservation: true,
++		Record: func(row Receipt) error {
++			records = append(records, row)
++			return nil
++		},
++		FinishObservedProcess: func(_ context.Context, received replay.Call) (core.CommandResult, error) {
++			if received.Sequence != call.Sequence || received.Operation != "Exec" {
++				t.Fatalf("continuation lost source identity: %+v", received)
++			}
++			return core.CommandResult{ExitCode: 2, Stdout: "live remainder"}, nil
++		},
++	}
++	receipt := Receipt{SourceCallID: "source-call", Sequence: call.Sequence, Operation: call.Operation}
++	actual := core.CommandResult{ExitCode: ProcessRunning, Stdout: "live prefix"}
++	if err := recordReply(ctx, hooks, call, receipt, actual, 10, nil); err != nil {
++		t.Fatal(err)
++	}
++	if len(records) != 4 || records[0].Event != "tool_reply" ||
++		*records[0].Exit != ProcessRunning || records[0].Stdout != "live prefix" ||
++		records[3].Event != "relaxed_continuation_end" || *records[3].Exit != 2 ||
++		records[3].Stdout != "live remainder" || records[3].SourceCallID != receipt.SourceCallID {
++		t.Fatalf("unexpected observed replies: %+v", records)
++	}
++}
