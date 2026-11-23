@@ -38,28 +38,40 @@ class Fault:
     io_wait_ns: int
 
 
-def parse_faults(path, errors_path):
+def parse_faults(path, errors_path, *, pid=None, interval=None):
     readiness = termination = None
     faults = []
-    for line in path.read_text().splitlines():
-        if not line.strip():
-            continue
-        tag, *payload = line.split()
-        if tag == "ready" and len(payload) == 1 and readiness is None:
-            readiness = int(payload[0])
-        elif tag == "fault" and len(payload) == len(fields(Fault)) and termination is None:
-            faults.append(Fault(*map(int, payload)))
-        elif tag == "end" and len(payload) == 2 and termination is None:
-            termination = tuple(map(int, payload))
-        else:
-            raise ValueError(f"unexpected demand trace record {tag}")
+    latest_end = None
+    width = len(fields(Fault))
+    with path.open() as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            tag, *payload = line.split()
+            if tag == "ready" and len(payload) == 1 and readiness is None and termination is None:
+                readiness = int(payload[0])
+            elif tag == "fault" and len(payload) == width and readiness is not None and termination is None:
+                fault = Fault(*map(int, payload))
+                if not readiness <= fault.begin_ns <= fault.end_ns:
+                    raise ValueError("fault timestamps fall outside collector lifetime")
+                latest_end = max(latest_end or fault.end_ns, fault.end_ns)
+                if pid is not None and fault.pid != pid:
+                    continue
+                if interval is not None and not interval[0] <= fault.begin_ns <= fault.end_ns <= interval[1]:
+                    continue
+                faults.append(fault)
+            elif tag == "end" and len(payload) == 2 and termination is None:
+                termination = tuple(map(int, payload))
+            else:
+                raise ValueError(f"unexpected demand trace record {tag}")
     errors = errors_path.read_text()
     loss = re.search(r"(?im)\blost\b[^\n]*\bevents?\b|(?:^|\n)error:", errors)
     if loss or readiness is None or termination is None or termination[1] != 0:
         raise ValueError("demand trace startup, shutdown or loss check failed")
-    if any(not readiness <= f.begin_ns <= f.end_ns <= termination[0] for f in faults):
+    if latest_end is not None and latest_end > termination[0]:
         raise ValueError("fault timestamps fall outside collector lifetime")
-    return readiness, termination[0], sorted(faults, key=lambda f: (f.begin_ns, f.end_ns))
+    faults.sort(key=lambda f: (f.begin_ns, f.end_ns))
+    return readiness, termination[0], faults
 
 
 def by_step(receipts, name):

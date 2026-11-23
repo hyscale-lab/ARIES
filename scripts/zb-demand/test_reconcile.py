@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import astuple, replace
 from pathlib import Path
 
 from reconcile import Fault, parse_faults, reconcile
@@ -53,6 +53,18 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(event["dispatch_to_fault_ns"], 25)
         self.assertEqual(event["source_boundary_to_fault_minus_max_freeze_ns"], 42)
         self.assertEqual(event["lookup_in_iowait_offcpu_ns"], 3)
+
+    def test_filtered_faults_still_validate_the_full_trace(self):
+        with tempfile.TemporaryDirectory() as root:
+            events, errors = Path(root)/"events", Path(root)/"stderr"
+            errors.write_text("")
+            rows = [example_fault, replace(example_fault, pid=98), replace(example_fault, begin_ns=195, end_ns=199)]
+            body = "".join("fault " + " ".join(map(str, astuple(f))) + "\n" for f in rows)
+            events.write_text("ready 100\n" + body + "end 200 0\n")
+            self.assertEqual(parse_faults(events, errors, pid=123, interval=(160,190)), (100,200,[example_fault]))
+            events.write_text("ready 100\n" + body + "end 198 0\n")
+            with self.assertRaisesRegex(ValueError, "outside collector lifetime"):
+                parse_faults(events, errors, pid=123, interval=(160,190))
 
     def test_unpaired_or_dropped_bpf_trace_fails_closed(self):
         with tempfile.TemporaryDirectory() as root:
