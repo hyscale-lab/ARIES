@@ -1,0 +1,83 @@
+--- torch_wheel_release.go
++++ torch_wheel_release.go
+@@ -9,23 +9,25 @@
+ )
+ 
+ type wheelAdvice struct {
+-	Path        string `json:"path"`
+-	Device      uint64 `json:"device"`
+-	Inode       uint64 `json:"inode"`
+-	Size        int64  `json:"size_bytes"`
+-	BeforePages uint64 `json:"rechecked_cached_pages"`
+-	ReadOnly    bool   `json:"fd_read_only"`
+-	Begin       int64  `json:"begin_ns"`
+-	End         int64  `json:"end_ns"`
+-	Error       string `json:"error,omitempty"`
++	Path        string           `json:"path"`
++	Device      uint64           `json:"device"`
++	Inode       uint64           `json:"inode"`
++	Size        int64            `json:"size_bytes"`
++	CleanState  unix.Cachestat_t `json:"cache_state_before_advice"`
++	BeforePages uint64           `json:"rechecked_cached_pages"`
++	ReadOnly    bool             `json:"fd_read_only"`
++	Begin       int64            `json:"begin_ns"`
++	End         int64            `json:"end_ns"`
++	Error       string           `json:"error,omitempty"`
+ }
+ 
+ type wheelRelease struct {
+-	Schema string        `json:"schema"`
+-	Before sample        `json:"before"`
+-	After  *sample       `json:"after,omitempty"`
+-	Advice []wheelAdvice `json:"advice"`
+-	Error  string        `json:"error,omitempty"`
++	Deletion *deletionEvidence `json:"filemap_deletions,omitempty"`
++	Schema   string            `json:"schema"`
++	Before   sample            `json:"before"`
++	After    *sample           `json:"after,omitempty"`
++	Advice   []wheelAdvice     `json:"advice"`
++	Error    string            `json:"error,omitempty"`
+ }
+ 
+ // The host may request this once in the dedicated study fixture. Scope comes
+@@ -111,6 +113,25 @@
+ 			return
+ 		}
+ 	}
++	ids := make([]wheelAdvice, 0, len(ready))
++	for _, item := range ready {
++		ids = append(ids, item.result)
++	}
++	tracer, err := openWheelTracer(ids)
++	if err != nil {
++		out.Error = fmt.Sprintf("filemap trace setup: %v", err)
++		return
++	}
++	defer tracer.close()
++	out.Deletion = &tracer.evidence
++	for i, item := range ready {
++		var c unix.Cachestat_t
++		if err := unix.Cachestat(uint(item.fd), &unix.CachestatRange{}, &c, 0); err != nil || c.Dirty != 0 || c.Writeback != 0 || c.Cache != item.result.BeforePages {
++			out.Error = fmt.Sprintf("unclean or changed candidate %s: %+v %v", item.result.Path, c, err)
++			return
++		}
++		ready[i].result.CleanState = c
++	}
+ 	for _, item := range ready {
+ 		r := item.result
+ 		r.Begin, _ = monotonic()
+@@ -120,7 +141,14 @@
+ 		r.End, _ = monotonic()
+ 		out.Advice = append(out.Advice, r)
+ 	}
++	if err := tracer.stop(); err != nil {
++		out.Error = err.Error()
++		return
++	}
+ 	after := snapshot(0, 0)
+ 	out.After = &after
++	if err := tracer.export(); err != nil {
++		out.Error = err.Error()
++	}
+ 	return
+ }
