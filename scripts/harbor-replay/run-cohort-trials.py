@@ -13,6 +13,19 @@ import tempfile
 def worker_driver(assets, unit, entries, temporary):
     driver=assets/"run-reviewed-cohort.py"
     tasks={entry["task"] for entry in entries}
+    if unit == "fcmod-zepbound-amd183-stockv2" and tasks <= {"kv-store-grpc", "financial-document-processor"}:
+        helper = assets / "cohort_pypi.py"
+        original = helper.read_bytes()
+        if hashlib.sha256(original).hexdigest() != "31597d7497db2924e2b8b1eff66a2cd6f25cd1c0fcffe8fc80f87fb68ed15bbb":
+            raise ValueError("unexpected scoped PyPI source helper")
+        for module in assets.glob("*.py"):
+            shutil.copyfile(module, temporary / module.name)
+        target = b'    name = config["name"]\n'
+        assert original.count(target) == 1
+        replacement = target + b'    if name == "zbpypi183" and profile == "pypi":\n        network = 236\n'
+        updated = original.replace(target, replacement)
+        (temporary / helper.name).write_bytes(updated)
+        return temporary / driver.name, dict(module=helper.name, source_sha256=hashlib.sha256(original).hexdigest(), deployed_sha256=hashlib.sha256(updated).hexdigest(), network="zbpypi183", source_subnet="10.233.183.0/28", deployed_subnet="10.236.183.0/28")
     if unit!="fcmod-zepbound-amd200" or not tasks.intersection({"count-dataset-tokens","video-processing"}):
         return driver, {}
     helper=assets/"cohort_dataset.py"
