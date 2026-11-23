@@ -73,6 +73,7 @@ func command(ctx context.Context) error {
 	routeOnly := flag.Bool("diagnostic-grpc-network-only", false, "collect the prepared and restored 69ba guest network readbacks without dispatching a recording")
 	grpcNetDiag := flag.Bool("diagnostic-grpc-loopback", false, "verify the private 69ba guest with its IPv6 loopback address omitted")
 	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
+	torchGloo := flag.String("diagnostic-torch-gloo", "", "observe present or alias hostname resolution in a reviewed Torch guest")
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
 	timingAudit := flag.Bool("timing-audit", false, "retain first and eventual native outcomes for the five launch-clock audit recordings")
 	relaxedML := flag.Bool("relaxed-ml", false, "retain actual timing and exit disagreements in the four reviewed ML replays")
@@ -207,8 +208,14 @@ func command(ctx context.Context) error {
 		default:
 			return errors.New("relaxed ML replay requires one of four reviewed originals")
 		}
-		if *processDrift || *videoDifferences || *probe != "" || *intraStep != 0 {
+		if *torchGloo != "" || *processDrift || *videoDifferences || *probe != "" || *intraStep != 0 {
 			return errors.New("relaxed ML replay cannot be combined with other diagnostics")
+		}
+	}
+	if *torchGloo != "" {
+		mode := *torchGloo == "present" || *torchGloo == "alias"
+		if !mode || r.Task != torchTask || r.Trial != torchGlooTrial || o.VCPUs != 1 || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 || (*torchGloo == "alias" && !*processDrift) {
+			return errors.New("Torch hostname diagnostics require the uninstrumented one-vCPU e047 recording, with observed process drift in alias mode")
 		}
 	}
 	if *videoDifferences && (r.Task != "video-processing" || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0) {
@@ -261,10 +268,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -283,7 +290,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			cpuProfile["requested_physical_cpus"] = r.VCPUs
 			cpuProfile["source_qualified"] = sourceCPU
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_torch_gloo": torchGloo, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
@@ -292,7 +299,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if videoIPP != "" {
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
 	}
-	req.PrivateHostsFile = r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial)
+	req.PrivateHostsFile = r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
@@ -404,6 +411,15 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
+	if torchGloo != "" {
+		action := "inspect"
+		if torchGloo == "alias" {
+			action = "install"
+		}
+		if err := readTorchGloo(ctx, m, id, "before_snapshot", action, log); err != nil {
+			return err
+		}
+	}
 	if hfHostCPU >= 0 {
 		if err := checkHFCPU(ctx, m, id, r.Trial, hfHostCPU, sourceCPU, "before_snapshot", log); err != nil {
 			return err
@@ -449,6 +465,18 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if hfHostCPU >= 0 {
 		if err := checkHFCPU(ctx, m, id, r.Trial, hfHostCPU, sourceCPU, "after_restore", log); err != nil {
 			return err
+		}
+	}
+	if torchGloo != "" {
+		action := "inspect"
+		if torchGloo == "alias" {
+			action = "verify"
+		}
+		if err := readTorchGloo(ctx, m, id, "after_restore", action, log); err != nil {
+			return err
+		}
+		if torchGloo == "present" {
+			return log.Encode(map[string]any{"event": "torch_gloo_present_only", "source_tools_dispatched": 0})
 		}
 	}
 	if routeOnly {
@@ -575,6 +603,12 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if r.Task != "fix-git" {
 		if err := captureTaskOutput(ctx, m, id, r, log, grpcTools != ""); err != nil {
 			return err
+		}
+		if torchGloo == "alias" {
+			if err := readTorchGloo(ctx, m, id, "after_source", "canary", log); err != nil {
+				return err
+			}
+			return readTorchGloo(ctx, m, id, "after_source", "original-canary", log)
 		}
 		if hfHostCPU >= 0 {
 			return checkHFCPU(ctx, m, id, r.Trial, hfHostCPU, sourceCPU, "after_source", log)
