@@ -35,7 +35,7 @@ def main():
         bool((profile.get('guest_reclamation') or {}).get('Enabled'))!=(a.variant in ('v3','v4')) or
         digest(Path(profile['root_drive']))!=GRPC_ROOT_SHA):
         raise ValueError('runtime feature or guest OS differs')
-    if subprocess.run(['pgrep','-x','firecracker'],stdout=subprocess.DEVNULL).returncode!=1:
+    if subprocess.run(['pgrep','-x','firecracker|[.]firecracker-re'],stdout=subprocess.DEVNULL).returncode!=1:
         raise RuntimeError('worker must be idle before this single-source run')
     driver=asset/'run-reviewed-cohort.py'
     run=asset/'runs'/('69ba9b75-'+a.variant+'-cohort-01')
