@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxPFNs      = 2 << 20 // A single scan reads at most 16 MiB of page metadata.
+	maxPFNs      = 9 << 18 // Cover 8 GiB of x86 guest RAM plus the 1 GiB MMIO hole (18 MiB of flags).
 	maxPFNOffset = (1 << 55) - 1
 	maxRuns      = 1 << 18
 	dirBudget    = 256

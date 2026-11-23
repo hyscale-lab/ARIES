@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -22,7 +24,46 @@ type regularExtent struct {
 	FSType   int64  `json:"fs_type"`
 }
 
+type regularFile struct {
+	Device uint64   `json:"device"`
+	Inode  uint64   `json:"inode"`
+	Paths  []string `json:"paths"`
+}
+
+type fileID struct{ device, inode uint64 }
+type pathIndex map[fileID]map[string]struct{}
+
+func (m pathIndex) add(key fileID, path string) {
+	if m[key] == nil {
+		m[key] = make(map[string]struct{})
+	}
+	if path != "" {
+		m[key][path] = struct{}{}
+	}
+}
+
+func (m pathIndex) files() []regularFile {
+	files := make([]regularFile, 0, len(m))
+	for key, names := range m {
+		paths := make([]string, 0, len(names))
+		for name := range names {
+			paths = append(paths, name)
+		}
+		slices.Sort(paths)
+		files = append(files, regularFile{key.device, key.inode, paths})
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].Device != files[j].Device {
+			return files[i].Device < files[j].Device
+		}
+		return files[i].Inode < files[j].Inode
+	})
+	return files
+}
+
 type regularMapScan struct {
+	Files []regularFile `json:"files"`
+
 	Begin     int64           `json:"begin_ns"`
 	End       int64           `json:"end_ns"`
 	Processes int             `json:"processes"`
@@ -43,6 +84,7 @@ func fileVMAs(data []byte) []string {
 
 func collectRegularFiles() regularMapScan {
 	var out regularMapScan
+	names := make(pathIndex)
 	out.Errors = make(map[string]int)
 	out.Begin, _ = monotonic()
 	dirs, _ := filepath.Glob("/proc/[0-9]*")
@@ -65,8 +107,9 @@ func collectRegularFiles() regularMapScan {
 			continue
 		}
 		var accepted regularMapScan
+		local := make(pathIndex)
 		for _, row := range rows {
-			key := collectRegularVMA(dir, row, pm, &accepted)
+			key := collectRegularVMA(dir, row, pm, &accepted, local)
 			if key != "" {
 				out.Errors[key]++
 			}
@@ -77,14 +120,21 @@ func collectRegularFiles() regularMapScan {
 			out.Errors["file_maps_changed"]++
 			continue
 		}
+		for key, aliases := range local {
+			names.add(key, "")
+			for alias := range aliases {
+				names.add(key, alias)
+			}
+		}
 		out.Extents = append(out.Extents, accepted.Extents...)
 		out.Processes++
 	}
+	out.Files = names.files()
 	out.End, _ = monotonic()
 	return out
 }
 
-func collectRegularVMA(dir, line string, pm *os.File, out *regularMapScan) string {
+func collectRegularVMA(dir, line string, pm *os.File, out *regularMapScan, names pathIndex) string {
 	f := strings.Fields(line)
 	var lo, hi, offset, major, minor, inode uint64
 	if _, e := fmt.Sscanf(f[0], "%x-%x", &lo, &hi); e != nil {
@@ -120,6 +170,7 @@ func collectRegularVMA(dir, line string, pm *os.File, out *regularMapScan) strin
 		return "vma_range"
 	}
 	const presentFile = (uint64(1) << 63) | (uint64(1) << 61)
+	mapped := false
 	buf := make([]byte, 8192)
 	for va := lo; va < hi; {
 		n := min(uint64(len(buf)/8), (hi-va)/p)
@@ -134,6 +185,7 @@ func collectRegularVMA(dir, line string, pm *os.File, out *regularMapScan) strin
 			if entry&presentFile != presentFile || pfn == 0 || int64(filePage*p) >= st.Size {
 				continue
 			}
+			mapped = true
 			rows := out.Extents
 			if len(rows) > 0 {
 				last := &rows[len(rows)-1]
@@ -145,6 +197,16 @@ func collectRegularVMA(dir, line string, pm *os.File, out *regularMapScan) strin
 			out.Extents = append(rows, regularExtent{PFN: pfn, Count: 1, FilePage: filePage, Inode: inode, Device: st.Dev, FSType: fs.Type})
 		}
 		va += n * p
+	}
+	if mapped {
+		// Read the kernel map_files target only for a stable, verified inode.
+		// Keep extent identity without a path when a link vanishes mid-scan.
+		alias, err := os.Readlink(path)
+		var after unix.Stat_t
+		if err != nil || unix.Stat(path, &after) != nil || after.Dev != st.Dev || after.Ino != st.Ino {
+			alias = ""
+		}
+		names.add(fileID{st.Dev, inode}, alias)
 	}
 	return ""
 }

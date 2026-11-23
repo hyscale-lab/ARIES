@@ -120,3 +120,15 @@ func TestCalibrationSeparatesReadBufferedWriteAndSync(t *testing.T) {
 		t.Fatalf("calibration left files %v %v", children, err)
 	}
 }
+
+func TestMappedFileDictionaryRetainsAliasesAndUnknowns(t *testing.T) {
+	index := make(pathIndex)
+	index.add(fileID{8, 100}, "/a (deleted)")
+	index.add(fileID{8, 100}, "/a")
+	index.add(fileID{8, 100}, "/a")
+	index.add(fileID{7, 99}, "")
+	b, err := json.Marshal(index.files())
+	if err != nil || string(b) != `[{"device":7,"inode":99,"paths":[]},{"device":8,"inode":100,"paths":["/a","/a (deleted)"]}]` {
+		t.Fatalf("identity map %s %v", b, err)
+	}
+}

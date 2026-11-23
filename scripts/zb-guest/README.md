@@ -97,3 +97,11 @@ same GPA and page lifetime. The stock hook alone cannot establish it.
 
 See [Linux pagemap and page flags](https://docs.kernel.org/admin-guide/mm/pagemap.html)
 and [DAMON administration](https://docs.kernel.org/admin-guide/mm/damon/usage.html).
+
+For an 8 GiB x86 guest, set `ZB_GUEST_PFN_COUNT=2359296` to include the
+guest-physical aperture below the upper RAM slot. Inspect returned PFN coverage
+before classifying frames. With `ZB_REGULAR_MAPS=1`, `regular_files.files`
+lists each observed mapped regular file by device and inode, with sorted aliases
+read from verified kernel map_files links. An empty alias list preserves the
+identity of a file whose path could not be recovered. Unmapped file cache lacks
+this pathname evidence.

@@ -12,8 +12,8 @@ chmod u+w "$staging/image"
 regular_maps=${ZB_REGULAR_MAPS:-0}
 [[ "$regular_maps" =~ ^[01]$ ]]
 pfn_count=${ZB_GUEST_PFN_COUNT:-524288}
-[[ "$pfn_count" =~ ^[1-9][0-9]{0,6}$ ]] && (( pfn_count <= 2097152 )) || {
-    echo 'ZB_GUEST_PFN_COUNT must be an integer from 1 through 2097152' >&2
+[[ "$pfn_count" =~ ^[1-9][0-9]{0,6}$ ]] && (( pfn_count <= 2359296 )) || {
+    echo 'ZB_GUEST_PFN_COUNT must be an integer from 1 through 2359296' >&2
     exit 2
 }
 cat > "$staging/unit" <<EOF
