@@ -1,0 +1,54 @@
+package main
+
+import (
+    "context"
+    _ "embed"
+    "encoding/json"
+    "fmt"
+
+    "github.com/hyscale-lab/aries/pkg/core"
+    "github.com/hyscale-lab/aries/pkg/replay"
+    "github.com/hyscale-lab/aries/pkg/replay/harbor"
+)
+
+//go:embed pid_witness.py
+var compilerPIDWitness string
+
+func witnessCompilerWait(exec compilerGuestExec, witness func(context.Context, string, string) (core.CommandResult,error), record func(any) error) compilerGuestExec {
+    const session = 94748
+    var pid string
+    var started bool
+    save := func(ctx context.Context, call replay.Call, phase string) error {
+        result,err:=witness(ctx,phase,pid)
+        if err!=nil || result.ExitCode!=0 {return fmt.Errorf("installer %s witness: %v, exit %d, %s",phase,err,result.ExitCode,result.Stderr)}
+        var details map[string]any
+        if err:=json.Unmarshal([]byte(result.Stdout),&details);err!=nil{return err}
+        now,err:=harbor.Clock();if err!=nil{return err}
+        return record(map[string]any{"event":"diagnostic_opam_pid_lifetime","phase":phase,"source_call_id":call.ToolCallID,
+            "source_session_id":session,"source_pid":"10691","live_pid":pid,"readback":details,"monotonic_ns":now})
+    }
+    return func(ctx context.Context,call replay.Call)(core.CommandResult,error){
+        if call.ToolCallID=="call_XvxnxIIgvuE5dTlYGPEXcnEr" {
+            if err:=save(ctx,call,"before_signal_zero");err!=nil{return core.CommandResult{},err}
+        }
+        out,err:=exec(ctx,call)
+        if err!=nil{return out,err}
+        if call.ToolCallID=="call_JGz664biXrmFcBZ3CHPtOKlt"{
+            if call.SessionID!=session||out.ExitCode!=-1{return out,fmt.Errorf("original OPAM start has no live installer session")}
+            started=true
+        }
+        if call.ToolCallID=="call_FwQedwl1g7q1DZooMva0h7DK"{
+            actual:=opamInstaller.FindAllStringSubmatch(out.Stdout,-1)
+            if !started||len(actual)!=1{return out,fmt.Errorf("installer cannot be bound to previously observed start")}
+            pid=actual[0][1]
+            return out,save(ctx,call,"arm")
+        }
+        if call.ToolCallID=="call_Eo7NwZTrRij46mZvT7L3QknY" && pid!="" {
+            return out,save(ctx,call,"source_final")
+        }
+        if call.Operation=="PollProcess"&&call.SessionID==session&&out.ExitCode>=0&&pid!="" {
+            return out,save(ctx,call,"closed")
+        }
+        return out,nil
+    }
+}
