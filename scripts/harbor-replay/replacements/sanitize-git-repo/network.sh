@@ -79,6 +79,30 @@ if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     for address in "${addresses[@]}"; do "${ipt[@]}" -A "$chain" -d "$address" -p tcp -m multiport --dports 80,443 -j RETURN; done
     "${ipt[@]}" -A "$chain" -j DROP
 fi
+# Worker and guest resolvers can return different GitHub frontends. Add only
+# endpoints which authenticate the source repository over TLS on this worker.
+if [[ "$profile" == cleanse ]]; then
+    for host in github.com api.github.com; do
+        if [[ "$host" == github.com ]]; then
+            tails=(3 4)
+            resource=/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+        else
+            tails=(5 6)
+            resource=/repos/gitleaks/gitleaks/releases/tags/v8.30.1
+        fi
+        for region in 112 113 114; do
+            for last in "${tails[@]}"; do
+                addr=140.82.$region.$last
+                if curl --noproxy '*' --fail --silent --head --max-time 6 --resolve "$host:443:$addr" "https://$host$resource" --output /dev/null; then
+                    rule=(-d "$addr" -p tcp --dport 443 -j RETURN)
+                    if ! "${ipt[@]}" -C "$chain" "${rule[@]}" 2>/dev/null; then
+                        "${ipt[@]}" -I "$chain" 1 "${rule[@]}"
+                    fi
+                fi
+            done
+        done
+    done
+fi
 if ! "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
     "${ipt[@]}" -I PREROUTING 1 "${jump[@]}"
 fi
