@@ -1,0 +1,311 @@
+diff --git i/cmd/aries-harbor/main.go w/cmd/aries-harbor/main.go
+index 0d76121..e8884a5 100644
+--- i/cmd/aries-harbor/main.go
++++ w/cmd/aries-harbor/main.go
+@@ -69,6 +69,7 @@ func command(ctx context.Context) error {
+ 	routeOnly := flag.Bool("diagnostic-grpc-network-only", false, "collect the prepared and restored 69ba guest network readbacks without dispatching a recording")
+ 	grpcNetDiag := flag.Bool("diagnostic-grpc-loopback", false, "verify the private 69ba guest with its IPv6 loopback address omitted")
+ 	groupMode := flag.Bool("codex-process-groups", false, "use original Codex Linux pipe process-group lifetime for reviewed Python guest workloads")
++	relaxedVideoCircuit := flag.Bool("relaxed-video-circuit", false, "preserve genuine observed variation for five reviewed video/circuit trials")
+ 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
+ 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
+ 	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
+@@ -112,6 +113,13 @@ func command(ctx context.Context) error {
+ 	if *image == "" {
+ 		return json.NewEncoder(os.Stdout).Encode(r)
+ 	}
++	if *relaxedVideoCircuit {
++		if !harbor.RelaxedVideoCircuitTrial(r) || *processDrift || *videoDifferences || *probe != "" || *intraStep != 0 {
++			return errors.New("relaxed video/circuit replay requires its exact reviewed source and ordinary host tracing")
++		}
++		*processDrift = true
++		*videoDifferences = r.Task == "video-processing"
++	}
+ 	sourceCPU := *hfSourceCPU >= 0
+ 	if sourceCPU {
+ 		if *hfHostCPU >= 0 || *processDrift {
+@@ -172,11 +180,11 @@ func command(ctx context.Context) error {
+ 		financialPoll := r.Task == financialTask && r.Trial == "dce59078-0f61-4eac-92f9-3b2728e4ef28"
+ 		hfPoll := r.Task == hfTask && (r.Trial == hfLoopbackTrial || r.Trial == hfInspectionTrial || r.Trial == hfGunicornLoopbackTrial)
+ 		allowed := grpcPoll || financialPoll || hfPoll || torchPoll || r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
+-		if !allowed || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 {
++		if !allowed || (!*relaxedVideoCircuit && (*observer != "" || *sampler != "")) || *probe != "" || *intraStep != 0 {
+ 			return errors.New("process drift diagnostics require a reviewed uninstrumented recording")
+ 		}
+ 	}
+-	if *videoDifferences && (r.Task != "video-processing" || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0) {
++	if *videoDifferences && (r.Task != "video-processing" || (!*relaxedVideoCircuit && (*observer != "" || *sampler != "")) || *probe != "" || *intraStep != 0) {
+ 		return errors.New("video image diagnostics require a reviewed uninstrumented video recording")
+ 	}
+ 	if *image != r.Image {
+@@ -223,10 +231,10 @@ func command(ctx context.Context) error {
+ 		return err
+ 	}
+ 	defer f.Close()
+-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
++	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *relaxedVideoCircuit, *videoDifferences, *processDrift, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
+ }
+ 
+-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
++func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, relaxedVideoCircuit, videoDifferences, processDrift, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+ 	m, err := vhive.New(o)
+ 	if err != nil {
+ 		return err
+@@ -245,7 +253,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 			cpuProfile["requested_physical_cpus"] = r.VCPUs
+ 			cpuProfile["source_qualified"] = sourceCPU
+ 		}
+-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
++		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "diagnostic_grpc_loopback": grpcNetDiag, "diagnostic_grpc_ipv4_addresses_only": ipv4Addrs, "diagnostic_relaxed_video_circuit": relaxedVideoCircuit, "diagnostic_video_images": videoDifferences, "diagnostic_process_drift": processDrift, "diagnostic_opam_log": opamLog, "diagnostic_opam_pid": opamPID, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs, "hf_cpu_profile": cpuProfile, "source_requested_cpus": r.VCPUs})
+ 	}
+ 	if err = lifecycle("create_start"); err != nil {
+ 		return err
+@@ -419,6 +427,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 	})
+ 	defer sessions.Close()
+ 	h := harbor.Hooks{
++		RelaxedVideoCircuit:   relaxedVideoCircuit,
+ 		DiagnosticVideoImages: videoDifferences,
+ 		IntraTool:             intraTool,
+ 		Record:                func(e harbor.Receipt) error { return log.Encode(e) },
+@@ -436,6 +445,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 			if call.Operation == "ViewImage" {
+ 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
+ 			}
++			if relaxedVideoCircuit && call.Operation == "Exec" {
++				return sessions.ObserveDrift(ctx, harbor.RelaxedForegroundSession(call))
++			}
+ 			// Source-terminal exec_command launches still have a real initial yield.
+ 			return sessions.Execute(ctx, call)
+ 		},
+@@ -475,6 +487,15 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 		h.FinishObservedProcess = sessions.FinishObservedProcess
+ 		h.WasRetained = sessions.WasRetained
+ 	}
++	if relaxedVideoCircuit {
++		h.FinishObservedProcess = func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
++			if call.Operation == "Exec" {
++				call = harbor.RelaxedForegroundSession(call)
++				call.Operation = "PollProcess"
++			}
++			return sessions.FinishObservedProcess(ctx, call)
++		}
++	}
+ 	if groups != nil {
+ 		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+ 			return m.Exec(ctx, id, command)
+@@ -494,7 +515,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
+ 		return err
+ 	}
+ 	if r.Task != "fix-git" {
+-		if err := captureTaskOutput(ctx, m, id, r, log, grpcTools != ""); err != nil {
++		if err := captureTaskOutput(ctx, m, id, r, log, grpcTools != "", relaxedVideoCircuit); err != nil {
+ 			return err
+ 		}
+ 		if hfHostCPU >= 0 {
+diff --git i/cmd/aries-harbor/prepare.go w/cmd/aries-harbor/prepare.go
+index 64f8776..88bc93e 100644
+--- i/cmd/aries-harbor/prepare.go
++++ w/cmd/aries-harbor/prepare.go
+@@ -321,7 +321,7 @@ chmod 0755 /usr/local/bin/mktemp
+ sha256sum /usr/local/bin/mktemp
+ printf '%s\n' 'SOURCE_TEMPLATE -> SOURCE_DIR'`
+ 
+-func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools bool) error {
++func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools, relaxed bool) error {
+ 	task := taskSetups[r.Task]
+ 	begin, err := harbor.Clock()
+ 	if err != nil {
+@@ -381,6 +381,20 @@ for item in records:
+     print(json.dumps({'name':item['metadata']['name'],'version':item['metadata']['version'],'download':item['download_info']},sort_keys=True))
+ PYREPORT`
+ 	}
++	if relaxed {
++		out, execErr := m.Exec(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", cmd}, Dir: r.Workdir})
++		end, clockErr := harbor.Clock()
++		if err := errors.Join(execErr, clockErr); err != nil {
++			return err
++		}
++		event := "final_task_state"
++		if out.ExitCode != 0 {
++			event = "final_task_state_deviation"
++		}
++		return log.Encode(map[string]any{"event": event, "checks": strings.TrimSpace(out.Stdout),
++			"stdout": out.Stdout, "stderr": out.Stderr, "exit_code": out.ExitCode,
++			"begin_monotonic_ns": begin, "end_monotonic_ns": end})
++	}
+ 	out, err := checked(ctx, m, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", cmd}, Dir: r.Workdir})
+ 	end, clockErr := harbor.Clock()
+ 	if err != nil || clockErr != nil {
+diff --git i/pkg/replay/harbor/relaxed_video_circuit.go w/pkg/replay/harbor/relaxed_video_circuit.go
+new file mode 100644
+index 0000000..62b1016
+--- /dev/null
++++ w/pkg/replay/harbor/relaxed_video_circuit.go
+@@ -0,0 +1,73 @@
++package harbor
++
++import (
++	"context"
++	"errors"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/replay"
++)
++
++func RelaxedVideoCircuitTrial(r *Recording) bool {
++	switch r.Trial {
++	case "99c36c5d-aba5-476b-93b2-d08a39c7a353":
++		return r.Task == "circuit-fibsqrt"
++	case "020f911b-467e-49ad-8113-bb725bee1d4b", "361ad8a6-2016-443b-b0c0-22e63f2598c4",
++		"80f95afc-7eb6-4fa4-9c39-13abb473cdc8", "aa067203-b539-48d0-9c99-2128f941c9d0":
++		return r.Task == "video-processing"
++	}
++	return false
++}
++
++// A source-terminal shell that actually yields needs an internal key for
++// its real process. Source process handles remain positive, and the
++// private key is never written into a source call or source receipt.
++func RelaxedForegroundSession(call replay.Call) replay.Call {
++	call.Operation = "StartProcess"
++	call.SessionID = -int(call.Sequence)
++	return call
++}
++
++func recordRelaxedVideoCircuit(ctx context.Context, h Hooks, call replay.Call, reply Receipt, observed core.CommandResult) error {
++	differs := int32(observed.ExitCode) != call.ExitCode
++	imageDiffers := call.Operation == "ViewImage" && observed.Stdout != string(call.ResponseStdout)
++	if !differs && !imageDiffers {
++		return nil
++	}
++	reply.Event = "relaxed_live_deviation"
++	reply.StatusBasis = "observed_first_reply_differs"
++	// The original tool_reply retains the genuine streams. Only the
++	// continuation event can contain additional data from the same process.
++	reply.Stdout, reply.Stderr = "", ""
++	if err := emit(h, reply); err != nil {
++		return err
++	}
++	if observed.ExitCode != ProcessRunning || call.ExitCode < 0 ||
++		(call.Operation != "PollProcess" && call.Operation != "Exec") {
++		return nil
++	}
++	if h.FinishObservedProcess == nil {
++		return errors.New("missing continuation for a genuinely running source-terminal shell")
++	}
++	join := func() error {
++		receipt := reply
++		receipt.Event = "relaxed_continuation_start"
++		receipt.StatusBasis = "actual_process_wait_after_first_reply"
++		if err := emit(h, receipt); err != nil {
++			return err
++		}
++		terminal, err := h.FinishObservedProcess(ctx, call)
++		receipt.Event = "relaxed_continuation_end"
++		receipt.Exit = &terminal.ExitCode
++		receipt.Stdout, receipt.Stderr = terminal.Stdout, terminal.Stderr
++		receipt.StdoutSHA, receipt.StderrSHA = digest([]byte(terminal.Stdout)), digest([]byte(terminal.Stderr))
++		receipt.ProcessTiming = terminal.Timing
++		receipt.OutputComparison = "additional_live_streams"
++		return errors.Join(err, emit(h, receipt))
++	}
++	if h.deferProcessJoin != nil {
++		h.deferProcessJoin(join)
++		return nil
++	}
++	return join()
++}
+diff --git i/pkg/replay/harbor/relaxed_video_circuit_test.go w/pkg/replay/harbor/relaxed_video_circuit_test.go
+new file mode 100644
+index 0000000..4557d62
+--- /dev/null
++++ w/pkg/replay/harbor/relaxed_video_circuit_test.go
+@@ -0,0 +1,55 @@
++package harbor
++
++import (
++	"context"
++	"testing"
++
++	"github.com/hyscale-lab/aries/pkg/core"
++	"github.com/hyscale-lab/aries/pkg/replay"
++)
++
++func TestRelaxedOriginalTerminalShellKeepsItsRealFirstAndAdditionalReplies(t *testing.T) {
++	var records []Receipt
++	call := replay.Call{Operation: "Exec", Sequence: 3, ExitCode: 0, ResponseStdout: []byte("recorded")}
++	ctx := context.Background()
++	hooks := Hooks{
++		RelaxedVideoCircuit: true,
++		Record: func(row Receipt) error {
++			records = append(records, row)
++			return nil
++		},
++		FinishObservedProcess: func(_ context.Context, received replay.Call) (core.CommandResult, error) {
++			if received.Sequence != call.Sequence || received.Operation != "Exec" {
++				t.Fatalf("continuation lost source identity: %+v", received)
++			}
++			return core.CommandResult{ExitCode: 2, Stdout: "live remainder"}, nil
++		},
++	}
++	receipt := Receipt{SourceCallID: "source-call", Sequence: call.Sequence, Operation: call.Operation}
++	actual := core.CommandResult{ExitCode: ProcessRunning, Stdout: "live prefix"}
++	if err := recordReply(ctx, hooks, call, receipt, actual, 10, nil); err != nil {
++		t.Fatal(err)
++	}
++	if len(records) != 4 || records[0].Event != "tool_reply" ||
++		*records[0].Exit != ProcessRunning || records[0].Stdout != "live prefix" ||
++		records[3].Event != "relaxed_continuation_end" || *records[3].Exit != 2 ||
++		records[3].Stdout != "live remainder" || records[3].SourceCallID != receipt.SourceCallID {
++		t.Fatalf("unexpected observed replies: %+v", records)
++	}
++}
++
++func TestRelaxedNovelImageDoesNotReplaceItsLiveWire(t *testing.T) {
++	var records []Receipt
++	hooks := Hooks{RelaxedVideoCircuit: true, Record: func(row Receipt) error {
++		records = append(records, row)
++		return nil
++	}}
++	call := replay.Call{Operation: "ViewImage", ResponseStdout: []byte("original")}
++	actual := core.CommandResult{ExitCode: 0, Stdout: "actual-result"}
++	if err := recordReply(context.Background(), hooks, call, Receipt{Operation: call.Operation}, actual, 10, nil); err != nil {
++		t.Fatal(err)
++	}
++	if len(records) != 2 || records[0].Stdout != "actual-result" || records[0].SourceOutputSHA != digest(call.ResponseStdout) {
++		t.Fatalf("did not preserve independent actual and source output: %+v", records)
++	}
++}
+diff --git i/pkg/replay/harbor/run.go w/pkg/replay/harbor/run.go
+index 7ebdd74..9cc60a3 100644
+--- i/pkg/replay/harbor/run.go
++++ w/pkg/replay/harbor/run.go
+@@ -18,6 +18,7 @@ type Hooks struct {
+ 	deferProcessJoin      func(func() error)
+ 	WasRetained           func(int) bool
+ 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
++	RelaxedVideoCircuit   bool
+ 	DiagnosticVideoImages bool
+ 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
+ 	Boundary              func(context.Context, string, int) error
+@@ -85,6 +86,9 @@ func compareOutput(source []byte, result core.CommandResult) string {
+ // Run follows source order, substituting live elapsed time for each recorded
+ // guest call interval. There is no verifier, benchmark deadline or LLM client.
+ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
++	if h.RelaxedVideoCircuit && !RelaxedVideoCircuitTrial(r) {
++		return errors.New("unreviewed relaxed video/circuit replay")
++	}
+ 	if h.DiagnosticVideoImages && r.Task != "video-processing" {
+ 		return errors.New("unreviewed video diagnostic")
+ 	}
+@@ -208,6 +212,9 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
+ 	if err := errors.Join(callErr, h.Record(receipt)); err != nil {
+ 		return err
+ 	}
++	if h.RelaxedVideoCircuit {
++		return recordRelaxedVideoCircuit(ctx, h, call, receipt, out)
++	}
+ 	if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
+ 		if h.DiagnosticVideoImages && out.ExitCode == 0 && comparableLiveImage(call, out.Stdout) {
+ 			return nil
