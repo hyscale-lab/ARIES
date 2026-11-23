@@ -39,7 +39,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         raise FileExistsError(f"bundle path must be empty: {output}")
-    candidates = {digest(p): p for p in a.cache.glob("aries-*") if p.is_file()}
+    candidates = [p for p in a.cache.glob("aries-*") if p.is_file()]
     tracer_files = ["idle_hook.py", "idle.py", "guest_sample.py", "snapshot_probe.py",
                     "sample_vmm.py", "kvm-slots.bt", "vmm_census.py"]
     for name in tracer_files:
@@ -113,7 +113,14 @@ def main():
             binary_sha = receipt["adapter_binary_sha256"]
             adapter = output / "adapters" / binary_sha
             if not adapter.exists():
-                install(candidates[binary_sha], adapter)
+                # Cohorts store immutable adapters by digest. A new validation
+                # binary lives at the top of the cache until the first seal.
+                archived = list(a.cache.glob(f"*-cohort*/adapters/{binary_sha}"))
+                newest = sorted(candidates, key=lambda p: p.stat().st_mtime_ns, reverse=True)
+                original = next((p for p in [*archived, *newest] if digest(p) == binary_sha), None)
+                if original is None:
+                    raise FileNotFoundError(f"missing source-validated adapter {binary_sha}")
+                install(original, adapter)
             folder = a.cache / "sources" / task / trial
             target = output / "sources" / task / trial
             for name, key in [("trajectory.json", "trajectory_sha256"), ("rollout.jsonl", "rollout_sha256")]:
