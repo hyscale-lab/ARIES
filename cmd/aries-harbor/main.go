@@ -122,8 +122,9 @@ func command(ctx context.Context) error {
 	requestedVCPUs := r.VCPUs
 	if *hfHostCPU >= 0 {
 		inspection := r.Trial == hfInspectionTrial && *hfHarness != ""
-		defaultDiagnostic := !sourceCPU && r.Trial == hfDefaultThreadsTrial && *hfHarness == ""
-		if (!inspection && !defaultDiagnostic) || (!sourceCPU && (*observer != "" || *sampler != "")) {
+		defaultThreads := r.Trial == hfDefaultThreadsTrial && *hfHarness == ""
+		o.GuestSMT = sourceCPU && defaultThreads
+		if (!inspection && !defaultThreads) || (!sourceCPU && (*observer != "" || *sampler != "")) {
 			return errors.New("two-vCPU diagnostic requires the uninstrumented HF inspection source and fixture")
 		}
 		requestedVCPUs = 2
@@ -197,7 +198,7 @@ func command(ctx context.Context) error {
 		return errors.New("this task requires the pinned in-guest -image-helper")
 	}
 	readySetup, _ := sourceSetup(r)
-	if ((r.Trial == hfLoopbackTrial && *hfHarness == "") || r.Trial == datasetPythonTrial) != (*curlPackages != "") {
+	if ((r.Trial == hfLoopbackTrial && *hfHarness == "") || r.Trial == hfDefaultThreadsTrial || r.Trial == datasetPythonTrial) != (*curlPackages != "") {
 		return errors.New("provide the pinned curl archive for the source trial requiring the additional HTTP client")
 	}
 	if r.Task != "fix-git" && (*codexTools == "" || (readySetup.packagesSHA != "" && *osTools == "")) {
@@ -249,7 +250,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return err
 	}
 	req := deployment.Request{Name: name, AllowNetwork: r.NeedsNetwork, Image: image, StorageMB: storage, Workdir: r.Workdir, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
-	req.PrivateHostsFile = r.Task == hfTask && r.Trial == hfLoopbackTrial
+	req.PrivateHostsFile = r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial)
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {

@@ -52,6 +52,8 @@ const (
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 type Options struct {
+	// GuestSMT exposes virtual sibling threads in the Firecracker machine request.
+	GuestSMT bool
 	// GuestTaskV3 selects the guest agent on the containerd-v2 integration stack.
 	GuestTaskV3                                       bool
 	Socket, Namespace, Snapshotter, IODir, CNINetwork string
@@ -258,7 +260,7 @@ func (m *Manager) vmRequest(r deployment.Request) *proto.CreateVMRequest {
 		memory = uint32(*r.MemoryMB)
 	}
 	request := &proto.CreateVMRequest{VMID: r.Name, TimeoutSeconds: 120,
-		MachineCfg: &proto.FirecrackerMachineConfiguration{VcpuCount: cpu, MemSizeMib: memory},
+		MachineCfg: &proto.FirecrackerMachineConfiguration{VcpuCount: cpu, MemSizeMib: memory, HtEnabled: m.options.GuestSMT},
 		// Explicit StopVM owns teardown, including partial task creation.
 		ExitAfterAllTasksDeleted: false,
 	}

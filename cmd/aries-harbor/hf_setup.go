@@ -23,6 +23,12 @@ var hfTrials = func() map[string]hfSource {
 	return profiles
 }()
 
+const hfGunicornLoopbackTrial = "249f2934-972f-4c61-af3d-0315ce5003c0"
+
+func hfResolvesHostnameToLoopback(trial string) bool {
+	return trial == hfLoopbackTrial || trial == hfDefaultThreadsTrial || trial == hfGunicornLoopbackTrial
+}
+
 const hfLoopbackTrial = "f0d5e4b5-b20d-40bf-89ec-6483b65525dc"
 const hfTask = "hf-model-inference"
 const hfEnvironmentSHA = "04ac35b54101efa80a45737dac838f3e51dfbd481f079be1495ffdfe4f05732a"
@@ -63,8 +69,8 @@ rm -r /tmp/aries-hf-setup
 
 func hfSourceSetup(trial string) string {
 	extra := ""
-	// This recording resolved its own sandbox hostname to loopback at step 24.
-	if trial == hfLoopbackTrial {
+	// Original HTTP tests resolve the sandbox hostname to an IPv4 loopback address.
+	if hfResolvesHostnameToLoopback(trial) {
 		extra = `
 python - <<'HOSTCHECK'
 from pathlib import Path

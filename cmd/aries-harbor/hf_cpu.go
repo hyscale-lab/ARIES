@@ -30,6 +30,9 @@ if sys.argv[2] == "b615a3ec-fae8-4198-ae4c-0aedf9c3e25b":
  data["probe_torch_default_threads"]=torch.get_num_threads()
  data["guest_topology"]={p.name:(p/"topology/thread_siblings_list").read_text().strip() for p in Path("/sys/devices/system/cpu").glob("cpu[0-9]*")}
  data["thread_environment"]={k:os.environ.get(k) for k in ("OMP_NUM_THREADS","MKL_NUM_THREADS","PYTHON_CPU_COUNT")}
+ if sys.argv[3] == "true":
+  assert set(data["guest_topology"].values()) == {"0-1"}, data
+  assert data["probe_torch_default_threads"] == 1 and all(value is None for value in data["thread_environment"].values()),data
  if phase=="after_source":
   app=ast.parse(Path("/app/app.py").read_text())
   setters=[ast.unparse(x.func) for x in ast.walk(app) if isinstance(x,ast.Call) and ast.unparse(x.func).endswith("set_num_threads")]
@@ -113,7 +116,7 @@ func checkHFCPU(ctx context.Context, m *vhive.Manager, id, trial string, hostCPU
 	if err != nil {
 		return fmt.Errorf("host vCPU check: %w: %s", err, host)
 	}
-	guest, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-I", "-c", hfCPUGuest, phase, trial}, Dir: "/app"})
+	guest, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-I", "-c", hfCPUGuest, phase, trial, strconv.FormatBool(sourceCPU)}, Dir: "/app"})
 	if err != nil {
 		return err
 	}

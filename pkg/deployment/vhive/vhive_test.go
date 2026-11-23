@@ -486,6 +486,10 @@ func TestVMRequestAndUnsupportedSettings(t *testing.T) {
 	if vm.MachineCfg.VcpuCount != 2 || vm.MachineCfg.MemSizeMib != 4096 || len(vm.NetworkInterfaces) != 0 || vm.ExitAfterAllTasksDeleted {
 		t.Fatalf("VM config=%v", vm)
 	}
+	m.options.GuestSMT = true
+	if !m.vmRequest(r).MachineCfg.HtEnabled || vm.MachineCfg.HtEnabled {
+		t.Fatal("guest SMT was not passed through the machine configuration")
+	}
 	r.AllowNetwork = true
 	if m.vmRequest(r).NetworkInterfaces[0].CNIConfig.NetworkName != "fcnet" {
 		t.Fatal("missing CNI network")
