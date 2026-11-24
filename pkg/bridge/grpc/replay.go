@@ -19,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 )
 
@@ -30,18 +31,31 @@ const replayFileMode os.FileMode = 0o600
 const replayDirectoryMode os.FileMode = 0o700
 
 type replaySourceMetadata struct {
-	RunID              string            `json:"run_id"`
-	SchemaVersion      int               `json:"schema_version"`
-	ReplayReady        bool              `json:"replay_ready"`
-	SandboxID          string            `json:"SandboxID"`
-	BenchmarkType      string            `json:"benchmark_type"`
-	TaskID             string            `json:"task_id"`
-	OccurrenceID       json.RawMessage   `json:"occurrence_id"`
-	Image              string            `json:"image"`
-	BenchmarkRevisions map[string]string `json:"benchmark_revisions"`
-	HarnessCompletedAt string            `json:"harness_completed_at"`
-	ToolCallsBytes     *int64            `json:"tool_calls_bytes"`
-	ToolCallsSHA256    string            `json:"tool_calls_sha256"`
+	OriginType         replaySourceOrigin `json:"origin_type"`
+	RunID              string             `json:"run_id"`
+	SchemaVersion      int                `json:"schema_version"`
+	ReplayReady        bool               `json:"replay_ready"`
+	SandboxID          string             `json:"SandboxID"`
+	BenchmarkType      string             `json:"benchmark_type"`
+	TaskID             string             `json:"task_id"`
+	OccurrenceID       json.RawMessage    `json:"occurrence_id"`
+	Image              string             `json:"image"`
+	BenchmarkRevisions map[string]string  `json:"benchmark_revisions"`
+	TaskPackageDigest  string             `json:"task_package_digest"`
+	HarnessCompletedAt string             `json:"harness_completed_at"`
+	ToolCallsBytes     *int64             `json:"tool_calls_bytes"`
+	ToolCallsSHA256    string             `json:"tool_calls_sha256"`
+}
+
+type replaySourceOrigin string
+
+func (origin *replaySourceOrigin) UnmarshalJSON(data []byte) error {
+	var value string
+	if *origin != "" || json.Unmarshal(data, &value) != nil || value != replay.OriginARIES && value != replay.OriginHarbor {
+		return errors.New("replay origin_type must be one aries or harbor string")
+	}
+	*origin = replaySourceOrigin(value)
+	return nil
 }
 
 // LoadReplaySource validates all private source evidence before returning a plan.
@@ -51,10 +65,10 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 }
 
 func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int) (replay.Plan, error) {
-	return loadReplaySourceContext(context.Background(), sourceDir, task, benchmarkType, revisions, maxPlanBytes, nil, nil)
+	return loadReplaySourceContext(context.Background(), sourceDir, task, benchmarkType, revisions, maxPlanBytes, nil, nil, nil)
 }
 
-func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int, result *replayRunIndex, binding *replaySourceBinding) (replay.Plan, error) {
+func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int, result *replayRunIndex, binding *replaySourceBinding, logger *logrus.Entry) (replay.Plan, error) {
 	var plan replay.Plan
 	if err := ctx.Err(); err != nil {
 		return plan, err
@@ -97,10 +111,15 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if err := json.Unmarshal(runtimeData, &metadata); err != nil {
 		return plan, fmt.Errorf("decode replay runtime: %w", err)
 	}
+	plan.OriginType = string(metadata.OriginType)
+	if plan.OriginType == "" {
+		plan.OriginType = replay.OriginARIES
+	}
+	plan.TaskPackageDigest = metadata.TaskPackageDigest
 	if metadata.SchemaVersion != 1 || !metadata.ReplayReady || metadata.SandboxID == "" || metadata.HarnessCompletedAt == "" || metadata.ToolCallsBytes == nil || *metadata.ToolCallsBytes < 0 || *metadata.ToolCallsBytes > maxReplayLogBytes || !validReplayDigest(metadata.ToolCallsSHA256) {
 		return plan, errors.New("replay runtime is not finalized")
 	}
-	if benchmarkType == "" || task.ID == "" || task.Environment.Image == "" || len(revisions) == 0 || metadata.BenchmarkType != benchmarkType || metadata.TaskID != task.ID || metadata.Image != task.Environment.Image || !maps.Equal(metadata.BenchmarkRevisions, revisions) {
+	if benchmarkType == "" || task.ID == "" || task.Environment.Image == "" || len(revisions) == 0 || metadata.BenchmarkType != benchmarkType || metadata.TaskID != task.ID {
 		return plan, errors.New("replay source task or benchmark does not match")
 	}
 	for name, revision := range revisions {
@@ -130,7 +149,7 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 			return plan, err
 		}
 	}
-	if metadata.RunID != "" && metadata.RunID != result.RunID || metadata.RunID == "" && len(log) == 0 {
+	if metadata.RunID != result.RunID && (metadata.RunID != "" || len(log) == 0 || plan.OriginType == replay.OriginHarbor) {
 		return plan, errors.New("replay source run binding is missing or differs from parent result")
 	}
 	rawEvaluation, err := result.occurrenceEvaluation(occurrence)
@@ -147,11 +166,15 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 		if err := json.Unmarshal(metadata.OccurrenceID, &recordedID); err != nil || recordedID != plan.SourceTaskID {
 			return replay.Plan{}, errors.New("replay source occurrence binding differs from parent result")
 		}
-	} else if len(log) == 0 {
+	} else if len(log) == 0 || plan.OriginType == replay.OriginHarbor {
 		// Older traces must prove the binding with their call records.
 		return replay.Plan{}, errors.New("replay source occurrence binding is missing")
 	}
 	plan.SourceRunID = result.RunID
+
+	if plan.OriginType == replay.OriginHarbor && len(log) != 0 {
+		return replay.Plan{}, errors.New("Harbor replay calls are not supported")
+	}
 
 	var first, latest time.Time
 	starts := make(map[uint64]time.Time)
@@ -216,7 +239,33 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if binding != nil {
 		*binding = replaySourceBinding{runtime: sha256.Sum256(runtimeData), calls: digest, result: result.digest, planBytes: len(encoded)}
 	}
+	if logger != nil {
+		entry := logger.WithContext(ctx).WithFields(logrus.Fields{
+			"source_run_id": plan.SourceRunID, "source_task_id": plan.SourceTaskID,
+			"logical_task_id": task.ID, "origin_type": plan.OriginType,
+		})
+		logReplayAttribute(entry, "image", metadata.Image, task.Environment.Image)
+		keys := slices.AppendSeq(slices.Collect(maps.Keys(revisions)), maps.Keys(metadata.BenchmarkRevisions))
+		slices.Sort(keys)
+		for _, name := range slices.Compact(keys) {
+			logReplayAttribute(entry, "benchmark_revisions."+name, metadata.BenchmarkRevisions[name], revisions[name])
+		}
+	}
 	return plan, nil
+}
+
+func logReplayAttribute(logger *logrus.Entry, attribute, source, target string) {
+	if source == target {
+		return
+	}
+	comparison := "different"
+	if source == "" {
+		comparison = "unverified"
+	}
+	logger.WithFields(logrus.Fields{
+		"attribute": attribute, "comparison": comparison,
+		"source_value": source, "target_value": target,
+	}).Warn("replay starting environment check")
 }
 
 func parseReplayEvaluation(data json.RawMessage) (core.Evaluation, error) {

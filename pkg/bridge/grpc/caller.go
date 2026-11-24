@@ -20,6 +20,9 @@ func ReplayCalls(ctx context.Context, callTimeout time.Duration, client sandboxv
 	if len(plan.Calls) == 0 {
 		return ctx.Err()
 	}
+	if plan.OriginType != "" && plan.OriginType != replay.OriginARIES {
+		return errors.New("replay caller does not support the plan origin")
+	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		return errors.New("replay caller requires a deadline")
 	}

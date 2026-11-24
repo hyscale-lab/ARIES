@@ -87,6 +87,27 @@ func expectedReplayCall(operation string, messages ...proto.Message) replay.Call
 	return call
 }
 
+func TestReplayCallsRejectsUnsupportedOriginBeforeRPC(t *testing.T) {
+	response := &sandboxv1.ExecResponse{}
+	call := expectedReplayCall("Exec", response)
+	var called atomic.Bool
+	client := replayEndpoint(t, &replayServer{exec: func(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+		called.Store(true)
+		return response, nil
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+	defer cancel()
+	for _, origin := range []string{"harbor", "unknown"} {
+		plan := replay.Plan{OriginType: origin, Calls: []replay.Call{call}}
+		if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err == nil {
+			t.Errorf("unsupported origin %q was accepted", origin)
+		}
+	}
+	if called.Load() {
+		t.Error("unsupported origin sent an RPC")
+	}
+}
+
 func TestReplayCallCarriesSourceSequenceSeparateFromToolCallID(t *testing.T) {
 	const firstSourceSequence uint64 = 1
 	const decimalBase = 10

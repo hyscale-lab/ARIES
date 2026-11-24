@@ -160,7 +160,9 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 		if err := errors.Join(readErr, closeErr); err != nil {
 			return nil, err
 		}
-		var metadata replaySourceMetadata
+		var metadata struct {
+			TaskID string `json:"task_id"`
+		}
 		if err := json.Unmarshal(data, &metadata); err != nil {
 			return nil, fmt.Errorf("decode replay runtime: %w", err)
 		}
@@ -177,7 +179,7 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 			return nil, errors.New("replay source has no matching logical task")
 		}
 		selected := replaySelectedSource{dir: dir, task: task}
-		plan, err := loadReplaySourceContext(ctx, dir, task, benchmarkType, selection.revisions, selection.maxPlanBytes, result, &selected.binding)
+		plan, err := loadReplaySourceContext(ctx, dir, task, benchmarkType, selection.revisions, selection.maxPlanBytes, result, &selected.binding, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +263,7 @@ func (selection *ReplaySelection) Load(ctx context.Context, index int) (replay.P
 	}
 	source := selection.sources[index]
 	var binding replaySourceBinding
-	plan, err := loadReplaySourceContext(ctx, source.dir, source.task, selection.benchmark, selection.revisions, selection.maxPlanBytes, nil, &binding)
+	plan, err := loadReplaySourceContext(ctx, source.dir, source.task, selection.benchmark, selection.revisions, selection.maxPlanBytes, nil, &binding, nil)
 	if err != nil {
 		return replay.Plan{}, err
 	}

@@ -19,6 +19,8 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -308,6 +310,183 @@ func TestLoadReplaySourceRejectsAnyBadCall(t *testing.T) {
 	}
 }
 
+func TestReplaySourceCarriesOccurrenceOrigin(t *testing.T) {
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const packageDigest = "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+	for _, tc := range []struct {
+		name   string
+		origin any
+		want   string
+	}{
+		{name: "legacy native", want: "aries"},
+		{name: "explicit native", origin: "aries", want: "aries"},
+		{name: "converted", origin: "harbor", want: "harbor"},
+		{name: "unknown", origin: "other"},
+		{name: "blank", origin: ""},
+		{name: "null", origin: json.RawMessage("null")},
+		{name: "boolean", origin: true},
+		{name: "duplicate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := writeReplaySource(t, nil, at, core.Evaluation{Status: core.StatusSucceeded})
+			updateReplayMetadata(t, source, "origin_type", tc.origin)
+			if tc.name == "duplicate" {
+				path := filepath.Join(source, "bridge", "runtime.json")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append([]byte(`{"origin_type":"harbor","origin_type":"aries",`), bytes.TrimPrefix(data, []byte("{"))...), replayFileMode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.want == "harbor" {
+				updateReplayMetadata(t, source, "task_package_digest", packageDigest)
+				updateReplayMetadata(t, source, "image", nil)
+				updateReplayMetadata(t, source, "benchmark_revisions", nil)
+			}
+			ctx := context.Background()
+			selection, err := PreflightReplaySource(ctx, source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+			if tc.want == "" {
+				if err == nil || !strings.Contains(err.Error(), "origin_type") || selection != nil {
+					t.Fatalf("invalid origin: preflight error = %v, want origin_type error and no selection", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			const firstOccurrence = 0
+			plan, err := selection.Load(ctx, firstOccurrence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var evidence map[string]json.RawMessage
+			if err := json.Unmarshal(data, &evidence); err != nil {
+				t.Fatal(err)
+			}
+			if string(evidence["origin_type"]) != `"`+tc.want+`"` {
+				t.Errorf("plan origin = %s, want %q", evidence["origin_type"], tc.want)
+			}
+			if tc.want == "harbor" && string(evidence["task_package_digest"]) != `"`+packageDigest+`"` {
+				t.Errorf("plan package digest = %s, want %q", evidence["task_package_digest"], packageDigest)
+			}
+		})
+	}
+}
+
+func TestReplayPreflightReportsSourceEnvironmentWithoutWaivingResponseChecks(t *testing.T) {
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceImage = "source-image:tag"
+	const sourceRevision = "source-revision"
+	const sourceEvaluator = "source-evaluator"
+	for _, tc := range []struct {
+		name       string
+		image      any
+		revisions  any
+		comparison string
+		wantImage  string
+		wantRev    string
+		wantExtra  string
+	}{
+		{name: "different", image: sourceImage, revisions: map[string]string{"revision": sourceRevision}, comparison: "different", wantImage: sourceImage, wantRev: sourceRevision},
+		{name: "source-only revision", image: sourceImage, revisions: map[string]string{"revision": sourceRevision, "evaluator_revision": sourceEvaluator}, comparison: "different", wantImage: sourceImage, wantRev: sourceRevision, wantExtra: sourceEvaluator},
+		{name: "missing", comparison: "unverified"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const callSequence = 1
+			// The source response has a different status from the fake endpoint's response.
+			source := writeReplaySource(t, []toolCallRecord{replayRecord(at, at, callSequence)}, at, core.Evaluation{Status: core.StatusNotRun})
+			updateReplayMetadata(t, source, "image", tc.image)
+			updateReplayMetadata(t, source, "benchmark_revisions", tc.revisions)
+			var output bytes.Buffer
+			logger := logrus.New()
+			logger.SetOutput(&output)
+			logger.SetFormatter(&logrus.JSONFormatter{})
+			ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+			defer cancel()
+			selection, err := PreflightReplaySource(ctx, source, []core.Task{replayTask}, replayBenchmark, replayRevisions, logger.WithField("run_id", "target-run"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string][2]string{"image": {tc.wantImage, replayImage}, "benchmark_revisions.revision": {tc.wantRev, replayRevision}}
+			if tc.wantExtra != "" {
+				want["benchmark_revisions.evaluator_revision"] = [2]string{tc.wantExtra, ""}
+			}
+			for line := range bytes.Lines(output.Bytes()) {
+				var entry map[string]string
+				if err := json.Unmarshal(line, &entry); err != nil {
+					t.Fatal(err)
+				}
+				attribute := entry["attribute"]
+				values, ok := want[attribute]
+				target, hasTarget := entry["target_value"]
+				if !ok || !hasTarget || entry["level"] != "warning" || entry["comparison"] != tc.comparison || entry["source_value"] != values[0] || target != values[1] || entry["source_task_id"] != replayTaskID {
+					t.Fatalf("unexpected environment warning: %v", entry)
+				}
+				delete(want, attribute)
+			}
+			if len(want) != 0 {
+				t.Fatalf("missing environment warnings: %v", want)
+			}
+			const firstOccurrence = 0
+			plan, err := selection.Load(ctx, firstOccurrence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &replayServer{stat: func(context.Context, *sandboxv1.StatRequest) (*sandboxv1.StatResponse, error) {
+				return nil, status.Error(codes.NotFound, "not in target")
+			}}
+			if err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), plan); err == nil || !strings.Contains(err.Error(), "response mismatch") {
+				t.Fatalf("strict response difference did not fail replay: %v", err)
+			}
+		})
+	}
+}
+
+func TestReplayPreflightRejectsUnusableHarborEvidence(t *testing.T) {
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const callSequence = 1
+	for _, tc := range []struct {
+		name, field string
+		value       any
+		want        string
+	}{
+		{name: "native frames are not Harbor evidence", want: "Harbor replay calls are not supported"},
+		{name: "wrong occurrence", field: "occurrence_id", value: "other-occurrence", want: "occurrence binding"},
+		{name: "missing occurrence", field: "occurrence_id", want: "occurrence binding"},
+		{name: "missing run", field: "run_id", want: "run binding"},
+		{name: "wrong logical task", field: "task_id", value: "unknown-task", want: "no matching logical task"},
+		{name: "invalid completion", field: "harness_completed_at", value: "not a timestamp", want: "completion marker"},
+		{name: "corrupt log digest", field: "tool_calls_sha256", value: strings.Repeat("0", sha256.Size*2), want: "differs from finalized evidence"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := writeReplaySource(t, []toolCallRecord{replayRecord(at, at, callSequence)}, at, core.Evaluation{Status: core.StatusNotRun})
+			updateReplayMetadata(t, source, "origin_type", "harbor")
+			if tc.field != "" {
+				updateReplayMetadata(t, source, tc.field, tc.value)
+			}
+			selection, err := PreflightReplaySource(context.Background(), source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || selection != nil {
+				t.Fatalf("preflight error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadReplaySourceRejectsIncompleteEvidenceAndWrongTask(t *testing.T) {
 	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
 	if err != nil {
@@ -337,10 +516,6 @@ func TestLoadReplaySourceRejectsIncompleteEvidenceAndWrongTask(t *testing.T) {
 		"wrong benchmark":    func(source string) { updateReplayMetadata(t, source, "benchmark_type", "other") },
 		"wrong logical task": func(source string) { updateReplayMetadata(t, source, "task_id", "other") },
 		"wrong occurrence":   func(source string) { updateReplayMetadata(t, source, "occurrence_id", "other") },
-		"wrong image":        func(source string) { updateReplayMetadata(t, source, "image", "other:tag") },
-		"wrong revision": func(source string) {
-			updateReplayMetadata(t, source, "benchmark_revisions", map[string]string{"revision": "other"})
-		},
 		"missing evaluation status": func(source string) {
 			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{RunID: replayRunID, Tasks: []core.TaskResult{{TaskID: replayTaskID}}})
 		},
@@ -557,7 +732,6 @@ func TestPreflightReplaySourceRejectsInvalidFinalOccurrence(t *testing.T) {
 			rewriteReplayRecord(t, filepath.Join(run, finalID), func(record map[string]any) { record["task_id"] = replayTaskID })
 		},
 		"mismatched logical task": func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "task_id", "unknown") },
-		"mismatched provenance":   func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "image", "other:image") },
 		"mismatched run":          func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "run_id", "other-run") },
 		"incomplete evidence":     func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "replay_ready", false) },
 		"missing evaluation": func(run string) {
@@ -600,6 +774,9 @@ func TestReplaySelectionRejectsChangedFinalizedEvidence(t *testing.T) {
 		},
 		"runtime completion": func(source string) {
 			updateReplayMetadata(t, source, "harness_completed_at", bridgekit.FormatTime(start.Add(time.Second)))
+		},
+		"runtime origin": func(source string) {
+			updateReplayMetadata(t, source, "origin_type", "aries")
 		},
 		"parent result": func(source string) {
 			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{RunID: replayRunID, Name: "changed", Tasks: []core.TaskResult{

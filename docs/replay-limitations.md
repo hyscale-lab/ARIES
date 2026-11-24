@@ -20,12 +20,13 @@ The limits below describe current behavior, not the
   attachment; Docker needs one local socket, Kubernetes one namespace.
   The unauthenticated bridge must stay on a trusted private network.
 - Sources need private directories (`0700`), regular evidence files (`0600`),
-  finalized complete logs, matching task/image/revisions, and a unique parent
-  occurrence. A source grade is optional.
+  finalized complete logs, matching benchmark and logical task, and a unique
+  parent occurrence. A source grade is optional. Preflight warns if the source
+  image or benchmark revision differs from the target or is unverified.
   Incomplete, changed, rejected, canceled, or failed-write evidence rejects the source.
   Complete admitted non-write failures and nonzero `Exec` exits can be valid expectations.
 - Old sources without finalized capture evidence are invalid. Older nonempty
-  sources can omit metadata `run_id` or `occurrence_id` only if every call
+  native sources can omit metadata `run_id` or `occurrence_id` only if every call
   proves the missing binding. Empty sources require both IDs in the metadata.
   Missing captured `Exec` output alone need not invalidate complete response checks.
 - Only `Exec`, `Stat`, `ReadFile`, `ReadLines`, and `WriteFile` are supported.

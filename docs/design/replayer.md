@@ -101,7 +101,7 @@ The loader requires recording metadata `run_id` to match the parent result, incl
 
 ## 5. Replayer components
 
-**Trace sanity check (parser).** Before task sandbox creation, `LoadReplaySource` reads the complete versioned gRPC trace and per-task `bridge/runtime.json` for one task. It checks the saved log length and SHA-256 digest before parsing calls. It rejects early refusals, canceled calls, missing inputs, `replay_error`, missing response checks, missing completion marker, and incomplete audit. It computes call-start offsets from the earliest `started_at` and the final wait from the latest completion-time `timestamp` to the completion marker. It rejects a negative final wait before sandbox start. An empty trace has no call offsets or final wait. File `sequence` reflects completion order, not start order; it serves as source record identity. The loader matches the source benchmark type, logical task ID, image reference, pinned revisions, and one parent occurrence in `run-result.json`. Only after the full check succeeds does Runner create and prepare the sandbox. These checks do not prove identical prepared state. Historical pre-extension runs are not silently upgraded. A new live run must first capture a [replay-ready trace](#4-capture-contract) (`pkg/bridge/grpc/replay.go:44-193,234-320`; `pkg/runner/runner.go:430-458`). The parser produces a transport-neutral sandbox-call plan with request, expected outcome, and start offset.
+**Trace sanity check (parser).** Before task sandbox creation, `LoadReplaySource` reads the complete versioned gRPC trace and per-task `bridge/runtime.json` for one task. It checks the saved log length and SHA-256 digest before parsing calls. It rejects early refusals, canceled calls, missing inputs, `replay_error`, missing response checks, missing completion marker, and incomplete audit. It computes call-start offsets from the earliest `started_at` and the final wait from the latest completion-time `timestamp` to the completion marker. It rejects a negative final wait before sandbox start. An empty trace has no call offsets or final wait. File `sequence` reflects completion order, not start order; it serves as source record identity. The loader requires a matching benchmark type, logical task ID, and unique parent occurrence in `run-result.json`. Preflight reports image and revision differences separately from these identity checks. Only after the full check succeeds does Runner create and prepare the sandbox. These checks do not prove identical prepared state. Historical pre-extension runs are not silently upgraded. A new live run must first capture a [replay-ready trace](#4-capture-contract) (`pkg/bridge/grpc/replay.go`; `pkg/runner/runner.go:430-458`). The parser produces a transport-neutral sandbox-call plan with request, expected outcome, and start offset.
 
 Before task sandbox creation, whole-run preflight reports equal starts across occurrences through the owning run's Logrus logger in `aries.log`. Runner also reports equal starts within an occurrence. Each warning names the source run, source occurrence, source sequences, and common timestamp and offset. It contains no command, response output, or credentials.
 
@@ -224,9 +224,25 @@ An older finalized trace can omit `occurrence_id` only if its call log is nonemp
 and every call identifies the selected occurrence. An empty trace needs the
 metadata ID because it has no calls to prove the binding.
 
+The loader reads `origin_type` from the occurrence metadata. Only an absent
+field defaults to `aries`. The plan retains the origin and any
+`task_package_digest`. Harbor metadata requires explicit `run_id` and
+`occurrence_id`. Harbor sources with calls are not yet executable.
+
 ### 9.3 Starting-state checks and application flow
 
-During the [trace sanity check](#5-replayer-components), before task sandbox creation, compare the recorded benchmark type, logical task ID, selected image reference, and pinned benchmark revisions with the new run. Run the benchmark's normal sandbox preparation. A source task-occurrence ID identifies the call log; it is not the logical benchmark task ID (`internal/app/execution.go:32-43,84-112`; `pkg/bridge/grpc/replay.go:31-42,113-143`; `pkg/runner/runner.go:430-441`). These are guards against a wrong task or image, not proof of identical prepared state. Task image references use tags; a tag can resolve to different bytes on another run. Do not add a full state snapshot or require an image digest in the first version (`pkg/containerimage/image.go:20-38`). Allow Docker-to-Kubernetes replay and report each changed bridge-visible response hash as nonfatal drift. Strict differences still fail replay.
+During the [trace sanity check](#5-replayer-components), require a matching
+benchmark type and logical task. A source occurrence ID identifies the call log,
+not the logical benchmark task. Preflight warns about each different image
+reference or benchmark revision and logs both values. A missing source value is
+`unverified`, not a known difference. Replay uses the target catalog and runs
+the benchmark's normal sandbox preparation. A preparation failure prevents
+calls. An image tag can resolve to different bytes on another run.
+These checks do not prove identical prepared state and do not require an image
+digest (`pkg/bridge/grpc/replay.go`; `pkg/runner/runner.go`;
+`pkg/containerimage/image.go`). Replay can move from Docker to Kubernetes.
+A response hash difference alone is diagnostic. Strict response mismatches
+still fail replay after an environment warning.
 
 The application now selects a replay branch before model preparation and preflight. It keeps benchmark preparation, sandbox start, bridge start, caller execution, positive caller stop, bridge revocation, and sandbox cleanup in order (`internal/app/run.go:95-114,278-344,426-490`; `pkg/runner/runner.go:430-514`). The replay branch reports execution separately from harness status and reused evaluation. It does not upload private verifier material or call `Benchmark.Evaluate` (`pkg/runner/runner.go:430-514`). Toolathlon remains a [deferred feature](#10-open-questions-and-deferred-features) because its MCP interactions are not in this gRPC trace (`cmd/aries/wiring.go:52-68`).
 

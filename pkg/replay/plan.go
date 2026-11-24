@@ -34,12 +34,19 @@ type Call struct {
 	ResponseStderr []byte        `json:"-"`
 }
 
+const (
+	OriginARIES  = "aries"
+	OriginHarbor = "harbor"
+)
+
 // Plan holds the complete request schedule and the recorded source evaluation.
 type Plan struct {
-	Calls        []Call        `json:"calls"`
-	FinalWait    time.Duration `json:"final_wait"`
-	SourceRunID  string        `json:"source_run_id"`
-	SourceTaskID string        `json:"source_task_id"`
+	Calls             []Call        `json:"calls"`
+	FinalWait         time.Duration `json:"final_wait"`
+	SourceRunID       string        `json:"source_run_id"`
+	SourceTaskID      string        `json:"source_task_id"`
+	OriginType        string        `json:"origin_type"`
+	TaskPackageDigest string        `json:"task_package_digest,omitempty"`
 	// Evaluation reports unavailable when the source has no grade.
 	Evaluation core.Evaluation `json:"evaluation"`
 	// StartedAt is the recorded source timeline origin, not a replay scheduling epoch.

@@ -1671,6 +1671,21 @@ func TestReplayEmptyTracePreservesSourceEvaluationWithoutVerifier(t *testing.T) 
 	}
 }
 
+func TestReplayFailedSandboxPreparationBlocksCalls(t *testing.T) {
+	const firstReplaySequence = 1
+	call := replay.Call{Sequence: firstReplaySequence, Operation: "Stat", Path: "/target"}
+	rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusNotRun}, call)
+	rig.benchmark.prepareErr = errInjected
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, errInjected) || result.Tasks[0].Cleanup.Status != core.StatusSucceeded {
+		t.Fatalf("sandbox preparation failure: result = %+v, error = %v", result, err)
+	}
+	want := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "sandbox.stop"}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("replay lifecycle = %v, want %v", got, want)
+	}
+}
+
 func TestReplayMismatchDoesNotInheritSourceSuccess(t *testing.T) {
 	// The source reward of 1 cannot make a mismatched replay succeed.
 	const firstReplaySequence = 1 // The first recorded call has sequence 1.
