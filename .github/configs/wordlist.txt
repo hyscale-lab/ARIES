@@ -245,6 +245,7 @@ lowercased
 debian
 typescript
 Codex
+Harbor
 stdio
 exec
 rollout

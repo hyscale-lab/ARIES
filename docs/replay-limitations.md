@@ -34,6 +34,31 @@ The limits below describe current behavior, not the
   Binary or control-bearing request bodies are unsupported, even with raw logs.
   Binary `Exec` output can use base64; read-response bodies are hashed, not retained.
 
+## Harbor conversion limits
+
+- The Python converter supports the Codex artifact format for
+  `terminal-bench/terminal-bench-2-1`. It needs each trial's `config.json`,
+  `result.json`, `agent/codex.txt`, and one `agent/sessions/**/rollout-*.jsonl`.
+  An optional `lock.json` and optional `agent/trajectory.json` must agree
+  with the required evidence. A job input also needs a job `result.json`
+  that accounts for every trial directory.
+- The converter accepts matching Bash commands with recorded workdirs, and
+  successful patches that add one file. For example, a wrapper that runs
+  `printf ready` in `/tmp` and, if a session ID exists, waits with empty input
+  becomes one `Exec` with recorded output `ready` and exit code `0`.
+  The trace must establish the final result. There is no second poll call.
+  Input sent to a process, termination or later reuse of a session, and
+  commands built from earlier responses are unsupported. Patch updates and
+  deletes are unsupported.
+- Missing, ambiguous, or unsupported evidence stops conversion at the first
+  failure. Check stderr for the trial, reason, and call when available.
+  A complete trace with no tool calls is valid; a missing trace is not.
+  The converter does not publish partial output or skip a bad trial.
+- Output diagnostics cannot establish a mismatch when capture evidence is
+  unavailable. Unknown stream interleaving permits a length check, not
+  exact-byte comparison. Known truncation makes the output check inconclusive.
+  An independently known exit mismatch still fails.
+
 ## Size and capture bounds
 
 Bounds apply per occurrence unless stated otherwise. There is no fixed parser
@@ -76,7 +101,8 @@ Keep audits, run logs, and stderr private; output can contain task data or crede
   pause, or step mode. gRPC transparent retries can still occur before processing.
   Slow calls can extend duration beyond the source's final wait.
 - Strict response size, gRPC status, `Exec` exit code, and successful write count
-  differences fail an occurrence. SHA-only and timing drift remain nonfatal.
+  differences fail an occurrence when the source supplies comparable evidence.
+  Native SHA-only drift, Harbor same-length content drift, and timing drift remain nonfatal.
   Diagnostic evidence can be `unavailable` without failing replay.
 - Source grades are historical, not new evaluations. No verifier or judge runs.
   Equal bridge responses do not prove equal final filesystem or process state.

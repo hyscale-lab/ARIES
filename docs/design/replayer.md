@@ -157,7 +157,9 @@ or run a model judge.
 
 Replay reports a recorded score or reward as reused, with the recorded evaluation
 status and source IDs. It keeps each number, including zero, and omits missing
-fields. A missing, null, or empty evaluation has no grade. A native `not_run`,
+fields. This policy applies to both native and Harbor sources. A reward does not
+imply a score, and a score does not imply a reward. A missing, null, or empty
+evaluation has no grade. A native `not_run`,
 `blocked_isolation`, or `not_enabled` evaluation has no grade. Numeric zeros are
 placeholders, and nonzero fields contradict these statuses. Only exact `score`
 and `reward` keys identify grade fields. An explicit null or invalid grade value
@@ -229,7 +231,6 @@ field defaults to `aries`. The plan retains the origin and any
 `task_package_digest`. Harbor metadata requires explicit `run_id` and
 `occurrence_id`. The loader accepts converted Harbor `Exec` and successful
 add-file records. See the [synthetic occurrence and exact field contract](../../pkg/bridge/grpc/testdata/harbor-source/README.md).
-The converter is not implemented in this step.
 
 ### 9.3 Starting-state checks and application flow
 
@@ -251,6 +252,61 @@ The application now selects a replay branch before model preparation and preflig
 The app executes each selected occurrence once, with `execution.concurrency` as the allocation limit. It creates one fresh Runner, benchmark occurrence, sandbox, bridge session, and caller per admitted source. It releases these runtime owners before admitting replacement work. It does not prepare every loop-produced sandbox at once or create new loop iterations. Logical task IDs, source occurrence identities, and fresh execution identities remain separate. Local execution-ID strings can match across runs; their run IDs distinguish the executions. Zero-call occurrences remain in results, with or without a grade. Source artifacts stay unchanged; replay writes a separate run directory.
 
 The first version [reuses available source grades](#8-reused-evaluation-in-the-first-version) from `run-result.json`. It needs no replay judge model or evaluation-mode field. Show the inherited result with its source identity, separate from replay execution and isolation status. Rerunning a verifier or comparing new and old grades is future work.
+
+### 9.4 Harbor Codex replay
+
+**Convert before replay.** The standalone Python converter reads one Codex
+trial (`--harbor-trial`) or all trials in one complete Harbor job (`--harbor-run`).
+Exactly one input flag and an explicit, new `--output-dir` are required. The
+converter publishes a complete source or fails without publishing a partial job.
+ARIES does not read the original Harbor artifacts at replay time. The
+[operator steps](../quick-start.md#replay-a-harbor-codex-recording) cover both modes.
+
+**Bind evidence to the occurrence.** The converter joins `agent/codex.txt`
+with one timestamped Codex rollout. An optional `agent/trajectory.json` must
+agree when present. Missing or ambiguous command or result evidence fails
+conversion, as does an unsupported trial or operation. The supported benchmark
+source is Terminal-Bench 2.1. Each trial ID remains a separate source occurrence,
+even for repeated logical task IDs. The converted parent index and each
+occurrence's binding use the [ordinary replay layout](#92-source-occurrence-and-recorded-artifacts).
+The package digest, when present, is not a benchmark revision or image.
+Use the target catalog for sandbox preparation and the
+[starting-state checks](#93-starting-state-checks-and-application-flow).
+
+**Replay operations, not sessions.** One recorded Bash command and its optional
+empty-input wait become one `Exec` at the command's Codex request time. Replay
+does not send a poll. The converter requires a uniquely paired final result.
+Interactive input, process termination, session reuse, and command construction
+from prior responses are unsupported. A successful single add-file patch
+becomes `WriteFile` with the recorded path and complete bytes. A later call in
+the same trial can read that file, but no other trial shares its sandbox.
+
+**Preserve the request schedule.** Whole-run conversion retains the UTC times
+and orders trials by first request, then trial ID. Confirmed zero-call trials
+come last, in trial-ID order. Missing traces are not zero-call evidence.
+Whole-run replay measures request offsets from the earliest selected request.
+Concurrency and readiness can delay admission without resetting offsets.
+A single selected occurrence starts at its first request (offset zero).
+The final wait for a nonempty trial is the interval from the latest recorded
+return to `agent_execution.finished_at`, not to verifier or job completion.
+For either origin, drift is the observed replay bridge admission offset minus
+the recorded offset. The source offset measures Codex tool requests for Harbor
+and bridge admissions for native ARIES. Neither measures shell runtime.
+
+**Compare only supported evidence.** Native replay retains framed gRPC checks.
+Harbor `Exec` checks the exit code independently and compares the decoded UTF-8
+payload length with stdout bytes plus stderr bytes. Status headers and JSON
+escaping are not payload. For comparable output, a length difference fails;
+different bytes of equal length are diagnostic. Unknown stream interleaving
+allows a length check but not an exact byte comparison. Known truncation or
+missing diagnostic capture is inconclusive, not a confirmed mismatch. Harbor
+`WriteFile` checks RPC success and returned byte count against the request body.
+The converter does not infer source truncation from an output limit or invent
+native response digests. See the
+[comparison map](../research/harbor-codex-replay.md) and
+[result fields](../run-results.md#sandbox-call-replay-results). Neither drift
+nor an environment warning can override a strict failure or change the
+[historical grade](#8-reused-evaluation-in-the-first-version).
 
 ## 10. Open questions and deferred features
 

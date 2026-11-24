@@ -23,6 +23,10 @@
   evaluation. Aggregate audit failure leaves revocation unconfirmed; block live
   evaluation and report cleanup truthfully. See
   [capture failure rules](../docs/replay-limitations.md#size-and-capture-bounds).
+  For [Harbor conversion and replay](../docs/quick-start.md#replay-a-harbor-codex-recording),
+  verify with synthetic evidence and no live agent or grader. Check saved
+  [replay results](../docs/run-results.md#sandbox-call-replay-results) for source
+  provenance, strict failures versus diagnostic drift, and confirmed cleanup.
 - Keep credentials, datasets, and run artifacts ignored. Report actual evidence
   and validation gaps.
 

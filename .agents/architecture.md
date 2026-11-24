@@ -50,6 +50,9 @@ state and runtime owners, including repeated task IDs. Runner explicitly revokes
 sessions; use fresh bounded cleanup contexts after cancellation. No assignment
 leases or controller-liveness supervision. Record every selected occurrence,
 including repeats and timed-loop admissions. Do not claim sandbox lifecycle timing
-fidelity. See [replay design](../docs/design/replayer.md).
+fidelity. For [replay](../docs/design/replayer.md), preserve sandbox and bridge
+ownership. Attempt caller stop first, then attempt bridge revocation even if
+caller stop is unconfirmed. Read finalized diagnostics only after both are
+confirmed. Reuse only recorded grades; do not run evaluation.
 
 Details: [design](../docs/design.md), [contracts](components.md).

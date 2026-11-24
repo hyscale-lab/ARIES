@@ -362,8 +362,10 @@ task's `task.toml`; no version-catalog or Go code change is required.
 ## Sandbox-call replay
 
 A replay profile selects one earlier task occurrence or a complete recorded run,
-not an arrival schedule. Create a new profile from the live profile that produced
-a `hermes-grpc` trace. Keep the same benchmark type, catalog selection for all
+not an arrival schedule. It accepts a native `hermes-grpc` trace or a
+[converted Harbor Codex source](quick-start.md#replay-a-harbor-codex-recording).
+For a native source, create a replay profile from the source live profile.
+Keep the same benchmark type, catalog selection for all
 source logical tasks, versions file,
 overrides file, sandbox, and managed bridge settings. Remove top-level `model`,
 `harness`, and `runtime`. Add this fragment, with a source path relative to the
