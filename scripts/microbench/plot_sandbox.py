@@ -39,7 +39,6 @@ BACKENDS = [
     ("pod-kata", "Pod, Kata"),
     ("agentsandbox-kata", "agent-sandbox, Kata"),
 ]
-CLIENT = {"cube": "in process", "opensandbox": "in process", "docker": "docker CLI"}
 RUNTIMES = [("", "runc"), ("-gvisor", "gVisor"), ("-kata", "Kata")]
 MODES = [("k8s", "Pod", BLUE), ("k8s-agent-sandbox", "agent-sandbox", ORANGE), ("k8s-warm-pool", "Warm pool", GREEN)]
 HARNESSES = [("hermes", "Hermes"), ("openclaw", "OpenClaw")]
@@ -91,7 +90,7 @@ def plot_create(stats, out, record):
     axis.set_xscale("log")
     axis.set_xlim(0.05, 40)
     axis.set_yticks(range(len(BACKENDS)))
-    axis.set_yticklabels(["%s (%s)" % (label, CLIENT.get(key, "kubectl")) for key, label in BACKENDS])
+    axis.set_yticklabels([label for _, label in BACKENDS])
     axis.invert_yaxis()
     axis.set_xlabel("seconds, log scale: bar to p50, line to p95; label is p50 (50 rounds)")
     axis.set_title("Phase 0: time to create a usable sandbox", loc="left", pad=22)
@@ -120,9 +119,10 @@ def plot_exec_delete(stats, out, record):
         axis.set_title(title, loc="left")
         axis.set_xlabel("seconds, median at concurrency 1")
     axes[0].set_yticks(range(len(BACKENDS)))
-    axes[0].set_yticklabels(["%s (%s)" % (label, CLIENT.get(key, "kubectl")) for key, label in BACKENDS])
+    axes[0].set_yticklabels([label for _, label in BACKENDS])
     axes[0].invert_yaxis()
-    figure.text(0.01, -0.03, "Exec compares only within a client: the command-line tools pay a process start per call. "
+    figure.text(0.01, -0.06, "Docker and the Kubernetes backends are driven through docker and kubectl, which pay a process start per call;\n"
+                "CubeSandbox and OpenSandbox through their HTTP APIs, so exec compares only within those groups.\n"
                 "agent-sandbox's delete here is kubectl's background cascade; ARIES deletes in the foreground.",
                 fontsize=7, color=MUTED)
     figure.tight_layout()

@@ -105,7 +105,7 @@ only the Sandbox object is gone.
   `docker run` starts a container.
 - **Exec times compare only within a client.** The command-line tools pay a
   process start per call (`docker` about 140 ms, `kubectl` about 165 ms);
-  CubeSandbox and OpenSandbox are called in process. Phase 1 measures exec
+  CubeSandbox and OpenSandbox are called through their HTTP APIs from the probe's own process. Phase 1 measures exec
   through ARIES itself.
 - **A plain runc pod takes 3.2 s to delete,** against about 1 s under gVisor or
   Kata: `sleep` ignores SIGTERM, so the kubelet waits out the grace period.
