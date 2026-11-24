@@ -832,6 +832,105 @@ else:
 	})
 }
 
+func TestLoadHarborRunConverterOutput(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Harbor converter publication requires Linux")
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is not available")
+	}
+	root := t.TempDir()
+	job, source := filepath.Join(root, "harbor-job"), filepath.Join(root, "source")
+	const fixture = `import sys
+from pathlib import Path
+from test_convert_harbor import write_run
+write_run(Path(sys.argv[1]))
+`
+	command := exec.CommandContext(t.Context(), python, "-B", "-c", fixture, job)
+	command.Dir = "../../../scripts"
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("write synthetic Harbor run: %v: %s", err, output)
+	}
+	command = exec.CommandContext(t.Context(), python, "convert_harbor.py", "--harbor-run", job, "--output-dir", source)
+	command.Dir = "../../../scripts"
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("convert synthetic Harbor run: %v: %s", err, output)
+	}
+
+	const later = "task__m-later"
+	const laterOffset = 30 * time.Second
+	const earlyWait = 1876543211 * time.Nanosecond
+	const laterWait = 5 * time.Second
+	const laterScore = 0.5
+	type occurrenceSpec struct {
+		id         string
+		offset     time.Duration
+		wait       time.Duration
+		evaluation string
+	}
+	expected := []occurrenceSpec{
+		{id: "task__y-early", wait: earlyWait, evaluation: "reward"},
+		{id: "task__z-early", wait: earlyWait, evaluation: "reward"},
+		{id: later, offset: laterOffset, wait: laterWait, evaluation: "score"},
+		{id: "task__a-empty", evaluation: "reward"},
+		{id: "task__b-empty", evaluation: "reward"},
+	}
+	const firstRequest = "2026-11-05T12:00:01.123456789Z"
+	start, err := time.Parse(time.RFC3339Nano, firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{source, filepath.Join(source, later)} {
+		selection, err := PreflightReplaySource(t.Context(), path, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := expected
+		wantStart := start
+		if path != source {
+			want = []occurrenceSpec{{id: later, wait: laterWait, evaluation: "score"}}
+			wantStart = start.Add(laterOffset)
+		}
+		if len(selection.Occurrences) != len(want) || selection.SourceRunID != replayRunID || !selection.StartedAt.Equal(wantStart) {
+			t.Fatalf("source %s has wrong run ID, occurrence count, or UTC origin", path)
+		}
+		for index, occurrence := range selection.Occurrences {
+			spec := want[index]
+			plan, err := selection.Load(t.Context(), index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if occurrence.SourceTaskID != spec.id || occurrence.LogicalTaskID != replayTask.ID ||
+				plan.OriginType != replay.OriginHarbor || plan.SourceRunID != replayRunID ||
+				plan.SourceTaskID != spec.id || plan.FinalWait != spec.wait {
+				t.Fatalf("source %s occurrence %d has wrong identity or final wait", path, index)
+			}
+			if spec.wait == 0 {
+				if len(plan.Calls) != 0 || !plan.StartedAt.IsZero() {
+					t.Fatalf("empty occurrence %s has a call schedule", spec.id)
+				}
+			} else if len(plan.Calls) != 1 || plan.Calls[0].StartOffset != spec.offset ||
+				!plan.StartedAt.Equal(selection.StartedAt) {
+				t.Fatalf("occurrence %s has wrong request schedule for source %s", spec.id, path)
+			}
+			grade, err := json.Marshal(plan.Evaluation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values map[string]json.RawMessage
+			if err := json.Unmarshal(grade, &values); err != nil {
+				t.Fatal(err)
+			}
+			if plan.Evaluation.Status != core.StatusSucceeded ||
+				spec.evaluation == "reward" && (string(values["reward"]) != "0" || values["score"] != nil) ||
+				spec.evaluation == "score" && (plan.Evaluation.Score != laterScore || values["reward"] != nil) {
+				t.Fatalf("occurrence %s has wrong grade: %s", spec.id, grade)
+			}
+		}
+	}
+}
+
 func TestReplayPreflightRejectsUnusableHarborEvidence(t *testing.T) {
 	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
 	if err != nil {

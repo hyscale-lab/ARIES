@@ -88,19 +88,19 @@ def event(kind, **payload):
     return {"type": kind, "timestamp": payload.pop("timestamp", START), "payload": payload}
 
 
-def write_trial(parent, *, wrapper=SHELL_WRAPPER + WAIT, with_trajectory=False, with_patch=False):
-    trial = parent / TRIAL
+def write_trial(parent, *, name=TRIAL, run=RUN, wrapper=SHELL_WRAPPER + WAIT, with_trajectory=False, with_patch=False):
+    trial = parent / name
     agent = trial / "agent"
     sessions = agent / "sessions" / "2026" / "11" / "05"
     sessions.mkdir(parents=True)
     config = {
-        "trial_name": TRIAL, "job_id": RUN, "agent": {"name": "codex"},
+        "trial_name": name, "job_id": run, "agent": {"name": "codex"},
         "task": {"name": "terminal-bench/task", "source": "terminal-bench/terminal-bench-2-1",
                  "ref": DIGEST},
     }
     write_json(trial / "config.json", config)
     write_json(trial / "result.json", {
-        "trial_name": TRIAL, "task_name": "terminal-bench/task", "source": config["task"]["source"],
+        "trial_name": name, "task_name": "terminal-bench/task", "source": config["task"]["source"],
         "task_id": {"org": "terminal-bench", "name": "task", "ref": None},
         "task_checksum": DIGEST.removeprefix("sha256:"), "agent_info": {"name": "codex"},
         "config": config, "agent_execution": {"finished_at": END},
@@ -154,6 +154,41 @@ def write_trial(parent, *, wrapper=SHELL_WRAPPER + WAIT, with_trajectory=False, 
     return trial
 
 
+def set_timing(trial, start, returned, finished):
+    path = rollout_path(trial)
+    records = read_lines(path)
+    times = dict(zip(sorted({record["timestamp"] for record in records}), (start, returned), strict=True))
+    for record in records:
+        record["timestamp"] = times[record["timestamp"]]
+    write_lines(path, records)
+    path = trial / "result.json"
+    result = json.loads(path.read_bytes())
+    result["agent_execution"]["finished_at"] = finished
+    write_json(path, result)
+
+
+def write_run(root):
+    names = ("task__z-early", "task__b-empty", "task__m-later", "task__a-empty", "task__y-early")
+    for name in names:
+        trial = write_trial(root, name=name)
+        if name.endswith("-empty"):
+            path = trial / "agent" / "codex.txt"
+            write_lines(path, [event for event in read_lines(path) if not event["type"].startswith("item.")])
+            path = rollout_path(trial)
+            write_lines(path, [event for event in read_lines(path) if event["type"] != "response_item"])
+        if name.endswith("-later"):
+            set_timing(trial, "2026-11-05T12:00:31.123456789Z", "2026-11-05T12:00:32.123456789Z",
+                       "2026-11-05T12:00:37.123456789Z")
+            path = trial / "result.json"
+            result = json.loads(path.read_bytes())
+            result["verifier_result"]["rewards"] = {"score": 0.5}
+            write_json(path, result)
+    write_json(root / "config.json", {"job_name": root.name, "n_attempts": len(names), "agents": [{"name": "codex"}]})
+    write_json(root / "result.json", {"id": RUN, "started_at": "2026-11-05T12:00:00", "finished_at": "2026-11-05T12:00:40",
+                                     "n_total_trials": len(names), "stats": {"n_completed_trials": len(names)}})
+    (root / "job.log").write_text("Synthetic Harbor job\n", encoding="utf-8")
+
+
 class ConvertHarborTest(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -166,6 +201,227 @@ class ConvertHarborTest(unittest.TestCase):
             [sys.executable, str(CONVERTER), "--harbor-trial", str(trial), "--output-dir", str(self.output)],
             capture_output=True, text=True, check=False,
         )
+
+    def convert_run(self, root):
+        return subprocess.run(
+            [sys.executable, str(CONVERTER), "--harbor-run", str(root), "--output-dir", str(self.output)],
+            capture_output=True, text=True, check=False,
+        )
+
+    def test_run_rejects_missing_trial_directory(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        (root / "task__m-later").rename(self.parent / "removed-trial")
+        result = self.convert_run(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("trial directory count", result.stderr)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(list(self.parent.glob(".harbor-*")), [])
+
+    def test_run_requires_valid_ordered_completion_timestamps(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        path = root / "result.json"
+        result = json.loads(path.read_bytes())
+        for index, (changes, message) in enumerate((
+            ({"finished_at": "pending"}, "finished_at"),
+            ({"started_at": "unknown"}, "started_at"),
+            ({"finished_at": "2026-11-05T11:59:59.999999"}, "before"),
+        )):
+            with self.subTest(changes=changes):
+                self.output = self.parent / f"invalid-{index}"
+                write_json(path, dict(result, **changes))
+                converted = self.convert_run(root)
+                self.assertNotEqual(converted.returncode, 0)
+                self.assertIn(message, converted.stderr)
+                self.assertFalse(self.output.exists())
+        write_json(path, result)
+        self.output = self.parent / "valid"
+        converted = self.convert_run(root)
+        self.assertEqual(converted.returncode, 0, converted.stderr)
+
+    def test_run_reconciles_completed_counts_without_counting_errors_twice(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        path = root / "result.json"
+        result = json.loads(path.read_bytes())
+        total = result["n_total_trials"]
+        for index, stats in enumerate((
+            {"n_completed_trials": total + 1},
+            {"n_completed_trials": total - 1},
+            {"n_completed_trials": total - 1, "n_errored_trials": 1},
+            {"n_completed_trials": total, "n_trials": total - 1},
+            {"n_completed_trials": total, "n_pending_trials": 1},
+            {"n_completed_trials": total, "n_running_trials": 1},
+            {"n_completed_trials": total, "n_errored_trials": total + 1},
+        )):
+            with self.subTest(stats=stats):
+                self.output = self.parent / f"invalid-{index}"
+                write_json(path, dict(result, stats=stats))
+                converted = self.convert_run(root)
+                self.assertNotEqual(converted.returncode, 0)
+                self.assertIn("trial count", converted.stderr)
+                self.assertFalse(self.output.exists())
+
+        trial_path = root / "task__m-later" / "result.json"
+        trial = json.loads(trial_path.read_bytes())
+        del trial["verifier_result"]
+        trial["exception_info"] = {
+            "exception_type": "RuntimeError", "exception_message": "synthetic verifier exception",
+            "exception_traceback": "RuntimeError: synthetic verifier exception", "occurred_at": END,
+        }
+        write_json(trial_path, trial)
+        for name, stats in (
+            ("current", {"n_completed_trials": total, "n_errored_trials": 1}),
+            ("legacy", {"n_trials": total, "n_errors": 1}),
+        ):
+            with self.subTest(name=name):
+                self.output = self.parent / name
+                write_json(path, dict(result, stats=stats))
+                converted = self.convert_run(root)
+                self.assertEqual(converted.returncode, 0, converted.stderr)
+                entries = json.loads((self.output / "run-result.json").read_bytes())["tasks"]
+                self.assertIn({"task_id": "task__m-later"}, entries)
+
+    def test_output_must_not_become_an_input_trial(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        alias = self.parent / "alias"
+        alias.symlink_to(root, target_is_directory=True)
+        trial = root / "task__m-later"
+        before = sorted(root.iterdir())
+        for selection, convert in (("run", self.convert_run), ("trial", self.convert)):
+            for parent in (root, alias):
+                with self.subTest(parent=parent, selection=selection):
+                    self.output = parent / f"converted-{selection}-{parent.name}"
+                    converted = convert(root if selection == "run" else trial)
+                    self.assertNotEqual(converted.returncode, 0)
+                    self.assertIn("output", converted.stderr)
+                    self.assertEqual(sorted(root.iterdir()), before)
+        self.output = self.parent / "source"
+        converted = self.convert_run(root)
+        self.assertEqual(converted.returncode, 0, converted.stderr)
+
+    def test_run_releases_staged_log_before_next_trial(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        probe = """
+import sys
+import weakref
+import convert_harbor as converter
+
+class Log(bytearray):
+    pass
+
+convert = converter.convert
+previous = lambda: None
+
+def track_log(trial):
+    global previous
+    assert previous() is None, "staged log still held before conversion"
+    run, entry, metadata, calls, first, size, offsets = convert(trial)
+    log = Log(calls)
+    previous = weakref.ref(log)
+    return run, entry, metadata, log, first, size, offsets
+
+converter.convert = track_log
+sys.exit(converter.main())
+"""
+        converted = subprocess.run(
+            [sys.executable, "-B", "-c", probe, "--harbor-run", str(root), "--output-dir", str(self.output)],
+            cwd=CONVERTER.parent, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(converted.returncode, 0, converted.stderr)
+
+    def test_run_does_not_publish_after_a_later_trial_fails(self):
+        for cause in ("unsupported", "absent", "trial job ID"):
+            with self.subTest(cause=cause):
+                root = self.parent / cause
+                write_run(root)
+                trial = root / "task__m-later"
+                path = rollout_path(trial)
+                if cause == "unsupported":
+                    events = read_lines(path)
+                    for record in events:
+                        if record["payload"].get("type") == "custom_tool_call":
+                            record["payload"]["input"] = "unsupported"
+                    write_lines(path, events)
+                elif cause == "absent":
+                    path.unlink()
+                else:
+                    trial.rename(self.parent / "replacement")
+                    write_trial(root, name=trial.name, run="different-job")
+                result = self.convert_run(root)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(trial.name, result.stderr)
+                self.assertIn(cause, result.stderr)
+                if cause == "unsupported":
+                    self.assertIn(CALL, result.stderr)
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.parent.glob(".harbor-*")), [])
+
+    def test_source_flags_and_output_are_required(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        trial = root / "task__m-later"
+        trial_flag = ("--harbor-trial", str(trial))
+        run_flag = ("--harbor-run", str(root))
+        output_flag = ("--output-dir", str(self.output))
+        for flags in (output_flag, trial_flag + run_flag + output_flag, trial_flag, run_flag):
+            with self.subTest(flags=flags):
+                result = subprocess.run([sys.executable, str(CONVERTER), *flags], cwd=self.parent,
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 2, result.stderr)  # argparse usage status.
+                self.assertIn("usage:", result.stderr)
+                self.assertEqual(list(self.parent.iterdir()), [root])
+        result = self.convert(trial)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertCountEqual([path.name for path in self.output.iterdir()], ("run-result.json", trial.name))
+        result = self.convert_run(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already exists", result.stderr)
+        self.assertCountEqual([path.name for path in self.output.iterdir()], ("run-result.json", trial.name))
+
+    def test_run_rejects_unrepresentable_shared_offset(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        trial = root / "task__m-later"
+        set_timing(trial, "2426-11-05T12:00:31.123456789Z", "2426-11-05T12:00:32.123456789Z",
+                   "2426-11-05T12:00:37.123456789Z")
+        self.assertEqual(self.convert(trial).returncode, 0)
+        self.output = self.parent / "run-source"
+        result = self.convert_run(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(trial.name, result.stderr)
+        self.assertIn(CALL, result.stderr)
+        self.assertIn("global call offset", result.stderr)
+        self.assertEqual(list(self.parent.glob(".harbor-*")), [])
+        self.assertFalse(self.output.exists())
+
+    def test_run_plan_size_includes_clock_and_expanded_offsets(self):
+        root = self.parent / "harbor-job"
+        write_run(root)
+        # Later trial: local plan bound plus the clock and the extra offset digits.
+        local_plan_bound = 499
+        clock_bytes = 45
+        offset_growth = len("30000000000") - len("0")
+        shared_plan_bound = local_plan_bound + clock_bytes + offset_growth
+        for limit in (shared_plan_bound - 1, shared_plan_bound):
+            with self.subTest(limit=limit):
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c",
+                     "import sys, convert_harbor as c; c.MAX_PLAN_BYTES = int(sys.argv.pop(1)); sys.exit(c.main())",
+                     str(limit), "--harbor-run", str(root), "--output-dir", str(self.output)],
+                    cwd=CONVERTER.parent, capture_output=True, text=True, check=False,
+                )
+                if limit == shared_plan_bound:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("task__m-later", result.stderr)
+                    self.assertIn(CALL, result.stderr)
+                    self.assertIn("global plan", result.stderr)
+                    self.assertFalse(self.output.exists())
 
     def read_source(self):
         bridge = self.output / TRIAL / "bridge"

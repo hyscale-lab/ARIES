@@ -1,7 +1,8 @@
-"""Convert one recorded Harbor Codex trial into a private ARIES replay source."""
+"""Convert a recorded Harbor Codex trial or run into a private ARIES replay source."""
 
 import argparse
 from collections import defaultdict
+from contextlib import suppress
 import ctypes
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -27,6 +28,7 @@ MAX_METADATA_BYTES = 64 << 20
 MAX_RECORD_BYTES = MAX_METADATA_BYTES * 2
 MAX_LOG_BYTES = 256 << 20
 MAX_PLAN_BYTES = 512 << 20
+REPLAY_ORIGIN_BYTES = len(',"replay_at":"2006-01-02T15:04:05.999999999Z"')
 MAX_DURATION_NS = (1 << 63) - 1
 NANOSECONDS_PER_SECOND = 10**9
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -34,6 +36,8 @@ GO_JSON_ESCAPES = {character: len(f"\\u{ord(character):04x}") - len(character.en
                    for character in "<>&\u2028\u2029"}
 CALL_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")  # ARIES tool call ID contract.
 UTC = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.([0-9]{1,9}))?(?:Z|\+00:00)")
+JOB_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+                      r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-5][0-9])?")
 NANOSECOND_DIGITS = 9
 JSON_STRING = r'"(?:[^"\\\x00-\x1f]|\\.)*"'
 EXEC_PREFIX = "const r = await tools.exec_command({"
@@ -114,6 +118,37 @@ def timestamp(value):
     nanos = (delta.days * SECONDS_PER_DAY + delta.seconds) * NANOSECONDS_PER_SECOND
     nanos += int((fraction or "").ljust(NANOSECOND_DIGITS, "0"))
     return second + ("." + fraction if fraction else "") + "Z", nanos
+
+
+def job_time(result, field):
+    value = result.get(field)
+    message = f"run result has missing or invalid {field}"
+    require(isinstance(value, str) and JOB_TIME.fullmatch(value), message)
+    if value.endswith("Z"):
+        value = value.removesuffix("Z") + "+00:00"
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise Unsupported(message) from None
+
+
+def check_job_counts(result, directory_count):
+    total = result.get("n_total_trials")
+    require(type(total) is int and total == directory_count, "trial directory count differs from run result")
+    stats = result.get("stats")
+    require(isinstance(stats, dict), "run result has no trial counts")
+    # Harbor counts every terminal result as completed. Errors are a subset.
+    completed = [stats[key] for key in ("n_completed_trials", "n_trials") if key in stats]
+    require(completed and all(type(count) is int and count == total for count in completed),
+            "completed trial count differs from run total")
+    for key in ("n_pending_trials", "n_running_trials"):
+        count = stats.get(key, 0)
+        require(type(count) is int and count == 0, f"unfinished trial count in {key}")
+    for key in ("n_errored_trials", "n_errors", "n_cancelled_trials"):
+        count = stats.get(key, 0)
+        require(type(count) is int and 0 <= count <= total, f"invalid trial count in {key}")
+    require(not {"n_errored_trials", "n_errors"} <= stats.keys() or stats["n_errored_trials"] == stats["n_errors"],
+            "errored trial counts differ")
 
 
 def digest(data):
@@ -636,6 +671,7 @@ def convert(trial):
     first = min((evidence[1][1] for evidence in calls), default=completed[1])
     latest = max((evidence[3][1] for evidence in calls), default=completed[1])
     records = []
+    offsets = []
     call_bytes = 0
     for sequence, (_, item, evidence, inputs, output) in enumerate(pairs, 1):
         request, started, _, returned, patch, *_ = evidence
@@ -655,6 +691,7 @@ def convert(trial):
             require(len(line) <= MAX_RECORD_BYTES + len(b"\n"), "call record exceeds ARIES size limit")
             call_bytes += staged_call_size(record, sequence, call_id, offset)
             records.append(line)
+            offsets.append((offset, call_id))
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             reason = str(error) if isinstance(error, Unsupported) else "incomplete or invalid call fields"
             raise Unsupported(f"call {call_id}: {reason}") from None
@@ -662,8 +699,8 @@ def convert(trial):
     final_wait = completed[1] - latest
     require(final_wait <= MAX_DURATION_NS, "final wait exceeds Go duration limit")
     grades = recorded_grades(result)
-    require(staged_plan_size(run, occurrence, package, grades, final_wait, len(records), call_bytes) <= MAX_PLAN_BYTES,
-            "staged plan exceeds ARIES size limit")
+    plan_bytes = staged_plan_size(run, occurrence, package, grades, final_wait, len(records), call_bytes)
+    require(plan_bytes <= MAX_PLAN_BYTES, "staged plan exceeds ARIES size limit")
     require(sum(map(len, records)) <= MAX_LOG_BYTES, "call log exceeds ARIES size limit")
     log = b"".join(records)
     entry = {"task_id": occurrence}
@@ -674,24 +711,58 @@ def convert(trial):
                    harness_completed_at=completed[0], tool_calls_bytes=len(log), tool_calls_sha256=digest(log))
     if package is not None:
         runtime["task_package_digest"] = package
-    index, metadata = encoded(dict(run_id=run, tasks=[entry])), encoded(runtime)
-    require(max(len(index), len(metadata)) <= MAX_METADATA_BYTES, "metadata exceeds ARIES size limit")
-    return index, metadata, log
+    metadata = encoded(runtime)
+    require(len(metadata) <= MAX_METADATA_BYTES, "metadata exceeds ARIES size limit")
+    return run, entry, metadata, log, first if records else None, plan_bytes, offsets
 
 
-def publish(output, occurrence, index, runtime, calls):
+def write_private(path, data):
+    with os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, PRIVATE_FILE), "wb") as file:
+        os.fchmod(file.fileno(), PRIVATE_FILE)
+        file.write(data)
+
+
+def publish(output, trials, run=None):
     with tempfile.TemporaryDirectory(prefix=".harbor-", dir=output.parent) as temporary:
         stage = Path(temporary)
-        bridge = stage / occurrence / "bridge"
-        for directory in (stage, bridge.parent, bridge):
-            if directory != stage:
+        stage.chmod(PRIVATE_DIR)
+        entries = []
+        for trial in trials:
+            try:
+                trial_run, entry, runtime, calls, first, plan_bytes, offsets = convert(trial)
+                if run is None:
+                    run = trial_run
+                require(trial_run == run, "trial job ID differs from run result")
+            except (ValueError, KeyError, TypeError, AttributeError) as error:
+                reason = str(error) if isinstance(error, Unsupported) else "incomplete or invalid Harbor fields"
+                raise Unsupported(f"trial {trial.name!r}: {reason}") from None
+            bridge = stage / trial.name / "bridge"
+            for directory in (bridge.parent, bridge):
                 directory.mkdir(mode=PRIVATE_DIR)
-            directory.chmod(PRIVATE_DIR)
-        for path, data in ((stage / "run-result.json", index), (bridge / "runtime.json", runtime),
-                           (bridge / "tool-calls.jsonl", calls)):
-            with os.fdopen(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, PRIVATE_FILE), "wb") as file:
-                os.fchmod(file.fileno(), PRIVATE_FILE)
-                file.write(data)
+                directory.chmod(PRIVATE_DIR)
+            write_private(bridge / "runtime.json", runtime)
+            write_private(bridge / "tool-calls.jsonl", calls)
+            del calls
+            entries.append((first, entry, plan_bytes, offsets))
+        entries.sort(key=lambda item: (item[0] is None, item[0], item[1]["task_id"]))
+        if len(entries) > 1:
+            origin = entries[0][0]
+            for first, entry, plan_bytes, offsets in entries:
+                if first is None:
+                    break
+                trial_label = f"trial {entry['task_id']!r}"
+                # Match Go preflight: reserve the shared clock and expand each offset.
+                plan_bytes += REPLAY_ORIGIN_BYTES
+                require(plan_bytes <= MAX_PLAN_BYTES, f"{trial_label}: global plan exceeds ARIES size limit")
+                for offset, call_id in offsets:
+                    shared = first - origin + offset
+                    label = f"{trial_label}, call {call_id}"
+                    require(shared <= MAX_DURATION_NS, f"{label}: global call offset exceeds Go duration limit")
+                    plan_bytes += len(str(shared)) - len(str(offset))
+                    require(plan_bytes <= MAX_PLAN_BYTES, f"{label}: global plan exceeds ARIES size limit")
+        index = encoded(dict(run_id=run, tasks=[item[1] for item in entries]))
+        require(len(index) <= MAX_METADATA_BYTES, "run index exceeds ARIES size limit")
+        write_private(stage / "run-result.json", index)
         # Linux renameat2 publishes atomically without replacing even an empty directory.
         rename = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
         require(rename is not None, "atomic publication requires Linux renameat2")
@@ -703,21 +774,41 @@ def publish(output, occurrence, index, runtime, calls):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--harbor-trial", required=True, type=Path)
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--harbor-trial", type=Path)
+    sources.add_argument("--harbor-run", type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
-    trial, output = args.harbor_trial.absolute(), args.output_dir
+    output = args.output_dir
     try:
         require(not os.path.lexists(output), "output directory already exists")
-        publish(output, trial.name, *convert(trial))
-    except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
-        if isinstance(error, Unsupported):
-            reason = str(error)
-        elif isinstance(error, OSError):
-            reason = f"cannot publish output: {error.strerror}"
+        output_parent = output.parent.resolve(strict=True)
+        output = output_parent / output.name
+        if args.harbor_trial is not None:
+            trial = args.harbor_trial.absolute()
+            if output_parent in {trial.parent.resolve(), trial.resolve().parent}:
+                parent_result = {}
+                with suppress(Unsupported):
+                    parent_result = load_json(output_parent / "result.json")
+                require("n_total_trials" not in parent_result, "output directory would become a Harbor trial")
+            publish(output, [trial])
         else:
-            reason = "incomplete or invalid Harbor fields"
-        print(f"trial {trial.name!r}: {reason}", file=sys.stderr)
+            root = args.harbor_run.resolve(strict=True)
+            require(output_parent != root, "output directory would become a Harbor trial")
+            result = load_json(root / "result.json")
+            run = result.get("id")
+            require(isinstance(run, str) and run, "invalid run result ID")
+            started, finished = (job_time(result, field) for field in ("started_at", "finished_at"))
+            require((started.tzinfo is None) == (finished.tzinfo is None), "run timestamps mix local time and offsets")
+            require(finished >= started, "run finished_at is before started_at")
+            trials = sorted(path for path in root.iterdir() if path.is_dir())
+            require(trials, "run has no trial directories")
+            check_job_counts(result, len(trials))
+            publish(output, trials, run)
+    except (Unsupported, OSError) as error:
+        reason = str(error) if isinstance(error, Unsupported) else error.strerror
+        source = args.harbor_run if args.harbor_run is not None else args.harbor_trial
+        print(f"{source.name!r}: {reason}", file=sys.stderr)
         return 1
     return 0
 
