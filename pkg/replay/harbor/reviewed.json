@@ -748,5 +748,49 @@
       "web_search_call"
     ],
     "needs_network": true
+  },
+  {
+    "task": "bn-fit-modify",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/bn-fit-modify@sha256:5aeb11ca6e802b83816c9a31f055ac9d028309a853509400c2e3139ac2d8380d",
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "needs_network": false,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call"
+    ],
+    "effects": [
+      "Fit and score Gaussian Bayesian DAGs on benchmark CSV data and write three local CSV artifacts"
+    ],
+    "trials": [
+      {
+        "trial": "01a6e09a-3fb3-4f31-b012-2a88739843b8",
+        "trajectory_sha256": "20c0991d9ef2cebc62a6c7e78a2ebe1979dbb2f0c8db42eac949cbc8586dec6e",
+        "rollout_sha256": "246f29169a62c81130532789998aa09112ca65977b1fe98efcc423db77a95e03"
+      },
+      {
+        "trial": "03a51f3d-e23e-4ce0-84c6-fe243db4a561",
+        "trajectory_sha256": "aea399846004ce45c9735579b874c1cb7faa54ebaf656f1cb29d9d2fc65dde37",
+        "rollout_sha256": "9c543a27168d0827885977d3133103070067dceb2133af187b8f29db85d083d4"
+      },
+      {
+        "trial": "67fbb908-4a0b-47c4-9d54-771840bb86ff",
+        "trajectory_sha256": "79b76242dca3f1c3dc0224c18b152ee020bb1d735cc5d1084eb7b7da7604731c",
+        "rollout_sha256": "5d704d03428da2b677df687c2490a499430944ea9824b063a79bbd7246e13d19"
+      },
+      {
+        "trial": "713f03eb-4bfb-4c6a-a091-82ba06ded9ad",
+        "trajectory_sha256": "7ed821690cc190bf29423843d5b33a1e5fef9a77ebbc0347d0d57b585c750439",
+        "rollout_sha256": "e80fd4f19c80302dd89e0ba0cb8211e1a48571e986cd3c592644253791e0e3ea"
+      },
+      {
+        "trial": "ef30b2e1-a5b3-42e1-886c-0052c5d3ddf7",
+        "trajectory_sha256": "e8b0e52a43f70a0e2a6c52b3c73b6c13e8e8491cb2d88e8caf848928303a78f3",
+        "rollout_sha256": "1fea5e16f0251078e4597832ee12dc73dc35bcc7f4e1d1fde4c8f5e1e4ae42e5"
+      }
+    ]
   }
 ]

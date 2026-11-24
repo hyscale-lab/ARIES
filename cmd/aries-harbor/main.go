@@ -76,6 +76,7 @@ func command(ctx context.Context) error {
 	processDrift := flag.Bool("diagnostic-process-drift", false, "continue through observed process timing drift in an uninstrumented reviewed trial")
 	timingAudit := flag.Bool("timing-audit", false, "retain first and eventual native outcomes for the five launch-clock audit recordings")
 	relaxedML := flag.Bool("relaxed-ml", false, "retain actual timing and exit disagreements in the four reviewed ML replays")
+	bnFit := flag.Bool("replacement-bn-fit", false, "measure the original Bayesian-network replay and archive its actual CSV outputs")
 	videoDifferences := flag.Bool("diagnostic-video-images", false, "record live video image differences and continue an uninstrumented diagnostic")
 	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
 	curlPackages := flag.String("curl-packages", "", "pinned Bookworm curl archive for the recorded HTTP client")
@@ -117,6 +118,9 @@ func command(ctx context.Context) error {
 	}
 	if *image == "" {
 		return json.NewEncoder(os.Stdout).Encode(r)
+	}
+	if (r.Task == bnFitTask) != *bnFit || *bnFit && (*relaxedML || *timingAudit || *processDrift || *videoDifferences || *probe != "" || *intraStep != 0 || *observer == "" || *sampler == "") {
+		return errors.New("Bayesian-network replacement requires a reviewed source and standard boundary and PSS samples")
 	}
 	sourceCPU := *hfSourceCPU >= 0
 	if sourceCPU {
@@ -253,10 +257,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, relaxedML, timingAudit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -448,11 +452,14 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call), nil, stdout, stderr)
 	})
 	defer sessions.Close()
-	relaxedStatus := relaxedML || timingAudit
+	relaxedStatus := relaxedML || timingAudit || bnFit
 	if relaxedStatus {
 		event := "relaxed_ml_measurement"
 		if timingAudit {
 			event = "launch_timing_measurement"
+		}
+		if bnFit {
+			event = "bn_fit_measurement"
 		}
 		if err := log.Encode(map[string]any{"event": event, "trial_id": r.Trial,
 			"strict_source_admission": false}); err != nil {
@@ -541,6 +548,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	}
 	if err := harbor.Run(ctx, r, h); err != nil {
 		return err
+	}
+	if bnFit {
+		return captureBnFitArtifacts(ctx, m, id, r, log)
 	}
 	if r.Task != "fix-git" {
 		if err := captureTaskOutput(ctx, m, id, r, log, grpcTools != ""); err != nil {

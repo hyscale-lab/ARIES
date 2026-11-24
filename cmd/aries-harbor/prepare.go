@@ -25,6 +25,7 @@ type taskSetup struct {
 
 var taskSetups = map[string]taskSetup{
 	"sanitize-git-repo": {output: "README.md", initialCheck: "test -s README.md && test -s ray_processing/process.py && command -v git"},
+	bnFitTask:           bnFitSetup,
 	"git-leak-recovery": {packagesSHA: sparqlSetup.packagesSHA, output: "secret.txt", initialCheck: gitRecoveryReady},
 	datasetTask:         datasetSetup,
 	markerTask:          markerSetup,
