@@ -536,7 +536,7 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		}
 	}
 	result.Evaluation = plan.Evaluation
-	result.Evaluation.Reused = true
+	result.Evaluation.Reused = plan.Evaluation.Status != core.StatusUnavailable
 	result.Evaluation.SourceRunID = plan.SourceRunID
 	result.Evaluation.SourceTaskID = plan.SourceTaskID
 

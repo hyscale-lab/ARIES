@@ -66,6 +66,25 @@ type replayRunIndex struct {
 	digest [sha256.Size]byte
 }
 
+func (result *replayRunIndex) occurrenceEvaluation(id string) (json.RawMessage, error) {
+	found := false
+	var evaluation json.RawMessage
+	for _, task := range result.Tasks {
+		if task.TaskID != id {
+			continue
+		}
+		if found {
+			return nil, errors.New("replay source occurrence is duplicated in parent result")
+		}
+		found = true
+		evaluation = task.Evaluation
+	}
+	if !found {
+		return nil, errors.New("replay source occurrence is missing from parent result")
+	}
+	return evaluation, nil
+}
+
 func readReplayRunIndex(ctx context.Context, root *os.Root) (*replayRunIndex, error) {
 	data, err := readReplayFile(ctx, root, "run-result.json", MaxMessageBytes)
 	if err != nil {

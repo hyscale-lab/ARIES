@@ -1776,16 +1776,28 @@ func TestReplayCancellationUsesFreshBoundedCleanup(t *testing.T) {
 }
 
 func TestReplayKeepsCleanupFailureSeparateFromMismatchAndGrade(t *testing.T) {
-	rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded, Reward: 1})
-	caller.runErr = errors.New("response mismatch")
-	rig.factory.stopErrors = []error{errInjected}
-	result, err := rig.runner.Run(context.Background())
-	if !errors.Is(err, caller.runErr) || !errors.Is(err, errInjected) {
-		t.Fatalf("Run() error = %v, want replay and cleanup failures", err)
-	}
-	task := result.Tasks[0]
-	if task.Replay.Status != core.StatusFailed || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusFailed || !task.Evaluation.Reused || task.Evaluation.Reward != 1 || result.Summary.CleanupFailed != 1 || result.Summary.EvaluationsRun != 0 {
-		t.Fatalf("replay, isolation, cleanup, and grade outcomes = %+v; summary=%+v", task, result.Summary)
+	const sourceReward = 1
+	for _, source := range []core.Evaluation{
+		{Status: core.StatusSucceeded, Reward: sourceReward},
+		{Status: core.StatusUnavailable},
+	} {
+		t.Run(source.Status, func(t *testing.T) {
+			rig, caller, _ := newReplayRig(t, source)
+			caller.runErr = errors.New("response mismatch")
+			rig.factory.stopErrors = []error{errInjected}
+			result, err := rig.runner.Run(context.Background())
+			if !errors.Is(err, caller.runErr) || !errors.Is(err, errInjected) {
+				t.Fatalf("Run() error = %v, want replay and cleanup failures", err)
+			}
+			task := result.Tasks[0]
+			if task.Replay.Status != core.StatusFailed || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusFailed || result.Summary.CleanupFailed != 1 || result.Summary.EvaluationsRun != 0 {
+				t.Fatalf("replay, isolation, and cleanup outcomes = %+v; summary=%+v", task, result.Summary)
+			}
+			wantReused := source.Status == core.StatusSucceeded
+			if task.Evaluation.Status != source.Status || task.Evaluation.Reused != wantReused || task.Evaluation.Reward != source.Reward {
+				t.Fatalf("failure changed source evaluation: %+v", task.Evaluation)
+			}
+		})
 	}
 }
 

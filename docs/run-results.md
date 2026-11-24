@@ -81,7 +81,7 @@ resource samples under the `evaluation-sandbox` component in
 ## Sandbox-call replay results
 
 Inspect every entry in `tasks`, including empty traces and repeated logical IDs.
-Execution IDs belong to the new run. Source IDs for reused grades appear under
+Execution IDs belong to the new run. Source IDs for loaded occurrences appear under
 `evaluation`.
 Use `replay.status` and `replay.error` for execution, `isolation.caller_stopped`
 and `isolation.bridge_revoked` for isolation, and `cleanup` for sandbox removal.
@@ -95,7 +95,10 @@ If construction fails after admission, the task result records the new execution
 ID, `replay.source_run_id`, `replay.source_task_id`, and the error. It reports no
 reused grade or successful task cleanup.
 
-`tasks[0].evaluation.reused` marks historical status, score, reward, and error.
+`tasks[0].evaluation.reused` marks a historical evaluation with a recorded
+score, reward, or both. Replay saves only the recorded grade fields, including
+explicit zeros. Without either grade, `evaluation.status` is `unavailable`,
+and the result has no `score`, `reward`, or `reused` field.
 `evaluation.source_run_id` and `evaluation.source_task_id` identify the source.
 Read its `evaluation/` artifacts there; replay does not copy them or re-evaluate.
 Successful replay confirms strict response checks, not equal final sandbox state.

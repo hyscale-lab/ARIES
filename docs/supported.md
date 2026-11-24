@@ -47,7 +47,8 @@ guides above.
 
 ## Current limitations
 
-- Replay reuses historical grades; confirmed isolation and cleanup remain required.
+- Replay reuses historical grades when present. Confirmed isolation and cleanup
+  remain required.
   See [replay limits](replay-limitations.md).
 
 - Each bridge type supports its corresponding harness: OpenClaw uses

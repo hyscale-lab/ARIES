@@ -382,7 +382,8 @@ new profile file:
 
 Replace `SOURCE_RUN` with the source run directory; use `../runs/SOURCE_RUN`
 to select the complete run. Each occurrence needs private `bridge/tool-calls.jsonl`
-and `bridge/runtime.json` files, plus a matching evaluation in its parent `run-result.json`.
+and `bridge/runtime.json` files, plus a unique matching occurrence in its parent
+`run-result.json`. The source grade is optional.
 See [source validation requirements](replay-limitations.md#workload-and-source-limits).
 
 `replay.deployment` places a separate caller runtime in the pinned bridge

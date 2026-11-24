@@ -341,8 +341,16 @@ func TestLoadReplaySourceRejectsIncompleteEvidenceAndWrongTask(t *testing.T) {
 		"wrong revision": func(source string) {
 			updateReplayMetadata(t, source, "benchmark_revisions", map[string]string{"revision": "other"})
 		},
-		"missing source evaluation": func(source string) {
+		"missing evaluation status": func(source string) {
 			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{RunID: replayRunID, Tasks: []core.TaskResult{{TaskID: replayTaskID}}})
+		},
+		"missing parent occurrence": func(source string) {
+			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{RunID: replayRunID})
+		},
+		"duplicate ungraded occurrence": func(source string) {
+			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), map[string]any{
+				"run_id": replayRunID, "tasks": []map[string]string{{"task_id": replayTaskID}, {"task_id": replayTaskID}},
+			})
 		},
 		"unknown evaluation status": func(source string) {
 			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{RunID: replayRunID, Tasks: []core.TaskResult{{TaskID: replayTaskID, Evaluation: core.Evaluation{Status: "unknown"}}}})
@@ -597,6 +605,11 @@ func TestReplaySelectionRejectsChangedFinalizedEvidence(t *testing.T) {
 			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{RunID: replayRunID, Name: "changed", Tasks: []core.TaskResult{
 				{TaskID: replayTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded}},
 			}})
+		},
+		"parent result without grade": func(source string) {
+			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), map[string]any{
+				"run_id": replayRunID, "tasks": []map[string]string{{"task_id": replayTaskID}},
+			})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1438,16 +1451,32 @@ func TestLoadReplaySourceRejectsMissingOrNullRequestInputs(t *testing.T) {
 	}
 }
 
-func TestLoadReplaySourceRejectsMissingOrNullEvaluationGrades(t *testing.T) {
+func TestLoadReplaySourceRejectsInvalidEvaluationGrades(t *testing.T) {
 	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, change := range map[string]func(map[string]any){
-		"missing score":  func(evaluation map[string]any) { delete(evaluation, "score") },
 		"null score":     func(evaluation map[string]any) { evaluation["score"] = nil },
-		"missing reward": func(evaluation map[string]any) { delete(evaluation, "reward") },
 		"null reward":    func(evaluation map[string]any) { evaluation["reward"] = nil },
+		"quoted score":   func(evaluation map[string]any) { evaluation["score"] = "0" },
+		"boolean reward": func(evaluation map[string]any) { evaluation["reward"] = false },
+		"out of range":   func(evaluation map[string]any) { evaluation["score"] = json.Number("1e1000") },
+		"nonzero native not run": func(evaluation map[string]any) {
+			evaluation["status"], evaluation["score"] = core.StatusNotRun, json.Number("0.25")
+		},
+		"nonzero native blocked": func(evaluation map[string]any) {
+			evaluation["status"], evaluation["reward"] = core.StatusBlockedIsolation, json.Number("1")
+		},
+		"nonzero native disabled": func(evaluation map[string]any) {
+			evaluation["status"], evaluation["reward"] = core.StatusNotEnabled, json.Number("1")
+		},
+		"alias cannot substitute for null grade": func(evaluation map[string]any) {
+			evaluation["Score"], evaluation["score"] = json.Number("1"), nil
+		},
+		"underflowing native placeholder": func(evaluation map[string]any) {
+			evaluation["status"], evaluation["reward"] = core.StatusNotRun, json.Number("1e-1000")
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			source := writeReplaySource(t, nil, start, core.Evaluation{Status: core.StatusSucceeded})
@@ -1458,7 +1487,7 @@ func TestLoadReplaySourceRejectsMissingOrNullEvaluationGrades(t *testing.T) {
 			})
 			plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
 			if err == nil || len(plan.Calls) != 0 {
-				t.Fatalf("incomplete evaluation accepted: plan = %+v, error = %v", plan, err)
+				t.Fatalf("invalid evaluation accepted: plan = %+v, error = %v", plan, err)
 			}
 		})
 	}

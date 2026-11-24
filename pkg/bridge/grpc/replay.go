@@ -133,27 +133,15 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if metadata.RunID != "" && metadata.RunID != result.RunID || metadata.RunID == "" && len(log) == 0 {
 		return plan, errors.New("replay source run binding is missing or differs from parent result")
 	}
-	for _, candidate := range result.Tasks {
-		if candidate.TaskID != occurrence {
-			continue
-		}
-		var evaluation core.Evaluation
-		var grades map[string]json.RawMessage
-		if err := json.Unmarshal(candidate.Evaluation, &evaluation); err != nil {
-			return replay.Plan{}, errors.New("replay source evaluation is invalid")
-		}
-		if err := json.Unmarshal(candidate.Evaluation, &grades); err != nil {
-			return replay.Plan{}, errors.New("replay source evaluation grades are invalid")
-		}
-		if plan.SourceTaskID != "" || evaluation.Status != core.StatusSucceeded && evaluation.Status != core.StatusFailed && evaluation.Status != core.StatusCanceled || !validReplayNumber(grades["score"]) || !validReplayNumber(grades["reward"]) {
-			return replay.Plan{}, errors.New("replay source has no unique recorded evaluation")
-		}
-		plan.SourceTaskID = candidate.TaskID
-		plan.Evaluation = evaluation
+	rawEvaluation, err := result.occurrenceEvaluation(occurrence)
+	if err != nil {
+		return replay.Plan{}, err
 	}
-	if plan.SourceTaskID == "" {
-		return replay.Plan{}, errors.New("replay source has no matching evaluation")
+	plan.Evaluation, err = parseReplayEvaluation(rawEvaluation)
+	if err != nil {
+		return replay.Plan{}, err
 	}
+	plan.SourceTaskID = occurrence
 	if metadata.OccurrenceID != nil {
 		var recordedID string
 		if err := json.Unmarshal(metadata.OccurrenceID, &recordedID); err != nil || recordedID != plan.SourceTaskID {
@@ -229,6 +217,37 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 		*binding = replaySourceBinding{runtime: sha256.Sum256(runtimeData), calls: digest, result: result.digest, planBytes: len(encoded)}
 	}
 	return plan, nil
+}
+
+func parseReplayEvaluation(data json.RawMessage) (core.Evaluation, error) {
+	unavailable := core.Evaluation{Status: core.StatusUnavailable}
+	if data == nil {
+		return unavailable, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return core.Evaluation{}, errors.New("replay source evaluation is invalid")
+	}
+	if len(fields) == 0 {
+		return unavailable, nil
+	}
+	var evaluation core.Evaluation
+	if err := json.Unmarshal(data, &evaluation); err != nil {
+		return core.Evaluation{}, errors.New("replay source evaluation is invalid")
+	}
+	switch evaluation.Status {
+	case core.StatusSucceeded, core.StatusFailed, core.StatusCanceled:
+		if fields["score"] == nil && fields["reward"] == nil {
+			return unavailable, nil
+		}
+		return evaluation, nil
+	case core.StatusNotRun, core.StatusBlockedIsolation, core.StatusNotEnabled:
+		// Native live results write zero placeholders when evaluation does not run.
+		if evaluation.Score == 0 && evaluation.Reward == 0 {
+			return unavailable, nil
+		}
+	}
+	return core.Evaluation{}, errors.New("replay source evaluation status or grade is invalid")
 }
 
 func readReplayFile(ctx context.Context, root *os.Root, name string, bound int64) ([]byte, error) {
