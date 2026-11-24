@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -729,6 +731,105 @@ func TestReplayHarborConvertedExample(t *testing.T) {
 	if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil || !strings.Contains(err.Error(), "add-file") {
 		t.Fatalf("loader error = %v, want rejection of update patch", err)
 	}
+}
+
+func TestLoadHarborTrialConverterOutput(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Harbor converter publication requires Linux")
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is not available")
+	}
+	const occurrence = "task__example"
+	const fixture = `import sys
+from pathlib import Path
+from test_convert_harbor import add_shell, write_trial
+root = Path(sys.argv[1])
+if sys.argv[2] == "overlap":
+    add_shell(write_trial(root), overlap=True)
+else:
+    write_trial(root, with_trajectory=True, with_patch=True)
+`
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	scripts, err := filepath.Abs("../../../scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	convert := func(t *testing.T, root, source, scenario string) {
+		t.Helper()
+		command := exec.CommandContext(t.Context(), python, "-B", "-c", fixture, root, scenario)
+		command.Dir = scripts
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("write synthetic Harbor trial: %v: %s", err, output)
+		}
+		command = exec.CommandContext(t.Context(), python, filepath.Join(scripts, "convert_harbor.py"),
+			"--harbor-trial", filepath.Join(root, occurrence), "--output-dir", source)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("convert synthetic Harbor trial: %v: %s", err, output)
+		}
+	}
+	convert(t, root, source, "patch")
+	selection, err := PreflightReplaySource(t.Context(), source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const occurrenceIndex = 0
+	plan, err := selection.Load(t.Context(), occurrenceIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expectedCalls = 2
+	if plan.OriginType != replay.OriginHarbor || plan.SourceRunID != replayRunID || plan.SourceTaskID != occurrence ||
+		len(plan.Calls) != expectedCalls {
+		t.Fatal("converted source identity or call count differs")
+	}
+	first := plan.Calls[occurrenceIndex]
+	const shellOutput = "  é\r\n\n"
+	const script = "  printf '%s\\n' \"$(printf é)\" \n"
+	const exitCode = 7
+	if first.Operation != "Exec" || !first.Login || first.Script != script || first.Workdir != "/app" || first.ExitCode != exitCode ||
+		first.HarborOutput == nil || *first.HarborOutput != shellOutput {
+		t.Fatal("converted shell evidence differs")
+	}
+	const patchIndex = 1
+	patch := plan.Calls[patchIndex]
+	const patchOffset = 1876543211 * time.Nanosecond
+	if patch.Operation != "WriteFile" || patch.Path != "/app/example.txt" || string(patch.Body) != "héllo  \n\n" ||
+		patch.StartOffset != patchOffset || plan.FinalWait != time.Second {
+		t.Fatal("converted patch evidence or timing differs")
+	}
+	grade, err := json.Marshal(plan.Evaluation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(grade, &values); err != nil {
+		t.Fatal(err)
+	}
+	if values["score"] != nil || string(values["reward"]) != "0" || plan.Evaluation.Status != core.StatusSucceeded {
+		t.Fatal("converted source grade differs")
+	}
+	t.Run("overlap", func(t *testing.T) {
+		root := t.TempDir()
+		source := filepath.Join(root, "source")
+		convert(t, root, source, "overlap")
+		plan, err := LoadReplaySource(filepath.Join(source, occurrence), replayTask, replayBenchmark, replayRevisions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const secondStartOffset = 376543211 * time.Nanosecond
+		const finalWait = 1876543211 * time.Nanosecond
+		const firstReturnSequence = 1
+		const secondReturnSequence = 2
+		if len(plan.Calls) != expectedCalls || plan.Calls[0].ToolCallID != "call-shell" ||
+			plan.Calls[0].Sequence != secondReturnSequence || plan.Calls[1].ToolCallID != "call-second" ||
+			plan.Calls[1].Sequence != firstReturnSequence || plan.Calls[1].StartOffset != secondStartOffset ||
+			plan.FinalWait != finalWait {
+			t.Fatal("converted overlapping calls lost their source schedule")
+		}
+	})
 }
 
 func TestReplayPreflightRejectsUnusableHarborEvidence(t *testing.T) {
