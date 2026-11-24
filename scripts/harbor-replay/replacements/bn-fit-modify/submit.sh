@@ -31,12 +31,13 @@ while :; do
             "${ssh_run[@]}" -n "$host" "sudo -n tar -czf - -C '$stage/runs' '$key'" >"$archive.partial"
             mv "$archive.partial" "$archive"
         fi
-        "${ssh_run[@]}" -n "$host" "sudo -n touch '$out/archived'"
+        "${ssh_run[@]}" -n "$host" "sudo -n test -f '$out/archived' || sudo -n touch '$out/archived'"
     done <<<"$ready"
     if "${ssh_run[@]}" -n "$host" "sudo -n test -f '$stage/controller.complete'"; then
-        "${ssh_run[@]}" -n "$host" "sudo -n cat '$stage/queue.tsv'" >"$raw/$node-worker-terminal.tsv"
+        "${ssh_run[@]}" -n "$host" "sudo -n cat '$stage/queue.tsv'" >"$raw/$node-worker-terminal.tsv.partial"
+        mv "$raw/$node-worker-terminal.tsv.partial" "$raw/$node-worker-terminal.tsv"
         break
     fi
-    "${ssh_run[@]}" -n "$host" "systemctl is-active --quiet '$unit'"
+    "${ssh_run[@]}" -n "$host" "systemctl is-active --quiet '$unit' || sudo -n test -f '$stage/controller.complete'"
     sleep 12
 done

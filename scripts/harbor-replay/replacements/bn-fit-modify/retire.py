@@ -56,10 +56,14 @@ def published(project, raw, node):
         archives[receipt["run_id"]] = receipt["worker_archive_sha256"]
     expected = 2 if node == "amd201" else 5
     unit = f"zb-bn-fit-runner-{node}.service"
-    control = run("systemctl", "show", unit, "-p", "ActiveState", "-p", "Result", text=True).splitlines()
-    assert len(archives) == expected and {"ActiveState=inactive", "Result=success"} <= set(control)
+    control = run("systemctl", "show", unit, "-p", "ActiveState", "--value", text=True).strip()
+    assert len(archives) == expected and control == "inactive"
+    terminal = raw / f"{node}-worker-terminal.tsv"
+    rows = [row.split("\t") for row in terminal.read_text().splitlines()]
+    assert len(rows) == expected and {key for key, _ in rows} == set(archives)
     return dict(zepbound_main=main, aries_published_tip=pub, aries_source_revision=revision,
-                shell_sha256=source, archives=archives, inventory=placed["worker_inventory_sha256"], runner_state=control)
+                shell_sha256=source, archives=archives, inventory=placed["worker_inventory_sha256"],
+                runner_active_state=control, runner_terminal_queue_sha256=sha(terminal))
 
 
 def stage_users():
