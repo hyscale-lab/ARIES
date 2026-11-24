@@ -454,6 +454,283 @@ func TestReplayPreflightReportsSourceEnvironmentWithoutWaivingResponseChecks(t *
 	}
 }
 
+func harborExecSource(t *testing.T) string {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const firstCall = 1
+	const output = "é\n"
+	record := replayRecord(at, at, firstCall)
+	record.OperationClass = kindExec
+	record.Command = "printf 'é\\n'"
+	record.CommandHash = bridgekit.CommandHash(record.Command)
+	record.Path, record.Workdir = bridgekit.RemoteShellPath, testWorkdir
+	record.Argv = []string{record.Path, "-l", "-c", record.Command}
+	source := writeReplaySource(t, []toolCallRecord{record}, at, core.Evaluation{Status: core.StatusNotRun})
+	updateReplayMetadata(t, source, "origin_type", "harbor")
+	rewriteReplayRecord(t, source, func(fields map[string]any) {
+		delete(fields, "response_sha256")
+		delete(fields, "response_bytes")
+		delete(fields, "grpc_code")
+		fields["harbor_output"] = output
+	})
+	return source
+}
+
+func TestLoadHarborExecCompletion(t *testing.T) {
+	const nonzeroExit = 7
+	source := harborExecSource(t)
+	rewriteReplayRecord(t, source, func(fields map[string]any) {
+		fields["status"] = "failed"
+		fields["harbor_output"] = ""
+	})
+	if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil {
+		t.Fatal("accepted an incomplete source command with zero exit and empty output")
+	}
+	rewriteReplayRecord(t, source, func(fields map[string]any) {
+		fields["status"] = "completed"
+		fields["exit_code"] = nonzeroExit
+	})
+	plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Calls[0].ExitCode != nonzeroExit {
+		t.Fatal("lost the nonzero exit of a completed command")
+	}
+}
+
+func TestLoadHarborRejectsAmbiguousCallFields(t *testing.T) {
+	for _, tc := range []struct{ name, replace, with string }{
+		{"conflicting exit", `"exit_code":0`, `"exit_code":7,"EXIT_CODE":0`},
+		{"duplicate exit", `"exit_code":0`, `"exit_code":7,"exit_code":0`},
+		{"alias only for binding", `"run_id":"source-run"`, `"RUN_ID":"source-run"`},
+		{"conflicting binding", `"task_id":"task-001"`, `"task_id":"wrong","TASK_ID":"task-001"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := harborExecSource(t)
+			replaceHarborRecordText(t, source, tc.replace, tc.with)
+			if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil {
+				t.Fatal("accepted an ambiguous or noncanonical Harbor call")
+			}
+		})
+	}
+}
+
+func TestLoadHarborRejectsAmbiguousRuntimeBinding(t *testing.T) {
+	for key, value := range map[string]string{"RUN_ID": replayRunID, "sandboxid": replaySandboxID} {
+		t.Run(key, func(t *testing.T) {
+			source := harborExecSource(t)
+			updateReplayMetadata(t, source, key, value)
+			if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil {
+				t.Fatal("accepted a noncanonical Harbor runtime binding")
+			}
+		})
+	}
+}
+
+func TestLoadHarborRejectsAmbiguousParentBinding(t *testing.T) {
+	source := harborExecSource(t)
+	writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), map[string]any{
+		"run_id": replayRunID,
+		"tasks":  []any{map[string]string{"TASK_ID": replayTaskID}},
+	})
+	if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil {
+		t.Fatal("accepted a noncanonical Harbor parent binding")
+	}
+}
+
+func TestReplayMixedIndexKeepsNativeAdmissionAndHarborBinding(t *testing.T) {
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const harborID = "harbor-trial"
+	const secondHarborID = "harbor-trial-2"
+	const firstOccurrence = 0
+	const firstHarbor = firstOccurrence + 1
+	run := writeReplayRun(t, []replayOccurrenceFixture{
+		{id: replayTaskID, task: replayTask},
+		{id: harborID, task: replayTask},
+		{id: secondHarborID, task: replayTask},
+	}, at)
+	for _, id := range []string{harborID, secondHarborID} {
+		updateReplayMetadata(t, filepath.Join(run, id), "origin_type", "harbor")
+	}
+	selection, err := PreflightReplaySource(t.Context(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(run, "run-result.json")
+	data, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(index, append(data, '\n'), replayFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selection.Load(t.Context(), firstHarbor); err == nil || !strings.Contains(err.Error(), "changed after preflight") {
+		t.Fatalf("Harbor reload error = %v, want binding rejection", err)
+	}
+	aliased := bytes.ReplaceAll(data, []byte(`"run_id":`), []byte(`"RUN_ID":`))
+	if err := os.WriteFile(index, aliased, replayFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PreflightReplaySource(t.Context(), filepath.Join(run, replayTaskID), []core.Task{replayTask}, replayBenchmark, replayRevisions, nil); err != nil {
+		t.Fatalf("native preflight changed: %v", err)
+	}
+	if _, err := PreflightReplaySource(t.Context(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil); err == nil || !strings.Contains(err.Error(), "Harbor parent index") {
+		t.Fatalf("mixed preflight error = %v, want Harbor parent binding rejection", err)
+	}
+}
+
+func TestLoadHarborPreservesOutputScalars(t *testing.T) {
+	for _, tc := range []struct{ name, encoded, want string }{
+		{"unpaired high", `"\ud800"`, ""},
+		{"unpaired low", `"\udc00"`, ""},
+		{"reversed pair", `"\udc00\ud800"`, ""},
+		{"valid pair", `"\ud83d\ude00"`, "😀"},
+		{"literal replacement character", `"�"`, "�"},
+		{"escaped replacement character", `"\ufffd"`, "�"},
+		{"literal escape text", `"\\ud800"`, `\ud800`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := harborExecSource(t)
+			replaceHarborRecordText(t, source, `"harbor_output":"é\n"`, `"harbor_output":`+tc.encoded)
+			plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("accepted an unpaired surrogate")
+				}
+				return
+			}
+			if err != nil || plan.Calls[0].HarborOutput == nil || *plan.Calls[0].HarborOutput != tc.want {
+				t.Fatalf("valid output did not survive decoding: %v", err)
+			}
+		})
+	}
+}
+
+func replaceHarborRecordText(t *testing.T, source, old, new string) {
+	t.Helper()
+	path := filepath.Join(source, "bridge", "tool-calls.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(old)) {
+		t.Fatal("missing text in Harbor test record")
+	}
+	log := bytes.ReplaceAll(data, []byte(old), []byte(new))
+	if err := os.WriteFile(path, log, replayFileMode); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(log)
+	updateReplayMetadata(t, source, "tool_calls_bytes", len(log))
+	updateReplayMetadata(t, source, "tool_calls_sha256", hex.EncodeToString(digest[:]))
+}
+
+func TestLoadHarborExecEvidence(t *testing.T) {
+	plan, err := LoadReplaySource(harborExecSource(t), replayTask, replayBenchmark, replayRevisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staged struct {
+		Calls []map[string]json.RawMessage `json:"calls"`
+	}
+	if err := json.Unmarshal(data, &staged); err != nil {
+		t.Fatal(err)
+	}
+	call := staged.Calls[0]
+	if string(call["harbor_output"]) != `"é\n"` || call["response_sha256"] != nil || call["response_bytes"] != nil || call["response_code"] != nil {
+		t.Fatal("staged Harbor Exec evidence differs from source")
+	}
+}
+
+func TestReplayHarborConvertedExample(t *testing.T) {
+	const writeIndex = 1
+	const writePath = "/app/example.txt"
+	const writeBody = "hello\n"
+	const privateRPC = "private write failure"
+	root := t.TempDir()
+	if err := os.Chmod(root, replayDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	bridge := filepath.Join(replayTaskID, "bridge")
+	if err := os.MkdirAll(filepath.Join(root, bridge), replayDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"run-result.json", filepath.Join(bridge, "runtime.json"), filepath.Join(bridge, "tool-calls.jsonl")} {
+		data, err := os.ReadFile(filepath.Join("testdata", "harbor-source", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), data, replayFileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := filepath.Join(root, replayTaskID)
+	selection, err := PreflightReplaySource(t.Context(), root, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const occurrenceIndex = 0
+	plan, err := selection.Load(t.Context(), occurrenceIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, want string
+		count      int64
+		rpcError   bool
+	}{
+		{name: "complete write", count: int64(len(writeBody))},
+		{name: "short write", count: int64(len(strings.TrimSuffix(writeBody, "\n"))), want: "write length mismatch"},
+		{name: "write error", rpcError: true, want: "RPC failed (PermissionDenied)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const execOutput = "é\n"
+			exec := func(_ context.Context, req *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+				if req.GetScript() != "printf 'é\\n'" || !req.GetLogin() || len(req.GetStdin()) != 0 {
+					t.Error("Exec request differs from converted source")
+				}
+				return &sandboxv1.ExecResponse{Stdout: []byte(execOutput), Reason: sandboxv1.Reason_REASON_COMPLETED}, nil
+			}
+			client := replayEndpoint(t, &replayServer{exec: exec, writeFile: harborTestWrite(t, writePath, writeBody, tc.count, tc.rpcError, privateRPC)})
+			ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+			defer cancel()
+			err := ReplayCalls(ctx, replayTestDeadline, client, plan)
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), privateRPC)) {
+				t.Fatalf("caller error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	if call := plan.Calls[writeIndex]; call.Operation != "WriteFile" || call.Path != writePath || string(call.Body) != writeBody {
+		t.Fatal("staged write differs from source")
+	}
+	path := filepath.Join(source, "bridge", "tool-calls.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := bytes.ReplaceAll(data, []byte(`"harbor_patch":"add"`), []byte(`"harbor_patch":"update"`))
+	if err := os.WriteFile(path, log, replayFileMode); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(log)
+	updateReplayMetadata(t, source, "tool_calls_bytes", len(log))
+	updateReplayMetadata(t, source, "tool_calls_sha256", hex.EncodeToString(digest[:]))
+	if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil || !strings.Contains(err.Error(), "add-file") {
+		t.Fatalf("loader error = %v, want rejection of update patch", err)
+	}
+}
+
 func TestReplayPreflightRejectsUnusableHarborEvidence(t *testing.T) {
 	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
 	if err != nil {
@@ -465,7 +742,7 @@ func TestReplayPreflightRejectsUnusableHarborEvidence(t *testing.T) {
 		value       any
 		want        string
 	}{
-		{name: "native frames are not Harbor evidence", want: "Harbor replay calls are not supported"},
+		{name: "native frames are not Harbor evidence", want: "native response frames are not Harbor evidence"},
 		{name: "wrong occurrence", field: "occurrence_id", value: "other-occurrence", want: "occurrence binding"},
 		{name: "missing occurrence", field: "occurrence_id", want: "occurrence binding"},
 		{name: "missing run", field: "run_id", want: "run binding"},

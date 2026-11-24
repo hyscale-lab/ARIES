@@ -227,7 +227,9 @@ metadata ID because it has no calls to prove the binding.
 The loader reads `origin_type` from the occurrence metadata. Only an absent
 field defaults to `aries`. The plan retains the origin and any
 `task_package_digest`. Harbor metadata requires explicit `run_id` and
-`occurrence_id`. Harbor sources with calls are not yet executable.
+`occurrence_id`. The loader accepts converted Harbor `Exec` and successful
+add-file records. See the [synthetic occurrence and exact field contract](../../pkg/bridge/grpc/testdata/harbor-source/README.md).
+The converter is not implemented in this step.
 
 ### 9.3 Starting-state checks and application flow
 

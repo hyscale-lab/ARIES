@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -45,23 +46,41 @@ func LiveAuditError(path string) error {
 	return nil
 }
 
-// ReadResponses compares finalized private audit hashes after bridge revocation.
+type auditResponse struct {
+	SourceSequence uint64 `json:"replay_source_sequence"`
+	OperationClass string `json:"operation_class"`
+	SHA256         string `json:"response_sha256"`
+	Debug          bool   `json:"response_debug"`
+	Stdout         string `json:"response_stdout"`
+	Stderr         string `json:"response_stderr"`
+	StdoutBase64   []byte `json:"response_stdout_base64"`
+	StderrBase64   []byte `json:"response_stderr_base64"`
+	Status         string `json:"status"`
+	GRPCCode       string `json:"grpc_code"`
+	ReplayError    string `json:"replay_error"`
+	ExitCode       *int32 `json:"exit_code"`
+	Truncated      bool   `json:"truncated"`
+	StdinBytes     *int64 `json:"stdin_bytes"`
+}
+
+func (record auditResponse) output() ([]byte, []byte) {
+	stdout, stderr := []byte(record.Stdout), []byte(record.Stderr)
+	if record.StdoutBase64 != nil {
+		stdout = record.StdoutBase64
+	}
+	if record.StderrBase64 != nil {
+		stderr = record.StderrBase64
+	}
+	return stdout, stderr
+}
+
+// ReadResponses compares finalized private audit evidence after bridge revocation.
 func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayResponses {
 	unavailable := func(reason string) core.ReplayResponses {
 		return core.ReplayResponses{Status: "unavailable", Reason: reason}
 	}
 	if path == "" {
 		return unavailable("replay bridge audit is missing")
-	}
-	type auditResponse struct {
-		SourceSequence uint64 `json:"replay_source_sequence"`
-		OperationClass string `json:"operation_class"`
-		SHA256         string `json:"response_sha256"`
-		Debug          bool   `json:"response_debug"`
-		Stdout         string `json:"response_stdout"`
-		Stderr         string `json:"response_stderr"`
-		StdoutBase64   []byte `json:"response_stdout_base64"`
-		StderrBase64   []byte `json:"response_stderr_base64"`
 	}
 	var records map[uint64]auditResponse
 	err := readPrivateAudit(path, false, func(decoder *json.Decoder) error {
@@ -95,6 +114,15 @@ func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayRes
 			responses.Status, responses.Reason = "unavailable", "replay bridge audit has invalid response evidence"
 			continue
 		}
+		if plan.OriginType == OriginHarbor {
+			status := harborResponseStatus(call, record)
+			if status == "" {
+				responses.Status, responses.Reason = "unavailable", "replay bridge audit has invalid Harbor response evidence"
+				continue
+			}
+			responses.Calls = append(responses.Calls, core.ReplayCallResponse{SourceSequence: call.Sequence, Status: status})
+			continue
+		}
 		status := "matched"
 		if record.SHA256 != call.ResponseSHA256 {
 			status = "drifted"
@@ -107,13 +135,7 @@ func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayRes
 					entry.WithFields(logrus.Fields{"expected_stdout": responseText(call.ResponseStdout), "expected_stderr": responseText(call.ResponseStderr)}).Info("source Exec output")
 				}
 				if record.Debug {
-					stdout, stderr := []byte(record.Stdout), []byte(record.Stderr)
-					if record.StdoutBase64 != nil {
-						stdout = record.StdoutBase64
-					}
-					if record.StderrBase64 != nil {
-						stderr = record.StderrBase64
-					}
+					stdout, stderr := record.output()
 					entry.WithFields(logrus.Fields{"actual_stdout": responseText(stdout), "actual_stderr": responseText(stderr)}).Info("replay Exec output")
 				}
 			}
@@ -127,6 +149,64 @@ func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayRes
 		responses.Calls = nil
 	}
 	return responses
+}
+
+func harborResponseStatus(call Call, record auditResponse) string {
+	switch record.GRPCCode {
+	case "":
+		return ""
+	case "OK":
+	default:
+		return "rpc_failed"
+	}
+	switch record.Status {
+	case "completed":
+	case "failed", "canceled", "rejected":
+		return "operation_failed"
+	default:
+		return ""
+	}
+	if record.ReplayError == "response-send-failed" {
+		return "operation_failed"
+	}
+	switch call.Operation {
+	case "Exec":
+		if call.HarborOutput == nil || record.ExitCode == nil {
+			return ""
+		}
+		if *record.ExitCode != call.ExitCode {
+			return "exit_mismatch"
+		}
+		if call.HarborTruncated || record.Truncated || !record.Debug {
+			return "inconclusive"
+		}
+		stdout, stderr := record.output()
+		expected := *call.HarborOutput
+		if len(expected) != len(stdout)+len(stderr) {
+			return "length_mismatch"
+		}
+		if len(stdout) != 0 && len(stderr) != 0 {
+			return "length_matched"
+		}
+		actual := stdout
+		if len(stdout) == 0 {
+			actual = stderr
+		}
+		if !bytes.Equal([]byte(expected), actual) {
+			return "drifted"
+		}
+		return "matched"
+	case "WriteFile":
+		// A successful bridge write replies with the size of the accepted body.
+		if record.StdinBytes == nil || record.ReplayError != "" && record.ReplayError != "write-content-omitted" {
+			return ""
+		}
+		if *record.StdinBytes != int64(len(call.Body)) {
+			return "length_mismatch"
+		}
+		return "matched"
+	}
+	return ""
 }
 
 func operationClass(operation string) string {

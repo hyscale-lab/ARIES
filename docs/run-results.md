@@ -102,7 +102,7 @@ and the result has no `score`, `reward`, or `reused` field.
 `evaluation.source_run_id` and `evaluation.source_task_id` identify the source.
 Read its `evaluation/` artifacts there; replay does not copy them or re-evaluate.
 Successful replay confirms strict response checks, not equal final sandbox state.
-Use `replay.responses` for hash equality. See
+Use `replay.responses` for response comparison. See
 [result limits](replay-limitations.md#fidelity-and-result-limits).
 
 `tasks[0].replay.timing.status` is `available` or `unavailable` with a `reason`.
@@ -114,12 +114,22 @@ See [timing calculations and clock requirements](design/replayer.md#5-replayer-c
 before comparing measurements.
 
 `tasks[0].replay.responses.status` is `available` or `unavailable` with a `reason`.
-Each `calls` entry identifies `source_sequence` and records `expected_sha256`,
+Each native `calls` entry identifies `source_sequence` and records `expected_sha256`,
 `actual_sha256`, and `matched` or `drifted` status.
 Hash-only drift does not fail replay; see the
 [response checks](design/replayer.md#5-replayer-components).
-Changed `Exec` output appears in private `aries.log` and stderr,
+Changed native `Exec` output appears in private `aries.log` and stderr,
 not `run-result.json`.
+
+Harbor entries identify `source_sequence` and `status`. They do not report hashes
+or output text. `matched` means comparable `Exec` output matches byte for byte,
+or a write succeeded with the expected byte count. `drifted` means comparable
+output differs without a change in length. `length_matched` means both streams
+contain output and their combined length matches, but their order is unknown.
+`inconclusive` means a capture was cut or the private audit did not retain the
+output. `length_mismatch`, `exit_mismatch`, `rpc_failed`, and `operation_failed`
+identify distinct failures when the finalized bridge audit records them.
+The caller reports execution failures even when the bridge audit has no record.
 
 ## Measurement availability
 

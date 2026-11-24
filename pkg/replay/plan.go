@@ -12,26 +12,28 @@ import (
 
 // Call is one recorded sandbox request and its expected logical outcome.
 type Call struct {
-	Operation      string        `json:"operation"`
-	Sequence       uint64        `json:"sequence"`
-	StartOffset    time.Duration `json:"start_offset"`
-	ToolCallID     string        `json:"tool_call_id,omitempty"`
-	Script         string        `json:"script,omitempty"`
-	Login          bool          `json:"login,omitempty"`
-	Workdir        string        `json:"workdir,omitempty"`
-	Path           string        `json:"path,omitempty"`
-	Body           []byte        `json:"body,omitempty"`
-	MaxBytes       int64         `json:"max_bytes,omitempty"`
-	FirstLine      int64         `json:"first_line,omitempty"`
-	MaxLines       int64         `json:"max_lines,omitempty"`
-	MaxLineBytes   int64         `json:"max_line_bytes,omitempty"`
-	ResponseSHA256 string        `json:"response_sha256"`
-	ResponseBytes  int64         `json:"response_bytes"`
-	ResponseCode   string        `json:"response_code"`
-	ExitCode       int32         `json:"exit_code,omitempty"`
-	ResponseDebug  bool          `json:"-"`
-	ResponseStdout []byte        `json:"-"`
-	ResponseStderr []byte        `json:"-"`
+	Operation       string        `json:"operation"`
+	Sequence        uint64        `json:"sequence"`
+	StartOffset     time.Duration `json:"start_offset"`
+	ToolCallID      string        `json:"tool_call_id,omitempty"`
+	Script          string        `json:"script,omitempty"`
+	Login           bool          `json:"login,omitempty"`
+	Workdir         string        `json:"workdir,omitempty"`
+	Path            string        `json:"path,omitempty"`
+	Body            []byte        `json:"body,omitempty"`
+	MaxBytes        int64         `json:"max_bytes,omitempty"`
+	FirstLine       int64         `json:"first_line,omitempty"`
+	MaxLines        int64         `json:"max_lines,omitempty"`
+	MaxLineBytes    int64         `json:"max_line_bytes,omitempty"`
+	ResponseSHA256  string        `json:"response_sha256,omitempty"`
+	ResponseBytes   int64         `json:"response_bytes,omitempty"`
+	ResponseCode    string        `json:"response_code,omitempty"`
+	HarborOutput    *string       `json:"harbor_output,omitempty"`
+	HarborTruncated bool          `json:"harbor_truncated,omitempty"`
+	ExitCode        int32         `json:"exit_code,omitempty"`
+	ResponseDebug   bool          `json:"-"`
+	ResponseStdout  []byte        `json:"-"`
+	ResponseStderr  []byte        `json:"-"`
 }
 
 const (

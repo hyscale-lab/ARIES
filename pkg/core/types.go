@@ -334,12 +334,12 @@ type ReplayTiming struct {
 	Reason string             `json:"reason,omitempty"`
 }
 
-// ReplayCallResponse compares one replayed response hash with its source hash.
+// ReplayCallResponse reports how one replayed response compares with its source.
 type ReplayCallResponse struct {
 	SourceSequence uint64 `json:"source_sequence"`
 	Status         string `json:"status"`
-	ExpectedSHA256 string `json:"expected_sha256"`
-	ActualSHA256   string `json:"actual_sha256"`
+	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
+	ActualSHA256   string `json:"actual_sha256,omitempty"`
 }
 
 // ReplayResponses reports response equality separately from the reused grade.

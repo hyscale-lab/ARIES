@@ -13,8 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -115,6 +118,11 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if plan.OriginType == "" {
 		plan.OriginType = replay.OriginARIES
 	}
+	if plan.OriginType == replay.OriginHarbor {
+		if _, err := harborFields(runtimeData); err != nil {
+			return replay.Plan{}, err
+		}
+	}
 	plan.TaskPackageDigest = metadata.TaskPackageDigest
 	if metadata.SchemaVersion != 1 || !metadata.ReplayReady || metadata.SandboxID == "" || metadata.HarnessCompletedAt == "" || metadata.ToolCallsBytes == nil || *metadata.ToolCallsBytes < 0 || *metadata.ToolCallsBytes > maxReplayLogBytes || !validReplayDigest(metadata.ToolCallsSHA256) {
 		return plan, errors.New("replay runtime is not finalized")
@@ -149,6 +157,9 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 			return plan, err
 		}
 	}
+	if plan.OriginType == replay.OriginHarbor && !result.harborFieldsValid() {
+		return replay.Plan{}, errors.New("Harbor parent index has noncanonical fields")
+	}
 	if metadata.RunID != result.RunID && (metadata.RunID != "" || len(log) == 0 || plan.OriginType == replay.OriginHarbor) {
 		return plan, errors.New("replay source run binding is missing or differs from parent result")
 	}
@@ -172,10 +183,6 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	}
 	plan.SourceRunID = result.RunID
 
-	if plan.OriginType == replay.OriginHarbor && len(log) != 0 {
-		return replay.Plan{}, errors.New("Harbor replay calls are not supported")
-	}
-
 	var first, latest time.Time
 	starts := make(map[uint64]time.Time)
 	for line := range bytes.Lines(log) {
@@ -191,7 +198,7 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 		if err := json.Unmarshal(line, &record); err != nil {
 			return replay.Plan{}, fmt.Errorf("decode replay call %d: %w", number, err)
 		}
-		call, started, stamped, err := parseReplayCall(record, line, uint64(number), plan.SourceRunID, plan.SourceTaskID, metadata.SandboxID)
+		call, started, stamped, err := parseReplayCall(record, line, uint64(number), plan.SourceRunID, plan.SourceTaskID, metadata.SandboxID, plan.OriginType)
 		if err != nil {
 			return replay.Plan{}, fmt.Errorf("replay call %d: %w", number, err)
 		}
@@ -354,20 +361,68 @@ func validReplayDigest(value string) bool {
 	return err == nil && len(decoded) == sha256.Size && hex.EncodeToString(decoded) == value
 }
 
-func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID, taskID, sandboxID string) (replay.Call, time.Time, time.Time, error) {
+func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID, taskID, sandboxID, origin string) (replay.Call, time.Time, time.Time, error) {
 	var call replay.Call
-	if record.Sequence != sequence || record.RunID != runID || record.TaskID != taskID || record.SandboxID != sandboxID || record.Status != "completed" && record.Status != "failed" || record.ReplayError != "" || !validReplayDigest(record.ResponseSHA256) || record.ResponseBytes <= 0 || record.DurationMS < 0 {
+	if record.Sequence != sequence || record.RunID != runID || record.TaskID != taskID || record.SandboxID != sandboxID || record.Status != "completed" && record.Status != "failed" || record.ReplayError != "" || record.DurationMS < 0 {
 		return call, time.Time{}, time.Time{}, errors.New("replay call has incomplete or rejected evidence")
 	}
-	validCode := false
-	for code := codes.OK; code <= codes.Unauthenticated; code++ {
-		if record.GRPCCode == code.String() {
-			validCode = true
-			break
-		}
+	var fields map[string]json.RawMessage
+	var err error
+	if origin == replay.OriginHarbor {
+		fields, err = harborFields(line)
+	} else {
+		err = json.Unmarshal(line, &fields)
 	}
-	if !validCode || record.Status == "completed" && record.GRPCCode != codes.OK.String() || record.Status == "failed" && record.OperationClass != kindExec && record.GRPCCode == codes.OK.String() {
-		return call, time.Time{}, time.Time{}, errors.New("replay call has invalid gRPC status")
+	if err != nil {
+		return call, time.Time{}, time.Time{}, err
+	}
+	if origin == replay.OriginHarbor {
+		if record.Status != "completed" {
+			return call, time.Time{}, time.Time{}, errors.New("Harbor call did not complete at the source")
+		}
+		if record.ResponseSHA256 != "" || record.ResponseBytes != 0 || record.GRPCCode != "" ||
+			fields["response_sha256"] != nil || fields["response_bytes"] != nil || fields["grpc_code"] != nil {
+			return call, time.Time{}, time.Time{}, errors.New("native response frames are not Harbor evidence")
+		}
+		for _, key := range []string{"response_debug", "response_stdout", "response_stderr", "response_stdout_base64", "response_stderr_base64", "truncated"} {
+			if fields[key] != nil {
+				return call, time.Time{}, time.Time{}, errors.New("native output fields are not Harbor evidence")
+			}
+		}
+		if record.OperationClass != kindExec && record.OperationClass != kindFileWrite {
+			return call, time.Time{}, time.Time{}, errors.New("Harbor call has an unsupported operation")
+		}
+		if record.OperationClass == kindExec {
+			if json.Unmarshal(fields["harbor_output"], &call.HarborOutput) != nil || call.HarborOutput == nil || fields["harbor_patch"] != nil {
+				return call, time.Time{}, time.Time{}, errors.New("Harbor Exec output evidence is missing or invalid")
+			}
+			switch string(fields["harbor_truncated"]) {
+			case "", "false":
+			case "true":
+				call.HarborTruncated = true
+			default:
+				return call, time.Time{}, time.Time{}, errors.New("Harbor Exec truncation evidence is invalid")
+			}
+		} else {
+			var action string
+			if json.Unmarshal(fields["harbor_patch"], &action) != nil || action != "add" || fields["harbor_output"] != nil || fields["harbor_truncated"] != nil {
+				return call, time.Time{}, time.Time{}, errors.New("Harbor WriteFile requires add-file evidence")
+			}
+		}
+	} else {
+		if !validReplayDigest(record.ResponseSHA256) || record.ResponseBytes <= 0 || fields["harbor_output"] != nil || fields["harbor_truncated"] != nil || fields["harbor_patch"] != nil {
+			return call, time.Time{}, time.Time{}, errors.New("replay call has incomplete or rejected evidence")
+		}
+		validCode := false
+		for code := codes.OK; code <= codes.Unauthenticated; code++ {
+			if record.GRPCCode == code.String() {
+				validCode = true
+				break
+			}
+		}
+		if !validCode || record.Status == "completed" && record.GRPCCode != codes.OK.String() || record.Status == "failed" && record.OperationClass != kindExec && record.GRPCCode == codes.OK.String() {
+			return call, time.Time{}, time.Time{}, errors.New("replay call has invalid gRPC status")
+		}
 	}
 	started, startErr := time.Parse(time.RFC3339Nano, record.StartedAt)
 	stamped, stampErr := time.Parse(time.RFC3339Nano, record.Timestamp)
@@ -377,17 +432,17 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 	if len(record.ToolCallID) > maxToolCallIDBytes || strings.Trim(record.ToolCallID, toolCallIDChars) != "" {
 		return call, time.Time{}, time.Time{}, errors.New("replay call has invalid tool call ID")
 	}
-	call = replay.Call{Sequence: sequence, ToolCallID: record.ToolCallID, ResponseSHA256: record.ResponseSHA256, ResponseBytes: record.ResponseBytes, ResponseCode: record.GRPCCode}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(line, &fields); err != nil {
-		return replay.Call{}, time.Time{}, time.Time{}, err
-	}
+	call.Sequence, call.ToolCallID = sequence, record.ToolCallID
+	call.ResponseSHA256, call.ResponseBytes, call.ResponseCode = record.ResponseSHA256, record.ResponseBytes, record.GRPCCode
 	switch record.OperationClass {
 	case kindExec:
 		if !validReplayNumber(fields["exit_code"]) || record.ExitCode < 0 || record.ExitCode > int(^uint8(0)) {
 			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec exit code is invalid")
 		}
 		command := fields["command"]
+		if origin == replay.OriginHarbor && (len(command) == 0 || record.StdinBytes != 0) {
+			return replay.Call{}, time.Time{}, time.Time{}, errors.New("Harbor Exec requires a recorded shell script and no stdin")
+		}
 		if len(command) > 0 && command[0] != '"' || len(fields["stdin"]) == 0 || fields["stdin"][0] != '"' || !validReplayNumber(fields["stdin_bytes"]) || record.CommandHash != bridgekit.CommandHash(record.Command) || record.StdinEncoding != "utf-8" || int64(len(record.Stdin)) != record.StdinBytes || !bridgekit.ValidWorkdir(record.Workdir) {
 			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec input is incomplete")
 		}
@@ -441,4 +496,80 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 		return replay.Call{}, time.Time{}, time.Time{}, errors.New("unknown replay operation")
 	}
 	return call, started, stamped, nil
+}
+
+func harborFields(data []byte) (map[string]json.RawMessage, error) {
+	invalid := errors.New("Harbor evidence has invalid or noncanonical fields")
+	if !utf8.Valid(data) || !pairedJSONSurrogates(data) {
+		return nil, errors.New("Harbor evidence has invalid Unicode")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return nil, invalid
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || key == "" || fields[key] != nil {
+			return nil, invalid
+		}
+		// SandboxID is the only mixed-case key in converted evidence.
+		if key != "SandboxID" && (strings.EqualFold(key, "SandboxID") || strings.ContainsFunc(key, func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_')
+		})) {
+			return nil, invalid
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, invalid
+		}
+		fields[key] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, invalid
+	}
+	return fields, nil
+}
+
+// pairedJSONSurrogates checks escapes in otherwise valid JSON before decoding
+// can replace an unpaired surrogate with U+FFFD.
+func pairedJSONSurrogates(data []byte) bool {
+	const lowSurrogate = 0xdc00
+	const hexBase = 16
+	const codeUnitBits = 16
+	const escapeSize = len(`\u0000`)
+	for {
+		next := bytes.IndexByte(data, '\\')
+		if next < 0 {
+			return true
+		}
+		data = data[next:]
+		if len(data) < len(`\\`) {
+			return false
+		}
+		if data[1] != 'u' {
+			data = data[len(`\\`):]
+			continue
+		}
+		if len(data) < escapeSize {
+			return false
+		}
+		unit, err := strconv.ParseUint(string(data[len(`\u`):escapeSize]), hexBase, codeUnitBits)
+		if err != nil {
+			return false
+		}
+		data = data[escapeSize:]
+		if !utf16.IsSurrogate(rune(unit)) {
+			continue
+		}
+		if unit >= lowSurrogate || len(data) < escapeSize || !bytes.HasPrefix(data, []byte(`\u`)) {
+			return false
+		}
+		low, err := strconv.ParseUint(string(data[len(`\u`):escapeSize]), hexBase, codeUnitBits)
+		if err != nil || low < lowSurrogate || !utf16.IsSurrogate(rune(low)) {
+			return false
+		}
+		data = data[escapeSize:]
+	}
 }

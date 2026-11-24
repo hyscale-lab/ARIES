@@ -13,12 +13,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"testing/synctest"
 	"time"
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -97,7 +99,7 @@ func TestReplayCallsRejectsUnsupportedOriginBeforeRPC(t *testing.T) {
 	}})
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	for _, origin := range []string{"harbor", "unknown"} {
+	for _, origin := range []string{replay.OriginHarbor, "unknown"} {
 		plan := replay.Plan{OriginType: origin, Calls: []replay.Call{call}}
 		if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err == nil {
 			t.Errorf("unsupported origin %q was accepted", origin)
@@ -105,6 +107,223 @@ func TestReplayCallsRejectsUnsupportedOriginBeforeRPC(t *testing.T) {
 	}
 	if called.Load() {
 		t.Error("unsupported origin sent an RPC")
+	}
+}
+
+func TestReplayHarborExec(t *testing.T) {
+	const privateText = "é\n"
+	const changedExit = 7
+	const privateRPC = "private transport text"
+	for _, tc := range []struct {
+		name, source, stdout, stderr, want string
+		sourceCut, targetCut, rpcError     bool
+		exit                               int32
+	}{
+		{name: "UTF-8 and newline", source: privateText, stdout: privateText},
+		{name: "empty", source: ""},
+		{name: "newline missing", source: privateText, stdout: "é", want: "output length mismatch"},
+		{name: "content drift", source: privateText, stdout: "aé"},
+		{name: "unknown interleaving", source: privateText, stdout: "\n", stderr: "é"},
+		{name: "unknown interleaving length mismatch", source: privateText, stdout: "\n", stderr: "a", want: "output length mismatch"},
+		{name: "source truncated", source: "é", stdout: privateText, sourceCut: true},
+		{name: "target truncated", source: privateText, stdout: "é", targetCut: true},
+		{name: "both truncated exit mismatch", source: privateText, stdout: "é", sourceCut: true, targetCut: true, exit: changedExit, want: "exit code mismatch"},
+		{name: "exit mismatch", source: privateText, stdout: privateText, exit: changedExit, want: "exit code mismatch"},
+		{name: "transport error", source: privateText, rpcError: true, want: "RPC failed (Unavailable)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+			defer cancel()
+			call := replay.Call{Operation: "Exec", HarborOutput: &tc.source, HarborTruncated: tc.sourceCut}
+			server := &replayServer{exec: func(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+				if tc.rpcError {
+					return nil, status.Error(codes.Unavailable, privateRPC)
+				}
+				return &sandboxv1.ExecResponse{Stdout: []byte(tc.stdout), Stderr: []byte(tc.stderr), Truncated: tc.targetCut, ExitCode: tc.exit, Reason: sandboxv1.Reason_REASON_COMPLETED}, nil
+			}}
+			err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{call}})
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), privateRPC)) {
+				t.Fatalf("caller error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func harborTestWrite(t *testing.T, path, body string, count int64, rpcError bool, privateRPC string) func(grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]) error {
+	t.Helper()
+	return func(stream grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]) error {
+		first, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if header := first.GetHeader(); header.GetPath() != path || header.GetSize() != int64(len(body)) {
+			t.Error("WriteFile header differs from converted source")
+		}
+		var got []byte
+		for {
+			req, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			got = append(got, req.GetChunk()...)
+		}
+		if string(got) != body {
+			t.Error("WriteFile body differs from converted source")
+		}
+		if rpcError {
+			return status.Error(codes.PermissionDenied, privateRPC)
+		}
+		return stream.SendAndClose(&sandboxv1.WriteFileResponse{BytesWritten: count})
+	}
+}
+
+func TestReplayHarborFinalizedOutput(t *testing.T) {
+	const sequence = 1
+	const output = "private-é\n"
+	const changed = "private-ø\n"
+	const changedExit = 7
+	for _, tc := range []struct {
+		name, source, stdout, stderr, want string
+		truncated                          bool
+		exit                               int
+	}{
+		{name: "exact", source: output, stdout: output, want: "matched"},
+		{name: "empty", want: "matched"},
+		{name: "drift", source: output, stderr: changed, want: "drifted"},
+		{name: "two streams", source: output, stdout: "private-", stderr: "é\n", want: "length_matched"},
+		{name: "length mismatch", source: output, stdout: changed + "\n", want: "length_mismatch"},
+		{name: "truncated", source: output, stdout: "private-", truncated: true, want: "inconclusive"},
+		{name: "truncated with changed exit", source: output, stdout: "private-", truncated: true, exit: changedExit, want: "exit_mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := newFakeExecutor(nil)
+			target.stdout, target.stderr = []byte(tc.stdout), []byte(tc.stderr)
+			target.exitCode = tc.exit
+			manager, client, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+			ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+			defer cancel()
+			plan := replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{{
+				Operation: "Exec", Sequence: sequence, Script: "true", HarborOutput: &tc.source, HarborTruncated: tc.truncated,
+			}}}
+			err := ReplayCalls(ctx, replayTestDeadline, client, plan)
+			if (err != nil) != (tc.want == "length_mismatch" || tc.want == "exit_mismatch") {
+				t.Fatalf("unexpected caller outcome: %v", err)
+			}
+			stop(t, manager)
+			var logs bytes.Buffer
+			logger := logrus.New()
+			logger.SetOutput(&logs)
+			results := replay.ReadResponses(endpoint.LogPaths[0], plan, logger)
+			data, err := json.Marshal(results)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if results.Status != "available" || len(results.Calls) != len(plan.Calls) || results.Calls[0].Status != tc.want {
+				t.Fatalf("results = %s, want available %q", data, tc.want)
+			}
+			if bytes.Contains(data, []byte("private-")) || bytes.Contains(data, []byte("sha256")) || bytes.Contains(logs.Bytes(), []byte("private-")) {
+				t.Fatal("Harbor diagnostics contain private evidence")
+			}
+		})
+	}
+}
+
+func TestReplayHarborFinalizedWriteWithoutRetainedBody(t *testing.T) {
+	const writeSequence = 1
+	const execSequence = writeSequence + 1
+	const path = "/app/example.txt"
+	const body = "private\fbody"
+	const output = "kept\n"
+	target := newFakeExecutor(make(fstest.MapFS))
+	target.stdout = []byte(output)
+	manager, client, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+	ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+	defer cancel()
+	sourceOutput := output
+	plan := replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{
+		{Operation: "WriteFile", Sequence: writeSequence, Path: path, Body: []byte(body)},
+		{Operation: "Exec", Sequence: execSequence, Script: "true", HarborOutput: &sourceOutput},
+	}}
+	if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	for _, record := range readToolCalls(t, endpoint.LogPaths[0]) {
+		if record["operation_class"] == kindFileWrite && record["replay_error"] != "write-content-omitted" {
+			t.Fatal("test did not produce an omitted write body")
+		}
+	}
+	responses := replay.ReadResponses(endpoint.LogPaths[0], plan, logrus.New())
+	if responses.Status != "available" || len(responses.Calls) != len(plan.Calls) {
+		t.Fatalf("finalized responses are incomplete: %+v", responses)
+	}
+	for index, call := range responses.Calls {
+		if call.SourceSequence != plan.Calls[index].Sequence || call.Status != "matched" {
+			t.Fatalf("unexpected finalized response: %+v", call)
+		}
+	}
+}
+
+type failedWriteReply struct {
+	grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]
+	ctx      context.Context
+	requests []*sandboxv1.WriteFileRequest
+	reply    *sandboxv1.WriteFileResponse
+}
+
+func (stream *failedWriteReply) Context() context.Context { return stream.ctx }
+
+func (stream *failedWriteReply) Recv() (*sandboxv1.WriteFileRequest, error) {
+	if len(stream.requests) == 0 {
+		return nil, io.EOF
+	}
+	request := stream.requests[0]
+	stream.requests = stream.requests[1:]
+	return request, nil
+}
+
+func (stream *failedWriteReply) SendAndClose(response *sandboxv1.WriteFileResponse) error {
+	stream.reply = response
+	return status.Error(codes.Unavailable, "reset during write reply")
+}
+
+func TestReplayHarborFinalizedOmittedWriteWithFailedReply(t *testing.T) {
+	const sequence = 1
+	const path = "/app/example.txt"
+	const body = "private\fbody"
+	target := newFakeExecutor(make(fstest.MapFS))
+	manager, _, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+	stream := &failedWriteReply{
+		ctx: metadata.NewIncomingContext(t.Context(), metadata.Pairs(replaySourceSequenceKey, strconv.Itoa(sequence))),
+		requests: []*sandboxv1.WriteFileRequest{
+			{Part: &sandboxv1.WriteFileRequest_Header{Header: &sandboxv1.WriteFileHeader{Path: path, Size: int64(len(body))}}},
+			{Part: &sandboxv1.WriteFileRequest_Chunk{Chunk: []byte(body)}},
+		},
+	}
+	svc := &service{session: manager.active}
+	if err := svc.WriteFile(stream); err != nil {
+		t.Fatal(err)
+	}
+	if stream.reply.GetBytesWritten() != int64(len(body)) {
+		t.Fatal("bridge did not attempt a full write reply")
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != sequence || records[0]["status"] != "completed" || records[0]["stdin_encoding"] != "binary-omitted" {
+		t.Fatal("test did not produce a completed write with omitted body")
+	}
+	plan := replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{
+		{Operation: "WriteFile", Sequence: sequence, Path: path, Body: []byte(body)},
+	}}
+	responses := replay.ReadResponses(endpoint.LogPaths[0], plan, logrus.New())
+	if responses.Status != "available" || len(responses.Calls) != len(plan.Calls) || responses.Calls[0].Status != "operation_failed" {
+		t.Fatalf("expected finalized response-send failure: %+v", responses)
+	}
+	if records[0]["replay_error"] != "response-send-failed" {
+		t.Fatal("bridge did not retain the response-send marker")
 	}
 }
 

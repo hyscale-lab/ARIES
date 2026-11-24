@@ -475,11 +475,10 @@ func (call *fileCall) recordFile(sink *contentSink, truncated bool, duration int
 	}
 	if session.captureReplay && call.responseSendFailed {
 		record.ReplayError = "response-send-failed"
+	} else if session.captureReplay && kind == kindFileWrite && record.StdinEncoding != "utf-8" {
+		record.ReplayError = "write-content-omitted"
 	} else if session.captureReplay && kind == kindFileWrite && statusText == "failed" {
 		record.ReplayError = "write-size-omitted"
-	}
-	if session.captureReplay && kind == kindFileWrite && record.StdinEncoding != "utf-8" {
-		record.ReplayError = "write-content-omitted"
 	}
 	record.setOutcome(call.outcome, err)
 	session.writeRecord(record, raw)

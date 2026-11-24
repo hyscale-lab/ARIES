@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -63,7 +64,8 @@ type replayRunIndex struct {
 		TaskID     string          `json:"task_id"`
 		Evaluation json.RawMessage `json:"evaluation"`
 	} `json:"tasks"`
-	digest [sha256.Size]byte
+	digest            [sha256.Size]byte
+	harborFieldsValid func() bool
 }
 
 func (result *replayRunIndex) occurrenceEvaluation(id string) (json.RawMessage, error) {
@@ -95,6 +97,23 @@ func readReplayRunIndex(ctx context.Context, root *os.Root) (*replayRunIndex, er
 		return nil, errors.New("replay source run result is invalid")
 	}
 	result.digest = sha256.Sum256(data)
+	// Validate the same bytes that supplied the binding, once per index.
+	result.harborFieldsValid = sync.OnceValue(func() bool {
+		fields, err := harborFields(data)
+		if err != nil {
+			return false
+		}
+		var entries []json.RawMessage
+		if json.Unmarshal(fields["tasks"], &entries) != nil {
+			return false
+		}
+		for _, entry := range entries {
+			if _, err := harborFields(entry); err != nil {
+				return false
+			}
+		}
+		return true
+	})
 	return &result, nil
 }
 
