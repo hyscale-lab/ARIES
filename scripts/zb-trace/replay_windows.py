@@ -2,7 +2,7 @@
 from itertools import groupby
 
 
-def identify(events, complete=True, relaxed_status=False, ending_handles=()):
+def identify(events, complete=True, relaxed_status=False, ending_handles=(), ending_retained_handles=()):
     calls = [e for e in events if e["event"] == "tool_dispatch"]
     replies = [e for e in events if e["event"] == "tool_reply"]
     issued = {e["sequence"]: e for e in calls}
@@ -84,7 +84,7 @@ def identify(events, complete=True, relaxed_status=False, ending_handles=()):
         group["background_handles_after"] = sorted(active)
     for event in active.values():
         event["terminal_poll_observed"] = False
-    if complete and (set(active) != set(ending_handles) or unmatched or retained):
+    if complete and (set(active) != set(ending_handles) or unmatched or set(retained) != set(ending_retained_handles)):
         raise ValueError("unmatched native start or poll")
     return groups, {"open_handles": sorted(active), "unmatched_reply_sequences": unmatched}
 

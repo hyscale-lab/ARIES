@@ -95,7 +95,18 @@ def process(run, output):
         handles = receipt['source_process_states']
         if any(state not in ('running','terminal_retained') for state in handles.values()):
             raise ValueError('missing source process at teardown')
-    groups, process_status = identify(events, complete=True, ending_handles=list(map(int, handles)))
+    keys=('sequence','step_id','source_call_id','operation','source_process_session_id','exit_code','expected_exit_code')
+    early={tuple(r.get(k) for k in keys) for r in events if r['event']=='diagnostic_process_observation'
+           and r.get('status_basis')=='real_terminal_before_source_running_poll'
+           and r.get('exit_code',-1)>=0 and r.get('expected_exit_code')==-1}
+    divergent=[r for r in events if r['event']=='tool_reply' and r['exit_code']!=r['expected_exit_code']]
+    for r in divergent:
+        if r.get('operation') in ('StartProcess','PollProcess') and tuple(r.get(k) for k in keys) not in early:
+            raise ValueError('asynchronous status divergence requires a matching process observation')
+    groups, process_status = identify(events, complete=True, relaxed_status=bool(divergent),
+                ending_handles=[int(h) for h,state in handles.items() if state=='running'],
+                ending_retained_handles=[int(h) for h,state in handles.items() if state=='terminal_retained'])
+    process_status['divergent_first_replies']=[{k:r.get(k) for k in keys} for r in divergent]
     create, = [r for r in events if r['event']=='create_start']
     lifecycle = [r['event'] for r in events]
     required = ['source_task_ready','snapshot_complete','restore_complete','session_start','tool_dispatch','session_end']
