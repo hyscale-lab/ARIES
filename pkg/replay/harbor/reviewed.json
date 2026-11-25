@@ -18,6 +18,11 @@
     ],
     "trials": [
       {
+        "trial": "37939ee5-f1b5-43fe-b00a-4e04c6eda6e3",
+        "trajectory_sha256": "abfb8c6301e76ad0766fc812920471dfbcbae68d226b1a7e75db864a1afc9596",
+        "rollout_sha256": "81a73c165163801ac392540e4c37935bcedd91bd7c775a2c4d94b4ed3ec1f929"
+      },
+      {
         "trial": "df2e611e-481e-4a9c-9589-25eebeada90b",
         "trajectory_sha256": "2a5456cbef54538284a3452328214544665715dce15a709f0104e3ad679ae75d",
         "rollout_sha256": "f93f3f9f958f59624d73f69e03b6c937188371a1fa3842da815dda635ff0c944"
