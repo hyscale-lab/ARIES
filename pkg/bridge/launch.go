@@ -24,6 +24,7 @@ type LaunchConfig struct {
 	ControlAddress  string            `json:"control_address"`
 	OutputDir       string            `json:"output_dir"`
 	RetainRawLog    bool              `json:"retain_raw_log"`
+	CaptureReplay   bool              `json:"capture_replay"`
 }
 
 // transportOf names the run's transport for a bridge type, or "" for an unknown type.

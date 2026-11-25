@@ -25,7 +25,10 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
   remote/credentialed endpoints; local HTTP uses a non-secret placeholder. URL
   validation does not enforce this [transport policy](../docs/implementation/model-runtime.md#implementation-gap-http-transport-policy).
 - `aries setup PROFILE` only prepares pinned data/images; it must not contact
-  model endpoints or start a model runtime. `aries PROFILE` runs the experiment.
+  model endpoints or start a model runtime. `aries PROFILE` runs the experiment
+  or [replay](../docs/configuration.md#sandbox-call-replay).
+- Require historical response checks unless the replay profile disables them.
+  Always validate source integrity and request evidence.
 
 `profiles/experiments/` holds the paper-reproduction profiles; their settings are
 documented in [configuration](../docs/configuration.md#paper-reproduction-profiles).

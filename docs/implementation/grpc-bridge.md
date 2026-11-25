@@ -282,6 +282,9 @@ see [bridge evidence](../run-results.md#bridge-evidence). The
   `max_line_bytes` when it is not zero. It records `total_lines` (also 0 for an
   empty file) only when it returned a summary.
 - `sha256` is the hex digest of the content that a completed file call moved.
+- Recording with `--record-for-replay` and replay execution retain bounded private
+  `Exec` output; ordinary live runs omit replay-only fields. See the
+  [capture contract](../design/replayer.md#4-capture-contract).
 - `truncated` is set when `Exec` output was cut (never with the Docker backend,
   see above), when a `ReadFile` range ends before the end of the file, or when
   `ReadLines` has more lines.

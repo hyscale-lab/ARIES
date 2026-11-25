@@ -1,13 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,48 +20,151 @@ import (
 	codexharness "github.com/hyscale-lab/aries/pkg/harness/codex"
 )
 
-func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
+func TestReplayWiringRejectsUnattachedCallerWithoutDockerEffects(t *testing.T) {
+	cfg := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+		Replay:    &config.ReplayConfig{Source: "source-run/task-001"},
+		Bridge:    config.BridgeConfig{Type: "hermes-grpc"},
+		Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
+	}
+	wiring := commandWiring()
+	if wiring.NewReplayCaller == nil || wiring.PreflightReplaySource == nil {
+		t.Fatal("command wiring has no replay caller or source preflight")
+	}
+	if _, err := wiring.NewReplayCaller(cfg, core.RuntimePlacement{}, 0, nil); err == nil {
+		t.Fatal("caller without private run attachment was accepted")
+	}
+}
+
+func TestValidateComponentsAllowsOnlyReplayGRPCAndPrivateRoute(t *testing.T) {
+	cfg := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+		Replay:    &config.ReplayConfig{Source: "source-run/task-001"},
+		Bridge:    config.BridgeConfig{Type: "hermes-grpc"},
+		Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
+	}
+	if err := validateComponents(cfg); err != nil {
+		t.Fatalf("valid replay components rejected: %v", err)
+	}
+	cfg.Benchmark.Type = "toolathlon"
+	if err := validateComponents(cfg); err == nil {
+		t.Fatal("accepted Toolathlon replay")
+	}
+	cfg.Benchmark.Type = "terminalbench2"
+	cfg.Bridge.Type = "hermes-ssh"
+	if err := validateComponents(cfg); err == nil {
+		t.Fatal("accepted replay SSH bridge")
+	}
+	cfg.Bridge.Type = "hermes-grpc"
+	cfg.Replay.Deployment = config.DeploymentConfig{Backend: "docker", Docker: &config.DockerDeploymentConfig{Socket: "/other/docker.sock"}}
+	if err := validateComponents(cfg); err == nil {
+		t.Fatal("accepted caller on another Docker daemon")
+	}
+}
+
+func TestCLIFlags(t *testing.T) {
+	const (
+		exitSuccess   = 0
+		exitUsage     = 1
+		exitFlagError = 2
+	)
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "aries")
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build aries: %v\n%s", err, output)
+	}
+	profile := filepath.Join(dir, "missing.json")
+	for _, tc := range []struct {
+		name       string
+		args       []string
+		wantExit   int
+		wantOutput string
+	}{
+		{"help", []string{"--help"}, exitSuccess, "-record-for-replay"},
+		{"unknown leading flag", []string{"--unknown", profile}, exitFlagError, "flag provided but not defined"},
+		{"flag after profile", []string{profile, "--record-for-replay"}, exitUsage, "usage: aries"},
+		{"recording with setup", []string{"--record-for-replay", "setup", profile}, exitUsage, "usage: aries"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), binary, tc.args...)
+			cmd.Env = slices.DeleteFunc(cmd.Environ(), func(entry string) bool {
+				return strings.HasPrefix(entry, "ARIES_RUN_NAMESPACE=")
+			})
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Fatalf("start aries: %v", err)
+				}
+			}
+			if code := cmd.ProcessState.ExitCode(); code != tc.wantExit {
+				t.Errorf("exit code = %d, want %d\n%s", code, tc.wantExit, output)
+			}
+			if !strings.Contains(string(output), tc.wantOutput) {
+				t.Errorf("output = %q, want %q", output, tc.wantOutput)
+			}
+		})
+	}
+}
+
+func TestDispatch(t *testing.T) {
+	const profile = "profile.json"
 	runErr := errors.New("run")
 	setupErr := errors.New("setup")
 	for _, tc := range []struct {
 		name        string
 		args        []string
-		wantRun     int
-		wantSetup   int
+		record      bool
 		wantErr     error
 		wantProfile string
 	}{
-		{name: "run", args: []string{"profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json"},
-		{name: "setup", args: []string{"setup", "profile.json"}, wantSetup: 1, wantErr: setupErr, wantProfile: "profile.json"},
+		{name: "run", args: []string{profile}, wantErr: runErr, wantProfile: profile},
+		{name: "record", args: []string{profile}, record: true, wantErr: runErr, wantProfile: profile},
+		{name: "setup", args: []string{"setup", profile}, wantErr: setupErr, wantProfile: profile},
+		{name: "profile named setup", args: []string{"setup"}, wantErr: runErr, wantProfile: "setup"},
 		{name: "empty"},
-		{name: "profile named setup", args: []string{"setup"}, wantRun: 1, wantErr: runErr, wantProfile: "setup"},
-		{name: "unknown two args", args: []string{"other", "profile.json"}},
-		{name: "extra arg", args: []string{"setup", "profile.json", "extra"}},
+		{name: "unknown two args", args: []string{"other", profile}},
+		{name: "extra arg", args: []string{"setup", profile, "extra"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runCalls, setupCalls := 0, 0
-			var profile string
-			run := func(context.Context, string, io.Writer, app.Dependencies) error {
-				runCalls++
-				profile = tc.args[0]
-				return runErr
+			check := func(result error) useCase {
+				return func(_ context.Context, path string, _ io.Writer, deps app.Dependencies) error {
+					if result != tc.wantErr || path != tc.wantProfile || deps.RecordForReplay != tc.record {
+						t.Fatalf("called %v with profile %q and recording=%v", result, path, deps.RecordForReplay)
+					}
+					return result
+				}
 			}
-			setup := func(_ context.Context, got string, _ io.Writer, _ app.Dependencies) error {
-				setupCalls++
-				profile = got
-				return setupErr
-			}
-			err := dispatch(context.Background(), tc.args, &bytes.Buffer{}, app.Dependencies{}, run, setup)
-			if runCalls != tc.wantRun || setupCalls != tc.wantSetup || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
-				t.Fatalf("run=%d setup=%d err=%v", runCalls, setupCalls, err)
-			}
-			if tc.wantErr == nil && (err == nil || err.Error() != "usage: aries PROFILE.json | aries setup PROFILE.json") {
-				t.Fatalf("grammar err=%v", err)
-			}
-			if tc.wantProfile != "" && profile != tc.wantProfile {
-				t.Fatalf("profile=%q", profile)
+			deps := app.Dependencies{RecordForReplay: tc.record}
+			err := dispatch(t.Context(), tc.args, io.Discard, deps, check(runErr), check(setupErr))
+			if tc.wantErr == nil {
+				if err == nil || !strings.HasPrefix(err.Error(), "usage: aries") {
+					t.Fatalf("error = %v, want usage", err)
+				}
+			} else if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestApptainerNamespaceForwardsArgs(t *testing.T) {
+	t.Setenv("ARIES_RUN_NAMESPACE", "")
+	profile := filepath.Join("..", "..", "profiles", "apptainer", "hermes-tb2-fix-git-apptainer.json")
+	args := []string{"--record-for-replay=false", "--", profile}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entered []string
+	enter := func(_ context.Context, argv []string) (int, error) {
+		entered = argv
+		return 0, nil
+	}
+	code, selected, err := runInOwnNamespace(t.Context(), args, []string{profile}, enter)
+	if want := append([]string{executable}, args...); err != nil || !selected || code != 0 || !slices.Equal(entered, want) {
+		t.Fatalf("code=%d selected=%v argv=%q want=%q err=%v", code, selected, entered, want, err)
 	}
 }
 
@@ -216,7 +320,7 @@ func TestNewSharedBridgeAcceptsTheHermesGRPCBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := newSharedBridge(cfg, "run-1", t.TempDir(), core.RuntimePlacement{}, nil)
+	bridge, err := newSharedBridge(cfg, "run-1", t.TempDir(), core.RuntimePlacement{}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

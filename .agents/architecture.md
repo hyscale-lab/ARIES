@@ -48,6 +48,12 @@ Load the selected catalog once per run; keep shared metadata immutable and
 verifier inputs benchmark-private. Give every occurrence fresh mutable benchmark
 state and runtime owners, including repeated task IDs. Runner explicitly revokes
 sessions; use fresh bounded cleanup contexts after cancellation. No assignment
-leases or controller-liveness supervision.
+leases or controller-liveness supervision. Record every selected occurrence,
+including repeats and timed-loop admissions. Do not claim sandbox lifecycle timing
+fidelity. For [replay](../docs/design/replayer.md), preserve occurrence identity
+and sandbox and bridge ownership. Attempt caller stop before bridge revocation,
+even if caller stop is unconfirmed. Read finalized diagnostics only after both
+are confirmed. Keep historical response checks separate from execution and
+cleanup. Reuse only recorded grades; do not run evaluation.
 
 Details: [design](../docs/design.md), [contracts](components.md).

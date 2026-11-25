@@ -52,12 +52,12 @@ const (
 	// maxExecOutput first.
 	defaultOutputLimit = 16 << 20
 
-	// maxMessageBytes is a backstop and must never be the binding constraint.
+	// MaxMessageBytes is a backstop and must never be the binding constraint.
 	// If the transport cap fired first, a command would run to completion and
 	// then have its reply rejected — the exact failure mode truncation exists to
 	// avoid, and the one grpc-go's 4 MiB receive default would have caused. Two
 	// fully truncated streams plus framing must fit well inside it.
-	maxMessageBytes = 64 << 20
+	MaxMessageBytes = 64 << 20
 
 	// refusedExitCode marks a record for a call that never ran, as Hermes's SSH
 	// dialect does.
@@ -72,13 +72,20 @@ const (
 	toolCallIDChars    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
 	// invalidToolCallID is the refusal message for an id outside the bound.
 	invalidToolCallID = "malformed tool call id"
+	// The replay key identifies a source audit record, not a harness tool call.
+	replaySourceSequenceKey     = "aries-replay-source-sequence"
+	replaySequenceBase          = 10
+	replaySequenceBits          = 64
+	invalidReplaySourceSequence = "malformed replay source sequence"
 	// auditFailed is the refusal message after the audit latched an error.
 	auditFailed = "bridge audit failed"
 )
 
 // Options are the host-local inputs to one gRPC bridge.
 type Options struct {
-	SandboxID string
+	// CaptureReplay retains response evidence for source recording or replay execution.
+	CaptureReplay bool
+	SandboxID     string
 	// ResolveListen supplies the local binding. Deployment resolves reachable endpoints.
 	ResolveListen  func(context.Context) (core.BridgeListen, error)
 	OutputDir      string
@@ -98,6 +105,7 @@ type Manager struct {
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
 	omitRawLog     bool
+	captureReplay  bool
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -107,17 +115,18 @@ type Manager struct {
 }
 
 type bridgeSession struct {
-	sandbox      target.Executor
-	sandboxID    string
-	listener     net.Listener
-	server       *grpc.Server
-	serveCtx     context.Context
-	cancel       context.CancelFunc
-	artifactDir  string
-	toolLogPath  string
-	rawLogPath   string
-	audit        *bridgekit.AuditWriter
-	partialStart bool
+	sandbox       target.Executor
+	sandboxID     string
+	listener      net.Listener
+	server        *grpc.Server
+	serveCtx      context.Context
+	cancel        context.CancelFunc
+	artifactDir   string
+	toolLogPath   string
+	rawLogPath    string
+	audit         *bridgekit.AuditWriter
+	partialStart  bool
+	captureReplay bool
 
 	// revoked is set before the transport is touched, so a call arriving
 	// concurrently is refused by construction rather than by timing.
@@ -154,7 +163,7 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		sandboxID: options.SandboxID, resolveListen: options.ResolveListen,
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
-		logger: options.Logger, omitRawLog: options.OmitRawLog,
+		logger: options.Logger, omitRawLog: options.OmitRawLog, captureReplay: options.CaptureReplay,
 	}, nil
 }
 
@@ -177,7 +186,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 		return core.ToolEndpoint{}, errors.New("gRPC bridge requires a bind IP and valid port")
 	}
 	manager.used = true
-	session := &bridgeSession{sandbox: sandbox, sandboxID: manager.sandboxID, artifactDir: manager.outputDir}
+	session := &bridgeSession{sandbox: sandbox, sandboxID: manager.sandboxID, artifactDir: manager.outputDir, captureReplay: manager.captureReplay}
 	fail := func(primary error) (core.ToolEndpoint, error) {
 		session.partialStart = true
 		session.revoke()
@@ -215,7 +224,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	session.audit = bridgekit.NewAuditWriter(structured, raw)
 	session.serveCtx, session.cancel = context.WithCancel(context.Background())
 	session.server = grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
+		grpc.MaxRecvMsgSize(MaxMessageBytes), grpc.MaxSendMsgSize(MaxMessageBytes),
 		// Stop must not return while a handler can still write its record;
 		// see revoke.
 		grpc.WaitForHandlers(true))
@@ -355,12 +364,15 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	command := core.Command{Path: bridgekit.RemoteShellPath, Args: args, Dir: session.sandbox.Workdir()}
 	raw := rawGRPCRecord{OperationClass: kindExec, Script: script, Login: request.GetLogin()}
 	toolCallID, validID := incomingToolCallID(ctx)
+	sourceSequence, validSequence := incomingReplaySourceSequence(ctx)
 	refuse := func(code codes.Code, message string) (*sandboxv1.ExecResponse, error) {
-		session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
+		record := toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
 			OperationClass: kindExec, CommandHash: bridgekit.CommandHash(script), Command: script,
 			StdinEncoding: "utf-8", ExitCode: refusedExitCode, StartedAt: bridgekit.FormatTime(time.Now()),
 			Status: "rejected", Error: message, ToolCallID: toolCallID,
-		}}, raw)
+		}, ReplaySourceSequence: sourceSequence}
+		record.setOutcome(session.responseOutcome(sandboxv1.Sandbox_Exec_FullMethodName), status.Error(code, message))
+		session.writeRecord(record, raw)
 		return nil, status.Error(code, message)
 	}
 	if session.revoked.Load() {
@@ -371,6 +383,9 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	}
 	if !validID {
 		return refuse(codes.InvalidArgument, invalidToolCallID)
+	}
+	if !validSequence {
+		return refuse(codes.InvalidArgument, invalidReplaySourceSequence)
 	}
 	// The whole input is in hand, so the call is refused before anything runs
 	// and the refusal is the evidence.
@@ -412,7 +427,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	truncated := stdout.truncated() || stderr.truncated()
 	stdinContent, stdinEncoding := session.describeInput(input, int64(len(input)))
 	raw.Stdin, raw.StdinBytes = input, int64(len(input))
-	session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
+	record := toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
 		OperationClass: kindExec, Path: command.Path, Workdir: command.Dir,
 		CommandHash: bridgekit.CommandHash(script), Command: script,
 		Argv:  append([]string{command.Path}, command.Args...),
@@ -420,11 +435,22 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, StartedAt: bridgekit.FormatTime(started), DurationMS: time.Since(started).Milliseconds(),
 		Status: statusText, Error: message, ToolCallID: toolCallID,
-	}, Truncated: truncated}, raw)
-	return &sandboxv1.ExecResponse{
+	}, Truncated: truncated, ReplaySourceSequence: sourceSequence}
+	if session.captureReplay && stdinEncoding != "utf-8" {
+		record.ReplayError = "stdin-omitted"
+	}
+	response := &sandboxv1.ExecResponse{
 		ExitCode: int32(exitCode), Reason: reason,
 		Stdout: stdoutBuffer.Bytes(), Stderr: stderrBuffer.Bytes(), Truncated: truncated,
-	}, nil
+	}
+	outcome := session.responseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
+	outcome.message(response)
+	record.setOutcome(outcome, nil)
+	if session.captureReplay {
+		record.setDebugResponse(response.GetStdout(), response.GetStderr())
+	}
+	session.writeRecord(record, raw)
+	return response, nil
 }
 
 // incomingToolCallID returns the tool call id the client sent, or "" when it
@@ -442,12 +468,33 @@ func incomingToolCallID(ctx context.Context) (string, bool) {
 	return values[0], true
 }
 
+func incomingReplaySourceSequence(ctx context.Context) (uint64, bool) {
+	values := metadata.ValueFromIncomingContext(ctx, replaySourceSequenceKey)
+	if len(values) == 0 {
+		return 0, true
+	}
+	if len(values) != 1 {
+		return 0, false
+	}
+	sequence, err := strconv.ParseUint(values[0], replaySequenceBase, replaySequenceBits)
+	if err != nil || sequence == 0 || strconv.FormatUint(sequence, replaySequenceBase) != values[0] {
+		return 0, false
+	}
+	return sequence, true
+}
+
 func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawGRPCRecord) {
+	if !session.captureReplay {
+		record.ReplaySourceSequence = 0
+	}
 	record.SandboxID = session.sandboxID
 	record.ContainerID = session.sandbox.ContainerID()
 	record.ContainerName = session.sandbox.ContainerName()
 	record.RunID = session.sandbox.RunID()
 	record.TaskID = session.sandbox.TaskID()
+	if record.ResponseDebug {
+		record.boundDebugResponse()
+	}
 	raw.Status = record.Status
 	raw.SandboxID = session.sandboxID
 	raw.RunID = record.RunID

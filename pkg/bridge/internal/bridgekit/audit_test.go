@@ -302,7 +302,7 @@ func TestAuditWriterExactCombinedBudgetBoundaryAndImmutableEnqueue(t *testing.T)
 	structuredCandidate := structuredRecord
 	structuredCandidate.Sequence = 1
 	structuredCandidate.Timestamp = fixed.Format(time.RFC3339Nano)
-	structuredLine, _ := marshalJSONLine(structuredCandidate)
+	structuredLine, _ := MarshalJSONLine(structuredCandidate)
 	rawLine, _ := rawRecord.RenderRaw(1, fixed.Format(time.RFC3339Nano))
 	charge := int64(len(structuredLine) + len(rawLine))
 

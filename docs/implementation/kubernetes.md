@@ -264,6 +264,19 @@ paths and the absence of a service account token. It also searches the whole pod
 object for supplied secret values. `Stop` deletes the pod and returns only after
 a lookup confirms absence.
 
+The no-token policy applies when the manager has no configured service account
+or the request disables its token. Validation rejects token automounting, explicit
+`serviceAccountToken` projections, and direct or projected Secret volumes with
+type `kubernetes.io/service-account-token`. Ordinary Secret types and other
+projections remain allowed.
+
+For direct or projected Secret volumes under this policy, validation checks each
+Secret's type. Missing, denied, or invalid lookup results fail validation.
+The Runner's Kubernetes credentials need `get` permission for those Secrets.
+This grants access to the whole Secret, not one field; use `resourceNames`
+to restrict access. The chart does not grant it. Generated replay pods use
+`emptyDir`; neither those volumes nor `imagePullSecrets` need Secret lookups.
+
 Only the bridge pod mounts a service account. Its Role allows `get pods` and
 `pods/exec` in the namespace, and before executing it confirms the target is a
 live sandbox pod of its own run and task.
