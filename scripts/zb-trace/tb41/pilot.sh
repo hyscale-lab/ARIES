@@ -14,6 +14,14 @@ ctr=("$runtime/bin/firecracker-ctr" -a "$socket" -n aries)
 mkdir -m700 "$out"
 exec 9>"$runtime/.tb41.lock"
 flock -n 9
+wait_for_service() {
+    for _ in {1..100}; do
+        "${ctr[@]}" version >/dev/null 2>&1 && return 0
+        sleep .1
+    done
+    "${ctr[@]}" version >/dev/null
+}
+wait_for_service
 namespaces=$("${ctr[@]}" namespaces ls -q)
 for ns in $namespaces; do
     tasks=$("$runtime/bin/firecracker-ctr" -a "$socket" -n "$ns" tasks ls -q)
@@ -58,14 +66,13 @@ os.replace(tmp, p)
 PY
     changed=1
     systemctl restart "$unit"
-    for _ in {1..100}; do "${ctr[@]}" version >/dev/null 2>&1 && break; sleep .1; done
-    "${ctr[@]}" version >/dev/null
+    wait_for_service
     bpftrace -q -B line "$trace/../kvm-slots.bt" >"$out/slots.log" 2>"$out/slots.stderr" &
     slots=$!
     python3 -B "$trace/collect.py" "$out" >"$out/collector.stdout" 2>"$out/collector.stderr" &
     collector=$!
     for _ in {1..200}; do
-        kill -0 "$slots" "$collector"
+        kill -0 "$slots" && kill -0 "$collector" || exit 1
         [[ -S "$out/boundary.sock" ]] && grep -q '^ready ' "$out/slots.log" && break
         sleep .1
     done
