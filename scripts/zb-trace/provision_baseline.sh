@@ -1,13 +1,68 @@
 #!/usr/bin/env bash
 # Start one study worker from the already built common kernel/root and stack binaries.
-# Usage: provision_baseline.sh STACK_DIR UNIT RUNTIME_PROFILE v1|v2|v3|v4|native-v2 [IMAGE@sha256:DIGEST]
+# Usage: provision_baseline.sh STACK_DIR UNIT RUNTIME_PROFILE v1|v2|v3|v4|v5|native-v2 [IMAGE@sha256:DIGEST]
+#        provision_baseline.sh --prepare-root SOURCE_EXT4 QUIET_EXT4
 set -euo pipefail
+
+prepare_guest_root() (
+    source=$1
+    output=$2
+    agent_unit=/etc/systemd/system/firecracker-agent.service
+    unit_text=$(debugfs -R "cat $agent_unit" "$source" 2>/dev/null)
+    case $(sed -n '/^ExecStart=/p' <<< "$unit_text") in
+        'ExecStart=/usr/local/bin/agent')
+            printf '%s\n' "$source"
+            exit
+            ;;
+        'ExecStart=/usr/local/bin/agent --debug') ;;
+        *)
+            echo "Unexpected guest agent unit in $source" >&2
+            exit 1
+            ;;
+    esac
+    stage=$(mktemp -d "$(dirname "$output")/.quiet-root.XXXXXX")
+    trap 'rm -f -- "$stage/root.ext4" "$stage/agent.service"; rmdir -- "$stage"' EXIT
+    cp --reflink=auto --sparse=always "$source" "$stage/root.ext4"
+    chmod u+w "$stage/root.ext4"
+    sed 's|^ExecStart=/usr/local/bin/agent --debug$|ExecStart=/usr/local/bin/agent|' <<< "$unit_text" > "$stage/agent.service"
+    chmod 0644 "$stage/agent.service"
+    # Preserve the donor image and the bytes referenced by historical checkpoints.
+    (
+        cd "$stage"
+        # Use fixed filesystem timestamps so retrying with the same donor gives the same image.
+        export E2FSPROGS_FAKE_TIME=946684800
+        touch -d "@$E2FSPROGS_FAKE_TIME" agent.service
+        debugfs -w -f /dev/stdin root.ext4 >/dev/null <<EOF
+rm $agent_unit
+write agent.service $agent_unit
+set_inode_field $agent_unit uid 0
+set_inode_field $agent_unit gid 0
+EOF
+        cmp -s agent.service <(debugfs -R "cat $agent_unit" root.ext4 2>/dev/null)
+        e2fsck -fn root.ext4 >&2
+        chmod 0444 root.ext4
+        if ! ln -T root.ext4 "$output" 2>/dev/null; then
+            if [[ -L "$output" || $(stat -c '%a' "$output") != 444 ]] || ! cmp -s root.ext4 "$output"; then
+                echo "Existing quiet guest root differs from the donor conversion: $output" >&2
+                exit 1
+            fi
+        fi
+    )
+    printf '%s\n' "$output"
+)
+
+if [[ ${1:-} == --prepare-root ]]; then
+    [[ $# == 3 && $2 == /* && $3 == /* ]]
+    prepare_guest_root "$2" "$3"
+    exit
+fi
+
 stack=$(realpath "$1")
 unit=$2
 profile=$(realpath "$3")
 variant=$4
 [[ "$unit" =~ ^fcmod-zepbound-[a-z0-9-]+$ ]]
-[[ "$variant" =~ ^(v[1-4]|native-v2)$ ]]
+[[ "$variant" =~ ^(v[1-5]|native-v2)$ ]]
 work="$stack/runtime"
 bin="$work/bin"
 socket="/run/$unit/containerd.sock"
@@ -19,6 +74,13 @@ if sudo -n systemctl is-active --quiet "$unit" || sudo -n dmsetup info "$unit" >
     echo "Unit or thin pool already exists: $unit" >&2
     exit 1
 fi
+for dir in "$work/shim" "$work/checkpoints"; do
+    if [[ -d "$dir" && -n $(find "$dir" -mindepth 1 -print -quit) ]]; then
+        echo "Provisioning requires an empty runtime directory: $dir" >&2
+        exit 1
+    fi
+done
+root=$(prepare_guest_root "$work/common-rootfs.ext4" "$work/common-rootfs-quiet.ext4")
 mkdir -p "$work"/{thinpool,shim,checkpoints,devmapper} "$stack/evidence"
 if ! sudo -n dmsetup info "$unit" >/dev/null 2>&1; then
     for entry in data:30G metadata:256M; do
@@ -60,7 +122,7 @@ disabled_plugins = ["io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images", 
   snapshotter = "devmapper"
 EOF
 
-python3 - "$profile" "$work" "$variant" <<'PY'
+python3 - "$profile" "$work" "$variant" "$root" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -69,21 +131,23 @@ import sys
 source, work = map(pathlib.Path, sys.argv[1:3])
 config = json.loads(source.read_text())
 variant = sys.argv[3]
+root = pathlib.Path(sys.argv[4])
 if variant == "v2":
     config["free_page_reporting"] = True
     config["kernel_args"] += " page_reporting.page_reporting_order=9"
-if variant in ("v3", "v4", "native-v2"):
-    with (work / "common-rootfs.ext4").open("rb") as image:
+if variant in ("v3", "v4", "v5", "native-v2"):
+    with root.open("rb") as image:
         config["root_drive_sha256"] = hashlib.file_digest(image, "sha256").hexdigest()
     config["root_drive_use_pmem"] = variant == "v4"
-    config["guest_reclamation"] = {"Enabled": variant != "native-v2"}
+    if variant != "v5":
+        config["guest_reclamation"] = {"Enabled": variant != "native-v2"}
     if variant == "native-v2":
         config["kernel_args"] += " damon_reclaim.enabled=N page_reporting.page_reporting_order=9"
     config["smt_enabled"] = False
 config.update(
     firecracker_binary_path=str(work / "bin/firecracker"),
     kernel_image_path=str(work / "common-vmlinux.bin"),
-    root_drive=str(work / "common-rootfs.ext4"),
+    root_drive=str(root),
     shim_base_dir=str(work / "shim"),
     jailer={
         "runc_binary_path": str(work / "bin/runc"),

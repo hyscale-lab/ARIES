@@ -8,8 +8,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath \
 sha256sum /tmp/zb-guest
 ```
 
-Stage the binary at `/usr/local/bin/zb-guest` in the diagnostic image. Record
-the diagnostic image and executable hashes. Keep the process inside the guest
+Stage the binary at `/usr/local/bin/zb-guest` in the diagnostic image. The
+installer keeps normal guest agent logging even when the donor has debug
+logging enabled. Record the diagnostic image and executable hashes. Keep the process inside the guest
 and take observations while its vCPUs are running. Use the replay driver to
 bracket each request with its own host monotonic timestamps. The probe also
 records guest monotonic times for the full capture and the PFN scan. The two

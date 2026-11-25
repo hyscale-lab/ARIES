@@ -7,7 +7,12 @@ dest=$(realpath -m "$3")
 test -f "$source_image" && test -f "$probe" && test ! -e "$dest"
 staging=$(mktemp -d "$(dirname "$dest")/.zb-root.XXXXXXXX")
 trap 'rm -d "$staging" 2>/dev/null || true' EXIT
-cp --sparse=always --reflink=auto "$source_image" "$staging/image"
+provision="$(dirname -- "$(realpath "$0")")/../zb-trace/provision_baseline.sh"
+quiet_source=$(bash "$provision" --prepare-root "$source_image" "$staging/quiet.ext4")
+cp --sparse=always --reflink=auto "$quiet_source" "$staging/image"
+if [[ "$quiet_source" == "$staging/quiet.ext4" ]]; then
+    unlink "$quiet_source"
+fi
 chmod u+w "$staging/image"
 regular_maps=${ZB_REGULAR_MAPS:-0}
 [[ "$regular_maps" =~ ^[01]$ ]]

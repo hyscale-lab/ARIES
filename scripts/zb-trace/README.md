@@ -6,6 +6,13 @@ pages, and a kernel with KVM and page-idle support. Reading PFNs and marking
 the idle bitmap requires privileges on the worker. Use one collector for a
 worker's concurrent VMs, with a private output directory for each run.
 
+Provision fresh v1–v5 stacks with [provision_baseline.sh](provision_baseline.sh).
+The guest agent starts at its normal logging level. When a prepared ext4 donor
+still enables debug logging, provisioning uses `debugfs` and `e2fsck` to
+make a separate read-only image with the quiet service. Read `root_drive`
+and, when present, `root_drive_sha256` from `runtime.json` for the image
+actually booted. The donor image remains available for historical reproduction.
+
 Start slot capture before starting any Firecracker process intended for the
 run. Leave the capture running through the last boundary. A successful start
 prints a `ready` line. Give it at least one `/proc` clock tick before starting
