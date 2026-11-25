@@ -116,6 +116,85 @@ func TestPeriodicCapturesInToolAndWait(t *testing.T) {
 	}
 }
 
+func TestPostToolCapturePrecedesBoundedDiagnostic(t *testing.T) {
+	for _, mode := range []string{"serial", "parallel"} {
+		t.Run(mode, func(t *testing.T) {
+			const gap = 40 * time.Millisecond
+			r := &Recording{Plan: replay.Plan{Calls: []replay.Call{{Sequence: 1, Operation: "Exec"}}}}
+			start := Event{Kind: "exec_command", CallID: "first", Step: 1, Sequence: 1}
+			reply := Event{Kind: "function_call_output", CallID: "first", Step: 1, Sequence: 1, Wait: gap}
+			r.Events = []Event{start, reply}
+			wantReplies := 1
+			if mode == "parallel" {
+				wantReplies = 2
+				start.ParallelSize, reply.ParallelSize, reply.Wait = 2, 2, 0
+				start.SourceTime = time.Now()
+				sibling := Event{Kind: "exec_command", CallID: "sibling", Step: 1, Sequence: 2, ParallelSize: 2, SourceTime: start.SourceTime.Add(time.Millisecond)}
+				siblingReply := Event{Kind: "function_call_output", CallID: "sibling", Step: 1, Sequence: 2, ParallelSize: 2}
+				r.Plan.Calls = append(r.Plan.Calls, replay.Call{Sequence: 2, Operation: "Exec"})
+				r.Events = []Event{start, sibling, reply, siblingReply, {Kind: "reasoning", Step: 2, Wait: gap}}
+			}
+			var events []Receipt
+			h := Hooks{
+				KeepBoundedPollResult: true,
+				Exec: func(_ context.Context, call replay.Call) (core.CommandResult, error) {
+					if call.Sequence == 1 {
+						return core.CommandResult{ExitCode: ProcessRunning}, nil
+					}
+					return core.CommandResult{}, nil
+				},
+				Periodic: func(context.Context, string, int, []string) (Freeze, error) { return Freeze{}, nil },
+				FinishObservedProcess: func(context.Context, replay.Call) (core.CommandResult, error) {
+					time.Sleep(10 * time.Millisecond)
+					return core.CommandResult{}, nil
+				},
+				Record: func(e Receipt) error { events = append(events, e); return nil },
+			}
+			if err := Run(t.Context(), r, h); err != nil {
+				t.Fatal(err)
+			}
+			var first, last, post, dispatch, observed, begin, end Receipt
+			var replies, posts int
+			for _, e := range events {
+				switch e.Event {
+				case "tool_reply":
+					replies++
+					if e.Sequence == 1 {
+						first = e
+					}
+					if last.Time < e.Time {
+						last = e
+					}
+				case "trace_capture":
+					if e.Phase == "post-tool" {
+						post = e
+						posts++
+					}
+				case "diagnostic_process_dispatch":
+					dispatch = e
+				case "diagnostic_process_observation":
+					if e.StatusBasis == "additional_join_after_source_reply" {
+						observed = e
+					}
+				case "wait_start":
+					begin = e
+				case "wait_end":
+					end = e
+				}
+			}
+			if replies != wantReplies || posts != 1 || first.Exit == nil || *first.Exit != ProcessRunning || first.Expected == nil || *first.Expected != 0 {
+				t.Fatalf("source first replies or transition changed: replies=%d posts=%d first=%+v", replies, posts, first)
+			}
+			if !(last.Time <= post.Time && post.CaptureEndNS <= dispatch.Time && dispatch.Time < observed.Time) {
+				t.Fatalf("expected first replies, transition, diagnostic dispatch and result in order: %d %d %d %d %d", last.Time, post.Time, post.CaptureEndNS, dispatch.Time, observed.Time)
+			}
+			if begin.Time != last.Time || begin.RunnableTargetNS == nil || end.RunnableTargetNS == nil || *end.RunnableTargetNS-*begin.RunnableTargetNS != int64(gap) {
+				t.Fatalf("gap detached from last original first reply %d: %+v %+v", last.Time, begin, end)
+			}
+		})
+	}
+}
+
 func TestParallelScheduleUsesRunnableSpacing(t *testing.T) {
 	begin, err := Clock()
 	if err != nil {

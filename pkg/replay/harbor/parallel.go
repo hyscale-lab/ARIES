@@ -71,14 +71,21 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 	work, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	var lastReply int64
-	defer func() {
-		cancel()
-		wg.Wait()
+	var postCaptured bool
+	capturePostTool := func() error {
+		postCaptured = true
 		if h.clock != nil && lastReply != 0 {
 			h.clock.cursor = h.clock.runnable(lastReply)
 			h.clock.step = first.Step
 		}
-		runErr = errors.Join(runErr, h.boundary(ctx, "post-tool", first.Step, lastReply))
+		return h.boundary(ctx, "post-tool", first.Step, lastReply)
+	}
+	defer func() {
+		cancel()
+		wg.Wait()
+		if !postCaptured {
+			runErr = errors.Join(runErr, capturePostTool())
+		}
 	}()
 	var processJoins []func() error
 	if h.FinishObservedProcess != nil {
@@ -204,8 +211,11 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 			}
 		}
 	}
-	// A late terminal poll in this diagnostic can add a join. Preserve the
-	// recorded dispatch schedule of every original sibling before joining.
+	// Observe the transition at the last original reply before any diagnostic
+	// follow-up. Every original sibling has returned before this capture.
+	if err := capturePostTool(); err != nil {
+		return err
+	}
 	for _, join := range processJoins {
 		if err := join(); err != nil {
 			return err

@@ -182,11 +182,19 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		}
 		h.clock.cursor = h.clock.runnable(replyTime)
 		h.clock.step = e.Step
-		if err := recordReply(ctx, h, call, receipt, out, replyTime, err); err != nil {
+		var processJoin func() error
+		replyHooks := h
+		replyHooks.deferProcessJoin = func(join func() error) { processJoin = join }
+		if err := recordReply(ctx, replyHooks, call, receipt, out, replyTime, err); err != nil {
 			return err
 		}
 		if err := h.boundary(ctx, "post-tool", e.Step, replyTime); err != nil {
 			return err
+		}
+		if processJoin != nil {
+			if err := processJoin(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
