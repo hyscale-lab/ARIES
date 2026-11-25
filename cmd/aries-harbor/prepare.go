@@ -262,9 +262,14 @@ ARIESPATH`}})
 		}
 		allocation = strings.TrimSpace(out)
 	}
+	node := "node"
+	if r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
+		// The task prepends its Conda Node installation in login shells.
+		node = "/root/.nvm/versions/node/v22.23.2/bin/node"
+	}
 	state := "set -eu\n" + initial + "\n" + task.inputCheck + `
 command -v node codex rg python3
-test "$(node --version)" = v22.23.2
+test "$(` + node + ` --version)" = v22.23.2
 rg --version | head -1`
 	if task.packagesSHA != "" && task.packagesField == "" {
 		state += "\ncommand -v git patch perl\ndpkg-query -W python3 git patch perl-base"
