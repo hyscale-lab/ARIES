@@ -342,6 +342,118 @@ func (bridge *finiteAuditBridge) Start(context.Context, runner.Sandbox) (core.To
 }
 func (*finiteAuditBridge) Stop(context.Context) error { return nil }
 
+func TestReplayRunSavesRecordedGradeFields(t *testing.T) {
+	const concurrency = 1
+	const score = "0.25"
+	const reward = "1"
+	const zero = "0"
+	const graded = core.StatusSucceeded
+	const unavailable = "unavailable"
+	cases := []struct {
+		name       string
+		evaluation json.RawMessage
+		status     string
+		score      string
+		reward     string
+	}{
+		{name: "complete", evaluation: json.RawMessage(`{"status":"succeeded","score":` + score + `,"reward":` + reward + `}`), status: graded, score: score, reward: reward},
+		{name: "score only", evaluation: json.RawMessage(`{"status":"succeeded","score":` + score + `}`), status: graded, score: score},
+		{name: "reward only", evaluation: json.RawMessage(`{"status":"succeeded","reward":` + reward + `}`), status: graded, reward: reward},
+		{name: "reward with score alias", evaluation: json.RawMessage(`{"status":"succeeded","reward":` + reward + `,"Score":9}`), status: graded, reward: reward},
+		{name: "score with reward alias", evaluation: json.RawMessage(`{"status":"succeeded","score":` + score + `,"Reward":9}`), status: graded, score: score},
+		{name: "canonical fields with later aliases", evaluation: json.RawMessage(`{"status":"succeeded","score":` + score + `,"reward":` + reward + `,"SCORE":9,"REWARD":8}`), status: graded, score: score, reward: reward},
+		{name: "aliases only", evaluation: json.RawMessage(`{"status":"succeeded","Score":9,"Reward":8}`), status: unavailable},
+		{name: "null alias is not a grade", evaluation: json.RawMessage(`{"status":"succeeded","reward":` + reward + `,"Score":null}`), status: graded, reward: reward},
+		{name: "zero score", evaluation: json.RawMessage(`{"status":"succeeded","score":` + zero + `}`), status: graded, score: zero},
+		{name: "zero reward", evaluation: json.RawMessage(`{"status":"succeeded","reward":` + zero + `}`), status: graded, reward: zero},
+		{name: "omitted evaluation", status: unavailable},
+		{name: "null evaluation", evaluation: json.RawMessage(`null`), status: unavailable},
+		{name: "empty evaluation", evaluation: json.RawMessage(`{}`), status: unavailable},
+		{name: "status without grades", evaluation: json.RawMessage(`{"status":"succeeded"}`), status: unavailable},
+		{name: "native not run", evaluation: json.RawMessage(`{"status":"not_run","score":0,"reward":0,"duration":0}`), status: unavailable},
+		{name: "native blocked", evaluation: json.RawMessage(`{"status":"blocked_isolation","score":0,"reward":0,"duration":0}`), status: unavailable},
+		{name: "native without placeholders", evaluation: json.RawMessage(`{"status":"not_run"}`), status: unavailable},
+		{name: "native evaluation disabled", evaluation: json.RawMessage(`{"status":"not_enabled","score":0,"reward":0,"duration":0,"verifier_status":"not_enabled"}`), status: unavailable},
+		{name: "native evaluation disabled without placeholders", evaluation: json.RawMessage(`{"status":"not_enabled"}`), status: unavailable},
+	}
+	logicalIDs := make([]string, len(cases))
+	for index := range logicalIDs {
+		logicalIDs[index] = "a"
+	}
+	source, tasks, expected := writeFiniteReplaySource(t, logicalIDs, true)
+	type indexedTask struct {
+		TaskID     string          `json:"task_id"`
+		Evaluation json.RawMessage `json:"evaluation,omitempty"`
+	}
+	indexed := make([]indexedTask, len(cases))
+	for index, test := range cases {
+		indexed[index] = indexedTask{TaskID: expected[index].TaskID, Evaluation: test.evaluation}
+	}
+	data, err := json.Marshal(struct {
+		RunID string        `json:"run_id"`
+		Tasks []indexedTask `json:"tasks"`
+	}{RunID: finiteSourceRun, Tasks: indexed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, runResultName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	wiring := finiteReplayWiring(tasks)
+	var runRoot string
+	wiring.NewBridge = func(_ config.Config, outputRoot string, _ *logrus.Logger) (runner.ToolBridge, error) {
+		runRoot = outputRoot
+		return &stubBridge{}, nil
+	}
+	wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+		return &stubReplayCaller{}, nil
+	}
+	var out bytes.Buffer
+	if err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring}); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(filepath.Join(runRoot, runResultName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Tasks []struct {
+			Evaluation map[string]json.RawMessage `json:"evaluation"`
+			Replay     core.ReplayResult          `json:"replay"`
+			Cleanup    core.CleanupResult         `json:"cleanup"`
+		} `json:"tasks"`
+		Summary core.RunSummary `json:"summary"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != len(cases) || result.Summary.EvaluationsRun != 0 {
+		t.Fatalf("saved replay did not retain occurrences or ran an evaluation: %s", data)
+	}
+	for index, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			task := result.Tasks[index]
+			if task.Replay.Status != core.StatusSucceeded || task.Cleanup.Status != core.StatusSucceeded {
+				t.Fatalf("grade changed replay or cleanup outcome: %+v", task)
+			}
+			wantReused := ""
+			if test.status != unavailable {
+				wantReused = "true"
+			}
+			for key, want := range map[string]string{
+				"status": fmt.Sprintf("%q", test.status), "score": test.score, "reward": test.reward,
+				"reused": wantReused, "source_run_id": fmt.Sprintf("%q", finiteSourceRun),
+				"source_task_id": fmt.Sprintf("%q", indexed[index].TaskID),
+			} {
+				if got := string(task.Evaluation[key]); got != want {
+					t.Errorf("saved evaluation %s = %q, want %q", key, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestReplayRunReportsSharedTimingAndEqualStartWarnings(t *testing.T) {
 	const concurrency = 1
 	const firstLateness = 3 * time.Millisecond

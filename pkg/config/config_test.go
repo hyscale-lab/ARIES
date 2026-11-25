@@ -57,6 +57,54 @@ func TestReplayProfileAcceptsCatalogSelectors(t *testing.T) {
 	}
 }
 
+func TestReplayProfileResponseCheck(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		check bool
+		valid bool
+	}{
+		{"", true, true}, {"true", true, true}, {"false", false, true},
+		{`"false"`, false, false}, {"0", false, false}, {"null", false, false},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			profile := validReplayConfig()
+			if tc.value != "" {
+				profile = strings.Replace(profile, `"replay":{`, `"replay":{"must_check_response":`+tc.value+`,`, 1)
+			}
+			cfg, err := Decode(strings.NewReader(profile))
+			if !tc.valid {
+				if err == nil || !strings.Contains(err.Error(), "must_check_response") {
+					t.Fatalf("invalid response check: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Replay.MustCheckResponse != tc.check {
+				t.Fatalf("response check = %t, want %t", cfg.Replay.MustCheckResponse, tc.check)
+			}
+		})
+	}
+}
+
+func TestReplayProfileRejectsDuplicateResponsePolicy(t *testing.T) {
+	for _, tc := range []struct{ name, replacement string }{
+		{"merged replay", `"replay":{"must_check_response":false},"replay":{`},
+		{"merged replay alias", `"Replay":{"must_check_response":false},"replay":{`},
+		{"null then false", `"replay":{"must_check_response":null,"must_check_response":false,`},
+		{"folded policy alias", `"replay":{"muſt_check_response":false,"must_check_response":true,`},
+		{"escaped duplicate", `"replay":{"must_check_response":true,"must_check_respons\u0065":false,`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := strings.Replace(validReplayConfig(), `"replay":{`, tc.replacement, 1)
+			if _, err := Decode(strings.NewReader(profile)); err == nil {
+				t.Fatal("ambiguous replay profile accepted")
+			}
+		})
+	}
+}
+
 func TestReplayProfileRejectsLiveFieldsAndSchedules(t *testing.T) {
 	base := validReplayConfig()
 	for name, profile := range map[string]string{

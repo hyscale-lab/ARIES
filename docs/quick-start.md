@@ -150,6 +150,8 @@ profile. Recording can still produce an incompatible source; check the
 
 Create a replay profile from the [configuration example](configuration.md#sandbox-call-replay).
 Replay needs no model key, harness, or recording flag.
+Replay checks historical responses by default. Set `replay.must_check_response`
+to `false` only to skip those comparisons, not request validation or cleanup.
 
 ```sh
 ./bin/aries profiles/REPLACE_WITH_REPLAY_PROFILE.json

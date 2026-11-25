@@ -105,8 +105,9 @@ type ResourceOverrides struct {
 }
 
 type ReplayConfig struct {
-	Source     string           `json:"source"`
-	Deployment DeploymentConfig `json:"deployment"`
+	Source            string           `json:"source"`
+	Deployment        DeploymentConfig `json:"deployment"`
+	MustCheckResponse bool             `json:"must_check_response"`
 }
 
 type ProfileModel struct {
@@ -748,6 +749,15 @@ func Decode(r io.Reader) (Config, error) {
 		if !exists || string(deployment) == "null" {
 			return Config{}, errors.New("replay.deployment is required")
 		}
+		if err := checkUniqueReplayField(data, "replay"); err != nil {
+			return Config{}, err
+		}
+		if err := checkUniqueReplayField(fields["replay"], "must_check_response"); err != nil {
+			return Config{}, err
+		}
+		if value, exists := replayFields["must_check_response"]; exists && string(value) != "true" && string(value) != "false" {
+			return Config{}, errors.New("replay.must_check_response must be a boolean")
+		}
 		var executionFields map[string]json.RawMessage
 		if execution, exists := fields["execution"]; exists {
 			if err := json.Unmarshal(execution, &executionFields); err != nil {
@@ -763,6 +773,9 @@ func Decode(r io.Reader) (Config, error) {
 		}
 	}
 	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}}
+	if replay {
+		cfg.Replay = &ReplayConfig{MustCheckResponse: true}
+	}
 	if err := decodeStrictJSON(bytes.NewReader(data), &cfg, "experiment config"); err != nil {
 		return Config{}, err
 	}
@@ -777,6 +790,32 @@ func Decode(r io.Reader) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// Check the original keys before the typed decoder can merge them.
+func checkUniqueReplayField(data []byte, field string) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return fmt.Errorf("expected an object containing %s", field)
+	}
+	seen := false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if name, ok := key.(string); ok && strings.EqualFold(name, field) {
+			if seen || name != field {
+				return fmt.Errorf("duplicate or noncanonical replay profile field %q", field)
+			}
+			seen = true
+		}
+		var ignored json.RawMessage
+		if err := decoder.Decode(&ignored); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // LoadVersions reads one strict version pin catalog.

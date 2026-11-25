@@ -52,7 +52,7 @@ func SandboxStaging(cfg config.Config) (managed.SandboxStaging, error) {
 
 // PreflightReplaySource binds the complete source selection to catalog tasks and pins.
 func PreflightReplaySource(ctx context.Context, cfg config.Config, tasks []core.Task, logger *logrus.Entry) (*grpc.ReplaySelection, error) {
-	return grpc.PreflightReplaySource(ctx, cfg.Replay.Source, tasks, cfg.Benchmark.Type, BenchmarkRevisions(cfg), logger)
+	return grpc.PreflightReplaySourceWithResponseCheck(ctx, cfg.Replay.Source, tasks, cfg.Benchmark.Type, BenchmarkRevisions(cfg), logger, cfg.Replay.MustCheckResponse)
 }
 
 // BenchmarkRevisions returns the same pins used by live bridge evidence.

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -442,6 +444,59 @@ func TestReplayOutcomeCapturesGRPCFailures(t *testing.T) {
 	}
 	if records[0]["response_sha256"] == records[1]["response_sha256"] || records[2]["response_sha256"] == records[3]["response_sha256"] {
 		t.Fatalf("different error codes or messages have the same fingerprint: %#v", records)
+	}
+}
+
+type failedWriteReply struct {
+	grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]
+	ctx      context.Context
+	requests []*sandboxv1.WriteFileRequest
+	reply    *sandboxv1.WriteFileResponse
+}
+
+func (stream *failedWriteReply) Context() context.Context { return stream.ctx }
+
+func (stream *failedWriteReply) Recv() (*sandboxv1.WriteFileRequest, error) {
+	if len(stream.requests) == 0 {
+		return nil, io.EOF
+	}
+	request := stream.requests[0]
+	stream.requests = stream.requests[1:]
+	return request, nil
+}
+
+func (stream *failedWriteReply) SendAndClose(response *sandboxv1.WriteFileResponse) error {
+	stream.reply = response
+	return status.Error(codes.Unavailable, "reset during write reply")
+}
+
+func TestReplayOutcomeKeepsFailedWriteReplyWhenBodyIsOmitted(t *testing.T) {
+	const recordCount = 1
+	const path = "/app/example.txt"
+	const body = "private\fbody"
+	target := newFakeExecutor(make(fstest.MapFS))
+	manager, _, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+	stream := &failedWriteReply{
+		ctx: t.Context(),
+		requests: []*sandboxv1.WriteFileRequest{
+			{Part: &sandboxv1.WriteFileRequest_Header{Header: &sandboxv1.WriteFileHeader{Path: path, Size: int64(len(body))}}},
+			{Part: &sandboxv1.WriteFileRequest_Chunk{Chunk: []byte(body)}},
+		},
+	}
+	svc := &service{session: manager.active}
+	if err := svc.WriteFile(stream); err != nil {
+		t.Fatal(err)
+	}
+	if stream.reply.GetBytesWritten() != int64(len(body)) {
+		t.Fatal("bridge did not attempt a full write reply")
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != recordCount || records[0]["status"] != "completed" || records[0]["stdin_encoding"] != "binary-omitted" {
+		t.Fatalf("expected a completed write with omitted body: %#v", records)
+	}
+	if records[0]["replay_error"] != "response-send-failed" {
+		t.Fatalf("bridge did not retain the response send failure: %#v", records[0])
 	}
 }
 

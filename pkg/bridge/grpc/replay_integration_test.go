@@ -41,9 +41,10 @@ func (replayIntegrationBenchmark) Evaluate(context.Context, core.Task, runner.Sa
 }
 
 type replayIntegrationSandbox struct {
-	target *fakeExecutor
-	starts int
-	stops  int
+	target    *fakeExecutor
+	starts    int
+	stops     int
+	stopError error
 }
 
 func (sandbox *replayIntegrationSandbox) Start(context.Context, core.SandboxRequest) (runner.Sandbox, error) {
@@ -52,7 +53,7 @@ func (sandbox *replayIntegrationSandbox) Start(context.Context, core.SandboxRequ
 }
 func (sandbox *replayIntegrationSandbox) Stop(context.Context, runner.Sandbox) error {
 	sandbox.stops++
-	return nil
+	return sandbox.stopError
 }
 func (sandbox *replayIntegrationSandbox) Connectivity() core.HarnessConnectivity {
 	return core.HarnessConnectivity{}
@@ -233,49 +234,80 @@ func TestCaptureToReplayPreservesFiveCallsAndInheritedGrade(t *testing.T) {
 		}
 	}
 	for _, test := range []struct {
-		name, changedOutput string
-		wantCalls           int
-		strict, drift       bool
+		name, changedOutput      string
+		wantCalls                int
+		strict, drift, unchecked bool
+		exitCode                 int
+		execError, cleanupError  error
 	}{
 		{name: "matching trace", changedOutput: replayIntegrationSourceOutput, wantCalls: len(plan.Calls)},
 		{name: "same-length drift", changedOutput: "drifts", wantCalls: len(plan.Calls), drift: true},
 		{name: "strict response length", changedOutput: "changed", wantCalls: replayIntegrationCount, strict: true},
+		{name: "unchecked output and exit", changedOutput: "changed", exitCode: replayIntegrationCount, wantCalls: len(plan.Calls), unchecked: true},
+		{name: "unchecked execution failure", wantCalls: replayIntegrationCount, unchecked: true, execError: errors.New("target cannot start process")},
+		{name: "unchecked cleanup failure", changedOutput: "changed", wantCalls: len(plan.Calls), unchecked: true, cleanupError: errors.New("sandbox stop unconfirmed")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			target := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
 			target.stdout = []byte(test.changedOutput)
-			sandbox := &replayIntegrationSandbox{target: target}
+			target.exitCode, target.execErr = test.exitCode, test.execError
+			sandbox := &replayIntegrationSandbox{target: target, stopError: test.cleanupError}
 			bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{CaptureReplay: true, OmitRawLog: true}), sandbox: sandbox}
 			caller := &replayIntegrationCaller{t: t}
 			engine, err := runner.NewReplay(replayIntegrationBenchmark{replayTask}, sandbox, bridge, caller,
-				func(context.Context) (replay.Plan, error) {
-					return LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+				func(ctx context.Context) (replay.Plan, error) {
+					selection, err := PreflightReplaySourceWithResponseCheck(ctx, source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil, !test.unchecked)
+					if err != nil {
+						return replay.Plan{}, err
+					}
+					return selection.Load(ctx, 0)
 				},
 				runner.Options{RunID: "replay-run"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			result, runErr := engine.Run(context.Background())
-			if test.strict && (runErr == nil || !bytes.Contains([]byte(runErr.Error()), []byte("mismatch"))) || !test.strict && runErr != nil {
+			if test.strict && (runErr == nil || !bytes.Contains([]byte(runErr.Error()), []byte("mismatch"))) ||
+				test.execError != nil && (runErr == nil || !bytes.Contains([]byte(runErr.Error()), []byte("Exec did not complete"))) ||
+				test.cleanupError != nil && !errors.Is(runErr, test.cleanupError) ||
+				!test.strict && test.execError == nil && test.cleanupError == nil && runErr != nil {
 				t.Fatalf("replay error = %v", runErr)
 			}
 			if len(result.Tasks) != replayIntegrationCount {
 				t.Fatalf("task occurrences = %d", len(result.Tasks))
 			}
 			task := result.Tasks[0]
-			if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded || !task.Evaluation.Reused || task.Evaluation.Status != core.StatusSucceeded || task.Evaluation.SourceRunID != replayRunID || task.Evaluation.SourceTaskID != replayTaskID || task.Evaluation.Score != replayIntegrationScore || task.Evaluation.Reward != replayIntegrationReward || result.Summary.EvaluationsRun != 0 {
+			cleanupStatus := core.StatusSucceeded
+			if test.cleanupError != nil {
+				cleanupStatus = core.StatusFailed
+			}
+			if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != cleanupStatus || !task.Evaluation.Reused || task.Evaluation.Status != core.StatusSucceeded || task.Evaluation.SourceRunID != replayRunID || task.Evaluation.SourceTaskID != replayTaskID || task.Evaluation.Score != replayIntegrationScore || task.Evaluation.Reward != replayIntegrationReward || result.Summary.EvaluationsRun != 0 {
 				t.Fatalf("replay result = %+v", result)
 			}
-			if test.strict && (task.Replay.Status != core.StatusFailed || task.Replay.Error == "") || !test.strict && task.Replay.Status != core.StatusSucceeded {
+			failed := test.strict || test.execError != nil
+			if failed && (task.Replay.Status != core.StatusFailed || task.Replay.Error == "") || !failed && task.Replay.Status != core.StatusSucceeded {
 				t.Fatalf("replay outcome = %+v", task.Replay)
 			}
 			if test.drift && (task.Replay.Responses == nil || task.Replay.Responses.Status != "available" || len(task.Replay.Responses.Calls) != len(plan.Calls) || task.Replay.Responses.Calls[0].Status != "drifted") {
 				t.Fatalf("later calls did not finish after hash drift: %+v", task.Replay.Responses)
 			}
+			if test.unchecked {
+				data, err := json.Marshal(task)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var saved core.TaskResult
+				if err := json.Unmarshal(data, &saved); err != nil {
+					t.Fatal(err)
+				}
+				if saved.Replay.Responses == nil || saved.Replay.Responses.Status != "skipped" || len(saved.Replay.Responses.Calls) != 0 {
+					t.Fatalf("saved response status = %+v", saved.Replay.Responses)
+				}
+			}
 			if test.strict && (task.Replay.Timing == nil || task.Replay.Timing.Status != "unavailable" || task.Replay.Timing.Reason == "") {
 				t.Fatalf("mismatch hid missing timing: %+v", task.Replay)
 			}
-			if !test.strict {
+			if !failed {
 				if len(task.ToolLogPaths) == 0 {
 					t.Fatal("replay bridge audit is missing")
 				}

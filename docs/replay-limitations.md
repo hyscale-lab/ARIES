@@ -20,9 +20,13 @@ The limits below describe current behavior, not the
   attachment; Docker needs one local socket, Kubernetes one namespace.
   The unauthenticated bridge must stay on a trusted private network.
 - Sources need private directories (`0700`), regular evidence files (`0600`),
-  finalized complete logs, matching task/image/revisions, and a source evaluation.
+  finalized complete logs, matching benchmark and logical task, and a unique
+  parent occurrence. A source grade is optional. Preflight warns if the source
+  image or benchmark revision differs from the target or is unverified.
   Incomplete, changed, rejected, canceled, or failed-write evidence rejects the source.
   Complete admitted non-write failures and nonzero `Exec` exits can be valid expectations.
+  Strict preflight also requires historical comparison fields. Disabling
+  comparison does not admit incomplete requests or unfinalized evidence.
 - Old sources without finalized capture evidence are invalid. Older nonempty
   sources can omit metadata `run_id` or `occurrence_id` only if every call
   proves the missing binding. Empty sources require both IDs in the metadata.
@@ -73,9 +77,11 @@ Keep audits, run logs, and stderr private; output can contain task data or crede
   There is no application retry, adaptive plan, response injection, speed control,
   pause, or step mode. gRPC transparent retries can still occur before processing.
   Slow calls can extend duration beyond the source's final wait.
-- Strict response size, gRPC status, `Exec` exit code, and successful write count
-  differences fail an occurrence. SHA-only and timing drift remain nonfatal.
-  Diagnostic evidence can be `unavailable` without failing replay.
+- With the default comparison policy, strict response size, gRPC status,
+  `Exec` exit code, and successful write count differences fail an occurrence.
+  SHA-only and timing drift remain nonfatal. Diagnostic evidence can be
+  `unavailable` without failing replay. Without comparison, RPC errors,
+  incomplete `Exec` operations, and short writes still fail.
 - Source grades are historical, not new evaluations. No verifier or judge runs.
   Equal bridge responses do not prove equal final filesystem or process state.
   Reused grades cannot hide replay or isolation failure. Run summaries have no

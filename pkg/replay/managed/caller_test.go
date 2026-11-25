@@ -209,7 +209,9 @@ func (runtime *fakeRuntime) UploadArchive(ctx context.Context, _, destination st
 			runtime.planUploads++
 		}
 		if header.Name == planReadyFile {
-			runtime.files[resultFile] = []byte(`{"done":true}`)
+			if _, exists := runtime.files[resultFile]; !exists {
+				runtime.files[resultFile] = []byte(`{"done":true}`)
+			}
 		}
 		return nil
 	}
@@ -221,6 +223,22 @@ func (runtime *fakeRuntime) UploadArchive(ctx context.Context, _, destination st
 		runtime.stagedTimeout = launch.CallTimeout
 	}
 	return errors.New("staging failed")
+}
+
+func TestUncheckedManagedReplayPreservesContextError(t *testing.T) {
+	for label, want := range map[string]error{"canceled": context.Canceled, "deadline": context.DeadlineExceeded} {
+		t.Run(label, func(t *testing.T) {
+			message := "synthetic execution error"
+			runtime := &fakeRuntime{files: map[string][]byte{
+				resultFile: []byte(fmt.Sprintf(`{"done":true,"error":%q,"context_error":%q}`, message, label)),
+			}}
+			caller := &Caller{id: "owned-caller", options: Options{Runtime: runtime, CallTimeout: childTestDeadline}}
+			err := caller.Run(t.Context(), replay.Plan{SkipResponseCheck: true})
+			if !errors.Is(err, want) || err.Error() != message {
+				t.Fatalf("unchecked managed caller error = %v, want %v", err, want)
+			}
+		})
+	}
 }
 
 func (runtime *fakeRuntime) Create(ctx context.Context, request deployment.Request) (string, error) {
@@ -312,7 +330,7 @@ func TestReplayChildAllowsProcessingAndFullFinalWait(t *testing.T) {
 		const rpcDelay = callTimeout - pollInterval
 		const processingDelay = pollInterval + pollInterval
 		const finalWait = callTimeout
-		plan := replay.Plan{Calls: []replay.Call{{Operation: "Exec", Script: "true", StartOffset: callTimeout, ResponseCode: codes.OK.String()}}, FinalWait: finalWait}
+		plan := replay.Plan{Calls: []replay.Call{{Operation: "Exec", Script: "true", StartOffset: callTimeout, ResponseCode: codes.OK.String(), ExitCode: new(int32)}}, FinalWait: finalWait}
 		completed := time.Time{}
 		client := delayedReplayClient{exec: func(ctx context.Context) (*sandboxv1.ExecResponse, error) {
 			deadline, bounded := ctx.Deadline()
@@ -673,7 +691,7 @@ func TestReplayChildReceivesLargeExecReply(t *testing.T) {
 		_, _ = fingerprint.Write(field)
 		responseBytes += int64(length + len(field))
 	}
-	plan := replay.Plan{Calls: []replay.Call{{Operation: "Exec", Script: "true", ResponseCode: codes.OK.String(), ResponseSHA256: hex.EncodeToString(fingerprint.Sum(nil)), ResponseBytes: responseBytes}}}
+	plan := replay.Plan{Calls: []replay.Call{{Operation: "Exec", Script: "true", ResponseCode: codes.OK.String(), ResponseSHA256: hex.EncodeToString(fingerprint.Sum(nil)), ResponseBytes: responseBytes, ExitCode: new(response.GetExitCode())}}}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -753,7 +771,7 @@ func TestReplayChildKeepsSharedOriginAfterCompletePlanUpload(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	plan := replay.Plan{ReplayAt: &origin, Calls: []replay.Call{{Operation: "Exec", Script: "true", StartOffset: callOffset, ResponseCode: codes.OK.String()}}}
+	plan := replay.Plan{ReplayAt: &origin, Calls: []replay.Call{{Operation: "Exec", Script: "true", StartOffset: callOffset, ResponseCode: codes.OK.String(), ExitCode: new(int32)}}}
 	// The outcome has five length-prefixed fields and an empty Exec reply.
 	for _, field := range [][]byte{[]byte("aries.grpc.outcome.v1"), []byte(sandboxv1.Sandbox_Exec_FullMethodName), nil, []byte(codes.OK.String()), nil} {
 		var prefix [binary.MaxVarintLen64]byte

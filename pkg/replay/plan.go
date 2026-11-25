@@ -25,22 +25,33 @@ type Call struct {
 	FirstLine      int64         `json:"first_line,omitempty"`
 	MaxLines       int64         `json:"max_lines,omitempty"`
 	MaxLineBytes   int64         `json:"max_line_bytes,omitempty"`
-	ResponseSHA256 string        `json:"response_sha256"`
-	ResponseBytes  int64         `json:"response_bytes"`
-	ResponseCode   string        `json:"response_code"`
-	ExitCode       int32         `json:"exit_code,omitempty"`
+	ResponseSHA256 string        `json:"response_sha256,omitempty"`
+	ResponseBytes  int64         `json:"response_bytes,omitempty"`
+	ResponseCode   string        `json:"response_code,omitempty"`
+	ExitCode       *int32        `json:"exit_code,omitempty"`
 	ResponseDebug  bool          `json:"-"`
 	ResponseStdout []byte        `json:"-"`
 	ResponseStderr []byte        `json:"-"`
 }
 
+// StrictExitCode reads the expected exit in a preflighted plan.
+// Legacy staged plans omitted a recorded zero.
+func (call Call) StrictExitCode() int32 {
+	if call.ExitCode != nil {
+		return *call.ExitCode
+	}
+	return 0
+}
+
 // Plan holds the complete request schedule and the recorded source evaluation.
 type Plan struct {
-	Calls        []Call          `json:"calls"`
-	FinalWait    time.Duration   `json:"final_wait"`
-	SourceRunID  string          `json:"source_run_id"`
-	SourceTaskID string          `json:"source_task_id"`
-	Evaluation   core.Evaluation `json:"evaluation"`
+	Calls             []Call        `json:"calls"`
+	FinalWait         time.Duration `json:"final_wait"`
+	SourceRunID       string        `json:"source_run_id"`
+	SourceTaskID      string        `json:"source_task_id"`
+	SkipResponseCheck bool          `json:"skip_response_check,omitempty"`
+	// Evaluation reports unavailable when the source has no grade.
+	Evaluation core.Evaluation `json:"evaluation"`
 	// StartedAt is the recorded source timeline origin, not a replay scheduling epoch.
 	StartedAt time.Time `json:"-"`
 	// ReplayAt is the shared replay wall-clock origin. Nil uses caller-local timing.

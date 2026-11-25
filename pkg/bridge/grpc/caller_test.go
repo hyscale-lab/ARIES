@@ -82,9 +82,100 @@ func expectedReplayCall(operation string, messages ...proto.Message) replay.Call
 	outcome.field(nil)
 	call := replay.Call{Operation: operation, ResponseSHA256: hex.EncodeToString(outcome.hash.Sum(nil)), ResponseBytes: outcome.bytes, ResponseCode: codes.OK.String()}
 	if operation == "Exec" && len(messages) != 0 {
-		call.ExitCode = messages[0].(*sandboxv1.ExecResponse).GetExitCode()
+		call.ExitCode = new(messages[0].(*sandboxv1.ExecResponse).GetExitCode())
 	}
 	return call
+}
+
+func TestReplayUncheckedKeepsRPCAndWriteFailures(t *testing.T) {
+	const path = "/app/example.txt"
+	const body = "synthetic"
+	const privateDetail = "private detail"
+	for _, tc := range []struct {
+		name, operation, want string
+		code                  codes.Code
+		reason                sandboxv1.Reason
+		cancel                error
+	}{
+		{name: "transport", operation: "Stat", code: codes.Unavailable, want: "RPC failed (Unavailable)"},
+		{name: "cancellation", operation: "Exec", code: codes.Canceled, cancel: context.Canceled, want: "RPC failed"},
+		{name: "execution timeout", operation: "Exec", reason: sandboxv1.Reason_REASON_TIMED_OUT, cancel: context.DeadlineExceeded, want: "Exec did not complete"},
+		{name: "short write", operation: "WriteFile", want: "write length mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+			defer cancel()
+			server := &replayServer{
+				stat: func(context.Context, *sandboxv1.StatRequest) (*sandboxv1.StatResponse, error) {
+					return nil, status.Error(tc.code, privateDetail)
+				},
+				exec: func(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+					if tc.code != codes.OK {
+						return nil, status.Error(tc.code, privateDetail)
+					}
+					return &sandboxv1.ExecResponse{Reason: tc.reason}, nil
+				},
+				writeFile: func(stream grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]) error {
+					for {
+						if _, err := stream.Recv(); err != nil {
+							if err != io.EOF {
+								return err
+							}
+							return stream.SendAndClose(&sandboxv1.WriteFileResponse{})
+						}
+					}
+				},
+			}
+			plan := replay.Plan{SkipResponseCheck: true,
+				Calls: []replay.Call{{Operation: tc.operation, Path: path, Body: []byte(body)}}}
+			err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), plan)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), privateDetail) ||
+				tc.cancel != nil && !errors.Is(err, tc.cancel) {
+				t.Fatalf("unchecked error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestReplayLegacySerializedZeroExit(t *testing.T) {
+	const script = "true"
+	const first = 0
+	const callCount = 1
+	reply := &sandboxv1.ExecResponse{Reason: sandboxv1.Reason_REASON_COMPLETED}
+	call := expectedReplayCall("Exec", reply)
+	call.Script = script
+	encoded, err := replay.EncodePlan(replay.Plan{Calls: []replay.Call{call}}, replay.MaxPlanBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroExit := []byte(`,"exit_code":0`)
+	if !bytes.Contains(encoded, zeroExit) {
+		t.Fatalf("staged plan omitted the explicit zero exit: %s", encoded)
+	}
+	// The old encoder omitted zero exits from staged plans.
+	legacy := bytes.ReplaceAll(encoded, zeroExit, nil)
+	var plan replay.Plan
+	if err := json.Unmarshal(legacy, &plan); err != nil || len(plan.Calls) != callCount || plan.Calls[first].ExitCode != nil {
+		t.Fatalf("legacy plan did not omit the exit: %v", err)
+	}
+	dispatched := make(chan string, callCount)
+	server := &replayServer{exec: func(_ context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+		dispatched <- request.GetScript()
+		return reply, nil
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+	defer cancel()
+	if err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), plan); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-dispatched:
+		if got != script {
+			t.Fatalf("dispatched %q, want %q", got, script)
+		}
+	default:
+		t.Fatal("replay did not dispatch the staged call")
+	}
 }
 
 func TestReplayCallCarriesSourceSequenceSeparateFromToolCallID(t *testing.T) {
@@ -502,7 +593,7 @@ func TestReplayCallsDefaultHashDriftContinuesConcurrentCalls(t *testing.T) {
 	changed := &sandboxv1.ExecResponse{Stdout: []byte("git hash bbb")}
 	second := &sandboxv1.ExecResponse{}
 	firstCall := expectedReplayCall("Exec", source)
-	firstCall.Sequence, firstCall.Script, firstCall.ExitCode = sourceSequence, "first", source.GetExitCode()
+	firstCall.Sequence, firstCall.Script, firstCall.ExitCode = sourceSequence, "first", new(source.GetExitCode())
 	secondCall := expectedReplayCall("Exec", second)
 	secondCall.Sequence, secondCall.Script = nextSequence, "second"
 	laterCall := expectedReplayCall("Exec", second)
@@ -543,7 +634,7 @@ func TestReplayCallsDefaultHashDriftKeepsStrictChecks(t *testing.T) {
 	source := &sandboxv1.ExecResponse{ExitCode: sourceExitCode, Stdout: []byte("git hash aaa")}
 	response := proto.Clone(source).(*sandboxv1.ExecResponse)
 	call := expectedReplayCall("Exec", source)
-	call.ExitCode = sourceExitCode
+	call.ExitCode = new(sourceExitCode)
 	server := &replayServer{exec: func(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) { return response, nil }}
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()

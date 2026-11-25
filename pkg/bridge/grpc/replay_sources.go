@@ -34,13 +34,14 @@ type ReplayOccurrence struct {
 // ReplaySelection retains compact source evidence, not request payload plans.
 // StartedAt is the earliest recorded call start, not a replay scheduling epoch.
 type ReplaySelection struct {
-	SourceRunID  string
-	Occurrences  []ReplayOccurrence
-	StartedAt    time.Time
-	sources      []replaySelectedSource
-	benchmark    string
-	revisions    map[string]string
-	maxPlanBytes int
+	SourceRunID       string
+	Occurrences       []ReplayOccurrence
+	StartedAt         time.Time
+	sources           []replaySelectedSource
+	benchmark         string
+	revisions         map[string]string
+	maxPlanBytes      int
+	skipResponseCheck bool
 }
 
 type replaySelectedSource struct {
@@ -66,6 +67,25 @@ type replayRunIndex struct {
 	digest [sha256.Size]byte
 }
 
+func (result *replayRunIndex) occurrenceEvaluation(id string) (json.RawMessage, error) {
+	found := false
+	var evaluation json.RawMessage
+	for _, task := range result.Tasks {
+		if task.TaskID != id {
+			continue
+		}
+		if found {
+			return nil, errors.New("replay source occurrence is duplicated in parent result")
+		}
+		found = true
+		evaluation = task.Evaluation
+	}
+	if !found {
+		return nil, errors.New("replay source occurrence is missing from parent result")
+	}
+	return evaluation, nil
+}
+
 func readReplayRunIndex(ctx context.Context, root *os.Root) (*replayRunIndex, error) {
 	data, err := readReplayFile(ctx, root, "run-result.json", MaxMessageBytes)
 	if err != nil {
@@ -82,10 +102,15 @@ func readReplayRunIndex(ctx context.Context, root *os.Root) (*replayRunIndex, er
 // PreflightReplaySource selects one occurrence or every parent-indexed occurrence.
 // It validates the complete selection without starting a sandbox or a verifier.
 func PreflightReplaySource(ctx context.Context, sourceDir string, tasks []core.Task, benchmarkType string, revisions map[string]string, logger *logrus.Entry) (*ReplaySelection, error) {
-	return preflightReplaySource(ctx, sourceDir, tasks, benchmarkType, revisions, logger, replay.MaxPlanBytes)
+	return PreflightReplaySourceWithResponseCheck(ctx, sourceDir, tasks, benchmarkType, revisions, logger, true)
 }
 
-func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.Task, benchmarkType string, revisions map[string]string, logger *logrus.Entry, maxPlanBytes int) (*ReplaySelection, error) {
+// PreflightReplaySourceWithResponseCheck validates a selection with the requested comparison policy.
+func PreflightReplaySourceWithResponseCheck(ctx context.Context, sourceDir string, tasks []core.Task, benchmarkType string, revisions map[string]string, logger *logrus.Entry, mustCheckResponse bool) (*ReplaySelection, error) {
+	return preflightReplaySource(ctx, sourceDir, tasks, benchmarkType, revisions, logger, replay.MaxPlanBytes, mustCheckResponse)
+}
+
+func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.Task, benchmarkType string, revisions map[string]string, logger *logrus.Entry, maxPlanBytes int, mustCheckResponse bool) (*ReplaySelection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -116,7 +141,7 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 	if err != nil {
 		return nil, err
 	}
-	selection := &ReplaySelection{SourceRunID: result.RunID, benchmark: benchmarkType, revisions: maps.Clone(revisions), maxPlanBytes: maxPlanBytes}
+	selection := &ReplaySelection{SourceRunID: result.RunID, benchmark: benchmarkType, revisions: maps.Clone(revisions), maxPlanBytes: maxPlanBytes, skipResponseCheck: !mustCheckResponse}
 	seen := make(map[string]bool, len(result.Tasks))
 	hasCalls := false
 	for _, candidate := range result.Tasks {
@@ -158,7 +183,7 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 			return nil, errors.New("replay source has no matching logical task")
 		}
 		selected := replaySelectedSource{dir: dir, task: task}
-		plan, err := loadReplaySourceContext(ctx, dir, task, benchmarkType, selection.revisions, selection.maxPlanBytes, result, &selected.binding)
+		plan, err := loadReplaySourceContext(ctx, dir, task, benchmarkType, selection.revisions, selection.maxPlanBytes, result, &selected.binding, logger, selection.skipResponseCheck)
 		if err != nil {
 			return nil, err
 		}
@@ -242,7 +267,7 @@ func (selection *ReplaySelection) Load(ctx context.Context, index int) (replay.P
 	}
 	source := selection.sources[index]
 	var binding replaySourceBinding
-	plan, err := loadReplaySourceContext(ctx, source.dir, source.task, selection.benchmark, selection.revisions, selection.maxPlanBytes, nil, &binding)
+	plan, err := loadReplaySourceContext(ctx, source.dir, source.task, selection.benchmark, selection.revisions, selection.maxPlanBytes, nil, &binding, nil, selection.skipResponseCheck)
 	if err != nil {
 		return replay.Plan{}, err
 	}

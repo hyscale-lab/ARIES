@@ -526,6 +526,9 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		allErrors = append(allErrors, fmt.Errorf("validate replay source: %w", err))
 		return finish()
 	}
+	if plan.SkipResponseCheck {
+		result.Replay.Responses = &core.ReplayResponses{Status: "skipped"}
+	}
 	for index, call := range plan.Calls {
 		if index > 0 && call.StartOffset == plan.Calls[index-1].StartOffset {
 			r.logger.WithContext(ctx).WithFields(logrus.Fields{
@@ -536,7 +539,7 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		}
 	}
 	result.Evaluation = plan.Evaluation
-	result.Evaluation.Reused = true
+	result.Evaluation.Reused = plan.Evaluation.Status != core.StatusUnavailable
 	result.Evaluation.SourceRunID = plan.SourceRunID
 	result.Evaluation.SourceTaskID = plan.SourceTaskID
 
@@ -588,7 +591,9 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 	if err := r.caller.Stop(isolationCtx); !CleanupConfirmed(err) {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm replay caller stopped: %w", err))
 		result.Replay.Timing.Reason = "replay caller stop is unconfirmed"
-		result.Replay.Responses.Reason = "replay caller stop is unconfirmed"
+		if !plan.SkipResponseCheck {
+			result.Replay.Responses.Reason = "replay caller stop is unconfirmed"
+		}
 	} else {
 		callerActive = false
 		result.Isolation.CallerStopped = true
@@ -616,8 +621,10 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 			}
 			timing := replay.ReadTiming(path, plan)
 			result.Replay.Timing = &timing
-			responses := replay.ReadResponses(path, plan, r.logger)
-			result.Replay.Responses = &responses
+			if !plan.SkipResponseCheck {
+				responses := replay.ReadResponses(path, plan, r.logger)
+				result.Replay.Responses = &responses
+			}
 		}
 	}
 	cancelIsolation()

@@ -1671,6 +1671,21 @@ func TestReplayEmptyTracePreservesSourceEvaluationWithoutVerifier(t *testing.T) 
 	}
 }
 
+func TestReplayFailedSandboxPreparationBlocksCalls(t *testing.T) {
+	const firstReplaySequence = 1
+	call := replay.Call{Sequence: firstReplaySequence, Operation: "Stat", Path: "/target"}
+	rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusNotRun}, call)
+	rig.benchmark.prepareErr = errInjected
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, errInjected) || result.Tasks[0].Cleanup.Status != core.StatusSucceeded {
+		t.Fatalf("sandbox preparation failure: result = %+v, error = %v", result, err)
+	}
+	want := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "sandbox.stop"}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("replay lifecycle = %v, want %v", got, want)
+	}
+}
+
 func TestReplayMismatchDoesNotInheritSourceSuccess(t *testing.T) {
 	// The source reward of 1 cannot make a mismatched replay succeed.
 	const firstReplaySequence = 1 // The first recorded call has sequence 1.
@@ -1776,16 +1791,28 @@ func TestReplayCancellationUsesFreshBoundedCleanup(t *testing.T) {
 }
 
 func TestReplayKeepsCleanupFailureSeparateFromMismatchAndGrade(t *testing.T) {
-	rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded, Reward: 1})
-	caller.runErr = errors.New("response mismatch")
-	rig.factory.stopErrors = []error{errInjected}
-	result, err := rig.runner.Run(context.Background())
-	if !errors.Is(err, caller.runErr) || !errors.Is(err, errInjected) {
-		t.Fatalf("Run() error = %v, want replay and cleanup failures", err)
-	}
-	task := result.Tasks[0]
-	if task.Replay.Status != core.StatusFailed || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusFailed || !task.Evaluation.Reused || task.Evaluation.Reward != 1 || result.Summary.CleanupFailed != 1 || result.Summary.EvaluationsRun != 0 {
-		t.Fatalf("replay, isolation, cleanup, and grade outcomes = %+v; summary=%+v", task, result.Summary)
+	const sourceReward = 1
+	for _, source := range []core.Evaluation{
+		{Status: core.StatusSucceeded, Reward: sourceReward},
+		{Status: core.StatusUnavailable},
+	} {
+		t.Run(source.Status, func(t *testing.T) {
+			rig, caller, _ := newReplayRig(t, source)
+			caller.runErr = errors.New("response mismatch")
+			rig.factory.stopErrors = []error{errInjected}
+			result, err := rig.runner.Run(context.Background())
+			if !errors.Is(err, caller.runErr) || !errors.Is(err, errInjected) {
+				t.Fatalf("Run() error = %v, want replay and cleanup failures", err)
+			}
+			task := result.Tasks[0]
+			if task.Replay.Status != core.StatusFailed || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusFailed || result.Summary.CleanupFailed != 1 || result.Summary.EvaluationsRun != 0 {
+				t.Fatalf("replay, isolation, and cleanup outcomes = %+v; summary=%+v", task, result.Summary)
+			}
+			wantReused := source.Status == core.StatusSucceeded
+			if task.Evaluation.Status != source.Status || task.Evaluation.Reused != wantReused || task.Evaluation.Reward != source.Reward {
+				t.Fatalf("failure changed source evaluation: %+v", task.Evaluation)
+			}
+		})
 	}
 }
 

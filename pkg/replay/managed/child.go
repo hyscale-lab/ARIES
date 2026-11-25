@@ -125,6 +125,12 @@ func writeResult(folder string, resultErr error) error {
 	result := childResult{Done: true}
 	if resultErr != nil {
 		result.Error = resultErr.Error()
+		switch {
+		case errors.Is(resultErr, context.Canceled):
+			result.ContextError = "canceled"
+		case errors.Is(resultErr, context.DeadlineExceeded):
+			result.ContextError = "deadline"
+		}
 	}
 	data, err := json.Marshal(result)
 	if err != nil {

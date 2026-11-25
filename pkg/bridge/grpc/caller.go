@@ -10,6 +10,7 @@ import (
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/replay"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -92,7 +93,7 @@ launch:
 		callCtx, done := context.WithTimeout(callsCtx, callTimeout)
 		go func() {
 			defer done()
-			results <- replayCall(callCtx, client, call)
+			results <- replayCall(callCtx, client, call, plan.SkipResponseCheck)
 		}()
 	}
 	for active > 0 {
@@ -120,7 +121,7 @@ launch:
 	return ctx.Err()
 }
 
-func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call) error {
+func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call, skipResponseCheck bool) error {
 	if call.Sequence != 0 {
 		ctx = metadata.AppendToOutgoingContext(ctx, replaySourceSequenceKey, strconv.FormatUint(call.Sequence, replaySequenceBase))
 	}
@@ -133,22 +134,41 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 	var exitCodeChanged bool
 	switch call.Operation {
 	case "Exec":
-		outcome = newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
 		response, callErr := client.Exec(ctx, &sandboxv1.ExecRequest{Script: call.Script, Stdin: call.Body, Login: call.Login})
+		if skipResponseCheck {
+			if callErr != nil {
+				return replayRPCError(call, callErr)
+			}
+			switch response.GetReason() {
+			case sandboxv1.Reason_REASON_COMPLETED:
+				return nil
+			case sandboxv1.Reason_REASON_CANCELED:
+				return fmt.Errorf("replay call %d Exec did not complete: %w", call.Sequence, context.Canceled)
+			case sandboxv1.Reason_REASON_TIMED_OUT:
+				return fmt.Errorf("replay call %d Exec did not complete: %w", call.Sequence, context.DeadlineExceeded)
+			default:
+				return fmt.Errorf("replay call %d Exec did not complete", call.Sequence)
+			}
+		}
+		outcome = newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
 		err = callErr
 		if err == nil {
 			outcome.message(response)
-			exitCodeChanged = response.GetExitCode() != call.ExitCode
+			exitCodeChanged = response.GetExitCode() != call.StrictExitCode()
 		}
 	case "Stat":
-		outcome = newResponseOutcome(sandboxv1.Sandbox_Stat_FullMethodName)
+		if !skipResponseCheck {
+			outcome = newResponseOutcome(sandboxv1.Sandbox_Stat_FullMethodName)
+		}
 		response, callErr := client.Stat(ctx, &sandboxv1.StatRequest{Path: call.Path})
 		err = callErr
 		if err == nil {
 			outcome.message(response)
 		}
 	case "ReadFile":
-		outcome = newResponseOutcome(sandboxv1.Sandbox_ReadFile_FullMethodName)
+		if !skipResponseCheck {
+			outcome = newResponseOutcome(sandboxv1.Sandbox_ReadFile_FullMethodName)
+		}
 		var stream sandboxv1.Sandbox_ReadFileClient
 		stream, err = client.ReadFile(ctx, &sandboxv1.ReadFileRequest{Path: call.Path, MaxBytes: call.MaxBytes})
 		if err == nil {
@@ -165,6 +185,9 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 					_ = chunks.flush()
 					break
 				}
+				if skipResponseCheck {
+					continue
+				}
 				if response.GetHeader() != nil {
 					_ = chunks.flush()
 					outcome.message(response)
@@ -174,7 +197,9 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 			}
 		}
 	case "ReadLines":
-		outcome = newResponseOutcome(sandboxv1.Sandbox_ReadLines_FullMethodName)
+		if !skipResponseCheck {
+			outcome = newResponseOutcome(sandboxv1.Sandbox_ReadLines_FullMethodName)
+		}
 		var stream sandboxv1.Sandbox_ReadLinesClient
 		stream, err = client.ReadLines(ctx, &sandboxv1.ReadLinesRequest{Path: call.Path, FirstLine: call.FirstLine, MaxLines: call.MaxLines, MaxLineBytes: call.MaxLineBytes})
 		if err == nil {
@@ -191,6 +216,9 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 					_ = chunks.flush()
 					break
 				}
+				if skipResponseCheck {
+					continue
+				}
 				if response.GetSummary() != nil {
 					_ = chunks.flush()
 					outcome.message(response)
@@ -200,7 +228,9 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 			}
 		}
 	case "WriteFile":
-		outcome = newResponseOutcome(sandboxv1.Sandbox_WriteFile_FullMethodName)
+		if !skipResponseCheck {
+			outcome = newResponseOutcome(sandboxv1.Sandbox_WriteFile_FullMethodName)
+		}
 		var stream sandboxv1.Sandbox_WriteFileClient
 		stream, err = client.WriteFile(ctx)
 		if err == nil {
@@ -215,9 +245,23 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 			if err == nil {
 				outcome.message(written)
 			}
+		} else if skipResponseCheck && stream != nil && errors.Is(err, io.EOF) {
+			// Send returns EOF when the final RPC status is waiting to be read.
+			if _, recvErr := stream.CloseAndRecv(); recvErr != nil {
+				err = recvErr
+			}
+		}
+		if skipResponseCheck && err == nil && (written == nil || written.GetBytesWritten() != int64(len(call.Body))) {
+			return fmt.Errorf("replay call %d WriteFile write length mismatch", call.Sequence)
 		}
 	default:
 		return fmt.Errorf("replay call %d has unknown operation", call.Sequence)
+	}
+	if skipResponseCheck {
+		if err != nil {
+			return replayRPCError(call, err)
+		}
+		return nil
 	}
 	outcome.field([]byte(status.Code(err).String()))
 	outcome.field([]byte(status.Convert(err).Message()))
@@ -225,4 +269,17 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 		return fmt.Errorf("replay call %d %s response mismatch", call.Sequence, call.Operation)
 	}
 	return nil
+}
+
+func replayRPCError(call replay.Call, err error) error {
+	switch status.Code(err) {
+	case codes.Canceled:
+		err = context.Canceled
+	case codes.DeadlineExceeded:
+		err = context.DeadlineExceeded
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("replay call %d %s RPC failed: %w", call.Sequence, call.Operation, err)
+	}
+	return fmt.Errorf("replay call %d %s RPC failed (%s)", call.Sequence, call.Operation, status.Code(err))
 }

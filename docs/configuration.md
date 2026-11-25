@@ -382,8 +382,15 @@ new profile file:
 
 Replace `SOURCE_RUN` with the source run directory; use `../runs/SOURCE_RUN`
 to select the complete run. Each occurrence needs private `bridge/tool-calls.jsonl`
-and `bridge/runtime.json` files, plus a matching evaluation in its parent `run-result.json`.
+and `bridge/runtime.json` files, plus a unique matching occurrence in its parent
+`run-result.json`. The source grade is optional.
 See [source validation requirements](replay-limitations.md#workload-and-source-limits).
+
+`replay.must_check_response` is an optional boolean. The default is `true`.
+In this mode, preflight rejects any occurrence without the required response
+evidence. Set it to `false` to skip historical response comparisons.
+Source integrity, request validation, scheduling, execution errors, and cleanup
+still apply. `null` is not valid.
 
 `replay.deployment` places a separate caller runtime in the pinned bridge
 image. For Docker, the caller, bridge, and sandbox must use the same local

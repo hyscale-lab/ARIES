@@ -178,6 +178,14 @@ func (caller *Caller) Run(ctx context.Context, plan replay.Plan) error {
 				return errors.New("replay caller returned an invalid result")
 			}
 			if result.Error != "" {
+				if plan.SkipResponseCheck {
+					switch result.ContextError {
+					case "canceled":
+						return replayContextError{message: result.Error, cause: context.Canceled}
+					case "deadline":
+						return replayContextError{message: result.Error, cause: context.DeadlineExceeded}
+					}
+				}
 				return errors.New(result.Error)
 			}
 			return nil
@@ -267,6 +275,15 @@ type childLaunch struct {
 }
 
 type childResult struct {
-	Done  bool   `json:"done"`
-	Error string `json:"error,omitempty"`
+	Done         bool   `json:"done"`
+	Error        string `json:"error,omitempty"`
+	ContextError string `json:"context_error,omitempty"`
 }
+
+type replayContextError struct {
+	message string
+	cause   error
+}
+
+func (err replayContextError) Error() string { return err.message }
+func (err replayContextError) Unwrap() error { return err.cause }

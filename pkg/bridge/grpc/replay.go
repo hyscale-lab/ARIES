@@ -19,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 )
 
@@ -51,11 +52,11 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 }
 
 func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int) (replay.Plan, error) {
-	return loadReplaySourceContext(context.Background(), sourceDir, task, benchmarkType, revisions, maxPlanBytes, nil, nil)
+	return loadReplaySourceContext(context.Background(), sourceDir, task, benchmarkType, revisions, maxPlanBytes, nil, nil, nil, false)
 }
 
-func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int, result *replayRunIndex, binding *replaySourceBinding) (replay.Plan, error) {
-	var plan replay.Plan
+func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int, result *replayRunIndex, binding *replaySourceBinding, logger *logrus.Entry, skipResponseCheck bool) (replay.Plan, error) {
+	plan := replay.Plan{SkipResponseCheck: skipResponseCheck}
 	if err := ctx.Err(); err != nil {
 		return plan, err
 	}
@@ -100,7 +101,7 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if metadata.SchemaVersion != 1 || !metadata.ReplayReady || metadata.SandboxID == "" || metadata.HarnessCompletedAt == "" || metadata.ToolCallsBytes == nil || *metadata.ToolCallsBytes < 0 || *metadata.ToolCallsBytes > maxReplayLogBytes || !validReplayDigest(metadata.ToolCallsSHA256) {
 		return plan, errors.New("replay runtime is not finalized")
 	}
-	if benchmarkType == "" || task.ID == "" || task.Environment.Image == "" || len(revisions) == 0 || metadata.BenchmarkType != benchmarkType || metadata.TaskID != task.ID || metadata.Image != task.Environment.Image || !maps.Equal(metadata.BenchmarkRevisions, revisions) {
+	if benchmarkType == "" || task.ID == "" || task.Environment.Image == "" || len(revisions) == 0 || metadata.BenchmarkType != benchmarkType || metadata.TaskID != task.ID {
 		return plan, errors.New("replay source task or benchmark does not match")
 	}
 	for name, revision := range revisions {
@@ -133,27 +134,15 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if metadata.RunID != "" && metadata.RunID != result.RunID || metadata.RunID == "" && len(log) == 0 {
 		return plan, errors.New("replay source run binding is missing or differs from parent result")
 	}
-	for _, candidate := range result.Tasks {
-		if candidate.TaskID != occurrence {
-			continue
-		}
-		var evaluation core.Evaluation
-		var grades map[string]json.RawMessage
-		if err := json.Unmarshal(candidate.Evaluation, &evaluation); err != nil {
-			return replay.Plan{}, errors.New("replay source evaluation is invalid")
-		}
-		if err := json.Unmarshal(candidate.Evaluation, &grades); err != nil {
-			return replay.Plan{}, errors.New("replay source evaluation grades are invalid")
-		}
-		if plan.SourceTaskID != "" || evaluation.Status != core.StatusSucceeded && evaluation.Status != core.StatusFailed && evaluation.Status != core.StatusCanceled || !validReplayNumber(grades["score"]) || !validReplayNumber(grades["reward"]) {
-			return replay.Plan{}, errors.New("replay source has no unique recorded evaluation")
-		}
-		plan.SourceTaskID = candidate.TaskID
-		plan.Evaluation = evaluation
+	rawEvaluation, err := result.occurrenceEvaluation(occurrence)
+	if err != nil {
+		return replay.Plan{}, err
 	}
-	if plan.SourceTaskID == "" {
-		return replay.Plan{}, errors.New("replay source has no matching evaluation")
+	plan.Evaluation, err = parseReplayEvaluation(rawEvaluation)
+	if err != nil {
+		return replay.Plan{}, err
 	}
+	plan.SourceTaskID = occurrence
 	if metadata.OccurrenceID != nil {
 		var recordedID string
 		if err := json.Unmarshal(metadata.OccurrenceID, &recordedID); err != nil || recordedID != plan.SourceTaskID {
@@ -180,7 +169,7 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 		if err := json.Unmarshal(line, &record); err != nil {
 			return replay.Plan{}, fmt.Errorf("decode replay call %d: %w", number, err)
 		}
-		call, started, stamped, err := parseReplayCall(record, line, uint64(number), plan.SourceRunID, plan.SourceTaskID, metadata.SandboxID)
+		call, started, stamped, err := parseReplayCall(record, line, uint64(number), plan.SourceRunID, plan.SourceTaskID, metadata.SandboxID, skipResponseCheck)
 		if err != nil {
 			return replay.Plan{}, fmt.Errorf("replay call %d: %w", number, err)
 		}
@@ -228,7 +217,63 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if binding != nil {
 		*binding = replaySourceBinding{runtime: sha256.Sum256(runtimeData), calls: digest, result: result.digest, planBytes: len(encoded)}
 	}
+	if logger != nil {
+		entry := logger.WithContext(ctx).WithFields(logrus.Fields{
+			"source_run_id": plan.SourceRunID, "source_task_id": plan.SourceTaskID, "logical_task_id": task.ID,
+		})
+		logReplayAttribute(entry, "image", metadata.Image, task.Environment.Image)
+		keys := slices.AppendSeq(slices.Collect(maps.Keys(revisions)), maps.Keys(metadata.BenchmarkRevisions))
+		slices.Sort(keys)
+		for _, name := range slices.Compact(keys) {
+			logReplayAttribute(entry, "benchmark_revisions."+name, metadata.BenchmarkRevisions[name], revisions[name])
+		}
+	}
 	return plan, nil
+}
+
+func logReplayAttribute(logger *logrus.Entry, attribute, source, target string) {
+	if source == target {
+		return
+	}
+	comparison := "different"
+	if source == "" {
+		comparison = "unverified"
+	}
+	logger.WithFields(logrus.Fields{
+		"attribute": attribute, "comparison": comparison,
+		"source_value": source, "target_value": target,
+	}).Warn("replay starting environment check")
+}
+
+func parseReplayEvaluation(data json.RawMessage) (core.Evaluation, error) {
+	unavailable := core.Evaluation{Status: core.StatusUnavailable}
+	if data == nil {
+		return unavailable, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return core.Evaluation{}, errors.New("replay source evaluation is invalid")
+	}
+	if len(fields) == 0 {
+		return unavailable, nil
+	}
+	var evaluation core.Evaluation
+	if err := json.Unmarshal(data, &evaluation); err != nil {
+		return core.Evaluation{}, errors.New("replay source evaluation is invalid")
+	}
+	switch evaluation.Status {
+	case core.StatusSucceeded, core.StatusFailed, core.StatusCanceled:
+		if fields["score"] == nil && fields["reward"] == nil {
+			return unavailable, nil
+		}
+		return evaluation, nil
+	case core.StatusNotRun, core.StatusBlockedIsolation, core.StatusNotEnabled:
+		// Native live results write zero placeholders when evaluation does not run.
+		if evaluation.Score == 0 && evaluation.Reward == 0 {
+			return unavailable, nil
+		}
+	}
+	return core.Evaluation{}, errors.New("replay source evaluation status or grade is invalid")
 }
 
 func readReplayFile(ctx context.Context, root *os.Root, name string, bound int64) ([]byte, error) {
@@ -286,9 +331,47 @@ func validReplayDigest(value string) bool {
 	return err == nil && len(decoded) == sha256.Size && hex.EncodeToString(decoded) == value
 }
 
-func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID, taskID, sandboxID string) (replay.Call, time.Time, time.Time, error) {
+// Inspect raw keys because the typed decoder folds case and merges duplicates.
+func replayCallFields(line []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return nil, errors.New("expected a replay call object")
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		name, ok := key.(string)
+		if !ok {
+			return nil, errors.New("invalid replay call field name")
+		}
+		for _, field := range [...]string{"response_bytes", "response_sha256", "grpc_code", "exit_code"} {
+			if strings.EqualFold(name, field) && (name != field || fields[field] != nil) {
+				return nil, fmt.Errorf("duplicate or noncanonical replay response field %q", field)
+			}
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[name] = value
+	}
+	return fields, nil
+}
+
+func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID, taskID, sandboxID string, skipResponseCheck bool) (replay.Call, time.Time, time.Time, error) {
 	var call replay.Call
-	if record.Sequence != sequence || record.RunID != runID || record.TaskID != taskID || record.SandboxID != sandboxID || record.Status != "completed" && record.Status != "failed" || record.ReplayError != "" || !validReplayDigest(record.ResponseSHA256) || record.ResponseBytes <= 0 || record.DurationMS < 0 {
+	if record.Sequence != sequence || record.RunID != runID || record.TaskID != taskID || record.SandboxID != sandboxID || record.Status != "completed" && record.Status != "failed" || record.ReplayError != "" || record.DurationMS < 0 {
+		return call, time.Time{}, time.Time{}, errors.New("replay call has incomplete or rejected evidence")
+	}
+	fields, err := replayCallFields(line)
+	if err != nil {
+		return call, time.Time{}, time.Time{}, err
+	}
+	if (!skipResponseCheck || fields["response_sha256"] != nil) && !validReplayDigest(record.ResponseSHA256) ||
+		(!skipResponseCheck || fields["response_bytes"] != nil) && record.ResponseBytes <= 0 {
 		return call, time.Time{}, time.Time{}, errors.New("replay call has incomplete or rejected evidence")
 	}
 	validCode := false
@@ -298,7 +381,8 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 			break
 		}
 	}
-	if !validCode || record.Status == "completed" && record.GRPCCode != codes.OK.String() || record.Status == "failed" && record.OperationClass != kindExec && record.GRPCCode == codes.OK.String() {
+	if (!skipResponseCheck || fields["grpc_code"] != nil) &&
+		(!validCode || record.Status == "completed" && record.GRPCCode != codes.OK.String() || record.Status == "failed" && record.OperationClass != kindExec && record.GRPCCode == codes.OK.String()) {
 		return call, time.Time{}, time.Time{}, errors.New("replay call has invalid gRPC status")
 	}
 	started, startErr := time.Parse(time.RFC3339Nano, record.StartedAt)
@@ -310,14 +394,13 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 		return call, time.Time{}, time.Time{}, errors.New("replay call has invalid tool call ID")
 	}
 	call = replay.Call{Sequence: sequence, ToolCallID: record.ToolCallID, ResponseSHA256: record.ResponseSHA256, ResponseBytes: record.ResponseBytes, ResponseCode: record.GRPCCode}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(line, &fields); err != nil {
-		return replay.Call{}, time.Time{}, time.Time{}, err
-	}
 	switch record.OperationClass {
 	case kindExec:
-		if !validReplayNumber(fields["exit_code"]) || record.ExitCode < 0 || record.ExitCode > int(^uint8(0)) {
-			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec exit code is invalid")
+		if !skipResponseCheck || fields["exit_code"] != nil {
+			if !validReplayNumber(fields["exit_code"]) || record.ExitCode < 0 || record.ExitCode > int(^uint8(0)) {
+				return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec exit code is invalid")
+			}
+			call.ExitCode = new(int32(record.ExitCode))
 		}
 		command := fields["command"]
 		if len(command) > 0 && command[0] != '"' || len(fields["stdin"]) == 0 || fields["stdin"][0] != '"' || !validReplayNumber(fields["stdin_bytes"]) || record.CommandHash != bridgekit.CommandHash(record.Command) || record.StdinEncoding != "utf-8" || int64(len(record.Stdin)) != record.StdinBytes || !bridgekit.ValidWorkdir(record.Workdir) {
@@ -328,7 +411,7 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec argv differs from the recorded command")
 		}
 		call.Operation, call.Script, call.Login, call.Body = "Exec", record.Command, login, []byte(record.Stdin)
-		call.Workdir, call.ExitCode = record.Workdir, int32(record.ExitCode)
+		call.Workdir = record.Workdir
 		if record.ResponseDebug {
 			call.ResponseDebug = true
 			call.ResponseStdout, call.ResponseStderr = []byte(record.ResponseStdout), []byte(record.ResponseStderr)
