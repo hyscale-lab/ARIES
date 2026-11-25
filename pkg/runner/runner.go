@@ -530,6 +530,13 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		result.Replay.Responses = &core.ReplayResponses{Status: "skipped"}
 	}
 	for index, call := range plan.Calls {
+		if rejection := call.SourceRejection; rejection != nil {
+			start := plan.StartedAt.Add(call.StartOffset)
+			result.Replay.SourceRejections = append(result.Replay.SourceRejections, core.ReplaySourceRejection{
+				SourceSequence: call.Sequence, ToolCallID: call.ToolCallID, Operation: call.Operation,
+				Reason: rejection.Reason, SourceStartedAt: start, SourceReturnedAt: start.Add(rejection.Duration),
+			})
+		}
 		if index > 0 && call.StartOffset == plan.Calls[index-1].StartOffset {
 			r.logger.WithContext(ctx).WithFields(logrus.Fields{
 				"task_id": task.ID, "source_run_id": plan.SourceRunID, "source_task_id": plan.SourceTaskID,

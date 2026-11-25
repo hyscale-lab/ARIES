@@ -100,8 +100,14 @@ score, reward, or both. Replay saves only the recorded grade fields, including
 explicit zeros. Without either grade, `evaluation.status` is `unavailable`,
 and the result has no `score`, `reward`, or `reused` field.
 `evaluation.source_run_id` and `evaluation.source_task_id` identify the source.
-Read its `evaluation/` artifacts there; replay does not copy them or re-evaluate.
-Successful replay with response checks enabled confirms strict comparisons,
+Use that occurrence's `bridge/runtime.json` or the replay environment check
+in `aries.log` to identify `origin_type`. An absent source field defaults to
+`aries`, which native sources can also set explicitly. The converter writes
+`harbor`.
+For native sources, read any `evaluation/` artifacts in the source run.
+The Harbor converter does not create that directory. Replay does not copy
+evaluation artifacts or re-evaluate.
+Successful replay with response checks enabled confirms the strict comparisons,
 not equal final sandbox state. Use `replay.responses` for comparison status. See
 [result limits](replay-limitations.md#fidelity-and-result-limits).
 
@@ -110,6 +116,9 @@ Each `calls` entry has an occurrence-local `source_sequence` and signed `drift_n
 positive means late. `basis` is `shared_replay_origin` for the common scheduled
 clock or `occurrence_first_start` for the occurrence's first observed call.
 Empty traces have no per-call drift. Timing drift is nonfatal.
+`drift_ns` subtracts the recorded start offset from the observed replay bridge
+admission offset. The source offset measures recorded tool request time for Harbor
+and source bridge admission for native ARIES.
 See [timing calculations and clock requirements](design/replayer.md#5-replayer-components)
 before comparing measurements.
 
@@ -117,12 +126,31 @@ before comparing measurements.
 when comparison is enabled. With `replay.must_check_response: false`, the status
 is `skipped` and there are no per-call comparisons. Timing, execution errors,
 isolation, and cleanup are still reported.
-Each `calls` entry identifies `source_sequence` and records `expected_sha256`,
+
+Each native `calls` entry identifies `source_sequence` and records `expected_sha256`,
 `actual_sha256`, and `matched` or `drifted` status.
 Hash-only drift does not fail replay; see the
 [response checks](design/replayer.md#5-replayer-components).
-Changed `Exec` output appears in private `aries.log` and stderr,
+Changed native `Exec` output appears in private `aries.log` and stderr,
 not `run-result.json`.
+
+Harbor entries identify `source_sequence` and `status`. They do not report hashes
+or output text. `matched` means comparable `Exec` output matches byte for byte,
+or a write succeeded with the expected byte count. `drifted` means comparable
+output differs without a change in length. `length_matched` means both streams
+contain output and their combined length matches, but their order is unknown.
+`inconclusive` means a capture was cut or the private audit did not retain the
+output. `length_mismatch`, `exit_mismatch`, `rpc_failed`, and `operation_failed`
+identify distinct failures when the finalized bridge audit records them.
+The caller reports execution failures even when the bridge audit has no record.
+
+`tasks[0].replay.source_rejections` lists confirmed refusals from the recording
+in both response modes. Each entry gives the source sequence, tool call ID,
+operation, reason, and source request and return times. For a Claude `Edit`,
+`file_not_read` identifies the source tool handler's refusal before sandbox
+dispatch. Replay sends no request and records no bridge start, drift, or response
+comparison for that event. The entry is historical evidence, not a new failure
+or an independent check. It includes no file path or content.
 
 ## Measurement availability
 

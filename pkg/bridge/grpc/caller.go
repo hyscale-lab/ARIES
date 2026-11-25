@@ -21,8 +21,21 @@ func ReplayCalls(ctx context.Context, callTimeout time.Duration, client sandboxv
 	if len(plan.Calls) == 0 {
 		return ctx.Err()
 	}
+	if plan.OriginType != "" && plan.OriginType != replay.OriginARIES && plan.OriginType != replay.OriginHarbor {
+		return errors.New("replay caller does not support the plan origin")
+	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		return errors.New("replay caller requires a deadline")
+	}
+	var lastRejection time.Duration
+	for _, call := range plan.Calls {
+		if rejection := call.SourceRejection; rejection != nil {
+			end, valid := call.ScheduleEnd()
+			if !valid || plan.OriginType != replay.OriginHarbor || call.Operation != "Edit" || rejection.Reason != replay.RejectionFileNotRead {
+				return fmt.Errorf("replay call %d has invalid source rejection", call.Sequence)
+			}
+			lastRejection = max(lastRejection, end)
+		}
 	}
 	callsCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -89,11 +102,14 @@ launch:
 			fail(err)
 			break launch
 		}
+		if call.SourceRejection != nil {
+			continue
+		}
 		active++
 		callCtx, done := context.WithTimeout(callsCtx, callTimeout)
 		go func() {
 			defer done()
-			results <- replayCall(callCtx, client, call, plan.SkipResponseCheck)
+			results <- replayCall(callCtx, client, call, plan.OriginType == replay.OriginHarbor, plan.SkipResponseCheck)
 		}()
 	}
 	for active > 0 {
@@ -109,6 +125,15 @@ launch:
 	if failure != nil {
 		return failure
 	}
+	if wait := time.Until(origin.Add(lastRejection)); lastRejection > 0 && wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if plan.FinalWait > 0 {
 		timer := time.NewTimer(plan.FinalWait)
 		defer timer.Stop()
@@ -121,7 +146,13 @@ launch:
 	return ctx.Err()
 }
 
-func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call, skipResponseCheck bool) error {
+func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call, harbor, skipResponseCheck bool) error {
+	if harbor && (call.ResponseSHA256 != "" || call.ResponseBytes != 0 || call.ResponseCode != "" ||
+		call.Operation != "Exec" && call.Operation != "WriteFile" ||
+		call.Operation == "Exec" && !skipResponseCheck && call.HarborOutput == nil ||
+		call.Operation == "WriteFile" && (call.HarborOutput != nil || call.HarborTruncated)) {
+		return fmt.Errorf("replay call %d has invalid Harbor evidence", call.Sequence)
+	}
 	if call.Sequence != 0 {
 		ctx = metadata.AppendToOutgoingContext(ctx, replaySourceSequenceKey, strconv.FormatUint(call.Sequence, replaySequenceBase))
 	}
@@ -135,20 +166,8 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 	switch call.Operation {
 	case "Exec":
 		response, callErr := client.Exec(ctx, &sandboxv1.ExecRequest{Script: call.Script, Stdin: call.Body, Login: call.Login})
-		if skipResponseCheck {
-			if callErr != nil {
-				return replayRPCError(call, callErr)
-			}
-			switch response.GetReason() {
-			case sandboxv1.Reason_REASON_COMPLETED:
-				return nil
-			case sandboxv1.Reason_REASON_CANCELED:
-				return fmt.Errorf("replay call %d Exec did not complete: %w", call.Sequence, context.Canceled)
-			case sandboxv1.Reason_REASON_TIMED_OUT:
-				return fmt.Errorf("replay call %d Exec did not complete: %w", call.Sequence, context.DeadlineExceeded)
-			default:
-				return fmt.Errorf("replay call %d Exec did not complete", call.Sequence)
-			}
+		if harbor || skipResponseCheck {
+			return checkHarborExec(call, response, callErr, skipResponseCheck)
 		}
 		outcome = newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
 		err = callErr
@@ -228,7 +247,7 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 			}
 		}
 	case "WriteFile":
-		if !skipResponseCheck {
+		if !harbor && !skipResponseCheck {
 			outcome = newResponseOutcome(sandboxv1.Sandbox_WriteFile_FullMethodName)
 		}
 		var stream sandboxv1.Sandbox_WriteFileClient
@@ -242,7 +261,7 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 		}
 		if err == nil {
 			written, err = stream.CloseAndRecv()
-			if err == nil {
+			if err == nil && outcome != nil {
 				outcome.message(written)
 			}
 		} else if skipResponseCheck && stream != nil && errors.Is(err, io.EOF) {
@@ -251,8 +270,17 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 				err = recvErr
 			}
 		}
-		if skipResponseCheck && err == nil && (written == nil || written.GetBytesWritten() != int64(len(call.Body))) {
-			return fmt.Errorf("replay call %d WriteFile write length mismatch", call.Sequence)
+		if harbor || skipResponseCheck {
+			if err != nil {
+				if skipResponseCheck {
+					return replayRPCError(call, err)
+				}
+				return fmt.Errorf("replay call %d WriteFile RPC failed (%s)", call.Sequence, status.Code(err))
+			}
+			if written == nil || written.GetBytesWritten() != int64(len(call.Body)) {
+				return fmt.Errorf("replay call %d WriteFile write length mismatch", call.Sequence)
+			}
+			return nil
 		}
 	default:
 		return fmt.Errorf("replay call %d has unknown operation", call.Sequence)
@@ -267,6 +295,37 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 	outcome.field([]byte(status.Convert(err).Message()))
 	if outcome.invalid || outcome.bytes != call.ResponseBytes || status.Code(err).String() != call.ResponseCode || exitCodeChanged || written != nil && written.GetBytesWritten() != int64(len(call.Body)) {
 		return fmt.Errorf("replay call %d %s response mismatch", call.Sequence, call.Operation)
+	}
+	return nil
+}
+
+func checkHarborExec(call replay.Call, response *sandboxv1.ExecResponse, err error, skipResponseCheck bool) error {
+	if err != nil {
+		if skipResponseCheck {
+			return replayRPCError(call, err)
+		}
+		return fmt.Errorf("replay call %d Exec RPC failed (%s)", call.Sequence, status.Code(err))
+	}
+	if response.GetReason() != sandboxv1.Reason_REASON_COMPLETED {
+		if skipResponseCheck {
+			switch response.GetReason() {
+			case sandboxv1.Reason_REASON_CANCELED:
+				return fmt.Errorf("replay call %d Exec did not complete: %w", call.Sequence, context.Canceled)
+			case sandboxv1.Reason_REASON_TIMED_OUT:
+				return fmt.Errorf("replay call %d Exec did not complete: %w", call.Sequence, context.DeadlineExceeded)
+			}
+		}
+		return fmt.Errorf("replay call %d Exec did not complete", call.Sequence)
+	}
+	if skipResponseCheck {
+		return nil
+	}
+	if response.GetExitCode() != call.StrictExitCode() {
+		return fmt.Errorf("replay call %d Exec exit code mismatch", call.Sequence)
+	}
+	if !call.HarborTruncated && !response.GetTruncated() &&
+		len(*call.HarborOutput) != len(response.GetStdout())+len(response.GetStderr()) {
+		return fmt.Errorf("replay call %d Exec output length mismatch", call.Sequence)
 	}
 	return nil
 }

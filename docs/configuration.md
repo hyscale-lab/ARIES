@@ -362,8 +362,10 @@ task's `task.toml`; no version-catalog or Go code change is required.
 ## Sandbox-call replay
 
 A replay profile selects one earlier task occurrence or a complete recorded run,
-not an arrival schedule. Create a new profile from the live profile that produced
-a `hermes-grpc` trace. Keep the same benchmark type, catalog selection for all
+not an arrival schedule. It accepts a native `hermes-grpc` trace or a
+[converted Harbor source](quick-start.md#replay-a-harbor-codex-recording).
+For a native source, create a replay profile from the source live profile.
+Keep the same benchmark type, catalog selection for all
 source logical tasks, versions file,
 overrides file, sandbox, and managed bridge settings. Remove top-level `model`,
 `harness`, and `runtime`. Add this fragment, with a source path relative to the
@@ -391,6 +393,34 @@ In this mode, preflight rejects any occurrence without the required response
 evidence. Set it to `false` to skip historical response comparisons.
 Source integrity, request validation, scheduling, execution errors, and cleanup
 still apply. `null` is not valid.
+Harbor conversion does not read the profile. Switching modes does not require
+reconversion. Checked replay still rejects sources without the required
+comparison evidence. See
+[Harbor response comparison](design/replayer.md#harbor-response-comparison).
+
+Checked replay (also the default when you omit the field):
+
+```json
+{
+  "replay": {
+    "source": "job",
+    "deployment": { "backend": "docker" },
+    "must_check_response": true
+  }
+}
+```
+
+Unchecked replay of the same source:
+
+```json
+{
+  "replay": {
+    "source": "job",
+    "deployment": { "backend": "docker" },
+    "must_check_response": false
+  }
+}
+```
 
 `replay.deployment` places a separate caller runtime in the pinned bridge
 image. For Docker, the caller, bridge, and sandbox must use the same local

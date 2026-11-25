@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -19,8 +20,9 @@ import (
 
 // ReplayCallStart keeps timing and identity without a recorded request payload.
 type ReplayCallStart struct {
-	Sequence    uint64
-	StartOffset time.Duration
+	Sequence          uint64
+	StartOffset       time.Duration
+	rejectionDuration time.Duration
 }
 
 // ReplayOccurrence describes one selected source on the shared source timeline.
@@ -64,7 +66,8 @@ type replayRunIndex struct {
 		TaskID     string          `json:"task_id"`
 		Evaluation json.RawMessage `json:"evaluation"`
 	} `json:"tasks"`
-	digest [sha256.Size]byte
+	digest            [sha256.Size]byte
+	harborFieldsValid func() bool
 }
 
 func (result *replayRunIndex) occurrenceEvaluation(id string) (json.RawMessage, error) {
@@ -96,6 +99,23 @@ func readReplayRunIndex(ctx context.Context, root *os.Root) (*replayRunIndex, er
 		return nil, errors.New("replay source run result is invalid")
 	}
 	result.digest = sha256.Sum256(data)
+	// Validate the same bytes that supplied the binding, once per index.
+	result.harborFieldsValid = sync.OnceValue(func() bool {
+		fields, err := harborFields(data)
+		if err != nil {
+			return false
+		}
+		var entries []json.RawMessage
+		if json.Unmarshal(fields["tasks"], &entries) != nil {
+			return false
+		}
+		for _, entry := range entries {
+			if _, err := harborFields(entry); err != nil {
+				return false
+			}
+		}
+		return true
+	})
 	return &result, nil
 }
 
@@ -166,7 +186,9 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 		if err := errors.Join(readErr, closeErr); err != nil {
 			return nil, err
 		}
-		var metadata replaySourceMetadata
+		var metadata struct {
+			TaskID string `json:"task_id"`
+		}
 		if err := json.Unmarshal(data, &metadata); err != nil {
 			return nil, fmt.Errorf("decode replay runtime: %w", err)
 		}
@@ -189,7 +211,11 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 		}
 		occurrence := ReplayOccurrence{SourceTaskID: plan.SourceTaskID, LogicalTaskID: task.ID, StartedAt: plan.StartedAt}
 		for _, call := range plan.Calls {
-			occurrence.Calls = append(occurrence.Calls, ReplayCallStart{Sequence: call.Sequence, StartOffset: call.StartOffset})
+			start := ReplayCallStart{Sequence: call.Sequence, StartOffset: call.StartOffset}
+			if call.SourceRejection != nil {
+				start.rejectionDuration = call.SourceRejection.Duration
+			}
+			occurrence.Calls = append(occurrence.Calls, start)
 		}
 		if len(plan.Calls) != 0 {
 			if !hasCalls || plan.StartedAt.Before(selection.StartedAt) {
@@ -230,6 +256,9 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 			offset := started.Sub(selection.StartedAt)
 			if offset < 0 || !selection.StartedAt.Add(offset).Equal(started) {
 				return nil, errors.New("replay global call offset is not representable")
+			}
+			if returned := started.Add(call.rejectionDuration); !selection.StartedAt.Add(returned.Sub(selection.StartedAt)).Equal(returned) {
+				return nil, errors.New("replay global rejection return offset is not representable")
 			}
 			// Only the encoded offset number changes when the source timeline expands.
 			planBytes += len(fmt.Sprint(offset.Nanoseconds())) - len(fmt.Sprint(call.StartOffset.Nanoseconds()))

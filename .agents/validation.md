@@ -26,6 +26,9 @@
 - Test replay with synthetic evidence and no agent or grader. Check execution,
   response status, and cleanup independently in the
   [replay results](../docs/run-results.md#sandbox-call-replay-results).
+- Use synthetic evidence to check
+  [Harbor import selection](../docs/quick-start.md#replay-a-harbor-codex-recording)
+  and [source provenance](../docs/run-results.md#sandbox-call-replay-results).
 - Keep credentials, datasets, and run artifacts ignored. Report actual evidence
   and validation gaps.
 
