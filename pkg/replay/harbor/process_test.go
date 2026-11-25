@@ -270,3 +270,28 @@ func TestNativeClockRejectsTransportWithoutAcknowledgement(t *testing.T) {
 		t.Fatal("accepted a completed native command without an acknowledged start")
 	}
 }
+
+func TestBoundedDiagnosticStillRunning(t *testing.T) {
+	call := replay.Call{Operation: "PollProcess", SessionID: 73, ExitCode: 0}
+	var events []Receipt
+	hooks := Hooks{
+		KeepBoundedPollResult: true,
+		Record: func(event Receipt) error {
+			events = append(events, event)
+			return nil
+		},
+		FinishObservedProcess: func(ctx context.Context, actual replay.Call) (core.CommandResult, error) {
+			if actual.SessionID != call.SessionID {
+				t.Fatalf("diagnostic used handle %d", actual.SessionID)
+			}
+			return core.CommandResult{ExitCode: ProcessRunning}, nil
+		},
+	}
+	err := recordProcessDrift(t.Context(), hooks, call, Receipt{}, core.CommandResult{ExitCode: ProcessRunning})
+	if err != nil || len(events) != 3 {
+		t.Fatalf("observations %v, error %v", events, err)
+	}
+	if events[0].StatusBasis != "real_process_running_at_source_terminal_poll" || events[1].Event != "diagnostic_process_dispatch" || events[2].StatusBasis != "additional_join_after_source_poll" || *events[0].Exit != ProcessRunning || *events[2].Exit != ProcessRunning {
+		t.Fatalf("first reply and diagnostic must retain their running observations: %v", events)
+	}
+}

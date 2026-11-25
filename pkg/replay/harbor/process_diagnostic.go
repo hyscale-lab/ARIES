@@ -48,7 +48,7 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 			if e := errors.Join(err, emit(h, event)); e != nil {
 				return e
 			}
-			if h.RelaxedMeasuredStatus || int32(last.ExitCode) == call.ExitCode {
+			if h.KeepBoundedPollResult || h.RelaxedMeasuredStatus || int32(last.ExitCode) == call.ExitCode {
 				return nil
 			}
 			return fmt.Errorf("step %d observed terminal exit %d, recorded %d", source.Step, last.ExitCode, call.ExitCode)

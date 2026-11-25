@@ -80,6 +80,11 @@ func (s *ProcessSessions) Close() { s.cancel(); s.wg.Wait() }
 func (s *ProcessSessions) EndingProcessStates(ids []int) map[int]string {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if ids == nil {
+		for id := range s.active {
+			ids = append(ids, id)
+		}
+	}
 	states := make(map[int]string, len(ids))
 	for _, id := range ids {
 		p := s.active[id]

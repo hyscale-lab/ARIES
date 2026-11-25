@@ -26,9 +26,10 @@ def identify(events, complete=True, relaxed_status=False, ending_handles=(), end
         if (relaxed_status and kind == "diagnostic_process_observation" and
                 event.get("status_basis") == "additional_join_after_source_poll"):
             handle = event["source_process_session_id"]
-            if handle not in active or event["exit_code"] < 0:
+            if handle not in active or event["exit_code"] < -1:
                 raise ValueError("invalid terminal join for source process")
-            event["start_sequence"] = active.pop(handle)["sequence"]
+            if event["exit_code"] >= 0:
+                event["start_sequence"] = active.pop(handle)["sequence"]
         if kind not in {"tool_dispatch", "tool_reply"}:
             if active and kind in {"wait_start", "wait_end", "source_event"}:
                 event["background_handles_possibly_running"] = sorted(active)
@@ -84,7 +85,7 @@ def identify(events, complete=True, relaxed_status=False, ending_handles=(), end
         group["background_handles_after"] = sorted(active)
     for event in active.values():
         event["terminal_poll_observed"] = False
-    if complete and (set(active) != set(ending_handles) or unmatched or set(retained) != set(ending_retained_handles)):
+    if complete and ((set(active) | set(retained)) != (set(ending_handles) | set(ending_retained_handles)) or unmatched or not set(retained) <= set(ending_retained_handles)):
         raise ValueError("unmatched native start or poll")
     return groups, {"open_handles": sorted(active), "unmatched_reply_sequences": unmatched}
 

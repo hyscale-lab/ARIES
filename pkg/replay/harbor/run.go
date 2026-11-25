@@ -19,6 +19,7 @@ type Hooks struct {
 	deferProcessJoin      func(func() error)
 	WasRetained           func(int) bool
 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
+	KeepBoundedPollResult bool
 	RelaxedMeasuredStatus bool
 	DiagnosticVideoImages bool
 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)

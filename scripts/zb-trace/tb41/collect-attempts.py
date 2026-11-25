@@ -43,7 +43,7 @@ def collect(host, cache, results):
             draft=Path(tmp)/'output'
             draft.mkdir()
             if status:
-                lines=(dest/'driver.log').read_text().splitlines()
+                lines=(dest/'driver.log').read_text().strip().splitlines()
                 evidence=dict(attempt=run,node=host.split('@')[-1].split('.')[0],exit_status=status,
                               driver_last_line=lines[-1] if lines else None)
                 if (dest/'events.jsonl').exists():

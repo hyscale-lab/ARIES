@@ -593,6 +593,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		h.WasRetained = sessions.WasRetained
 	}
 	if tb41Polls {
+		h.KeepBoundedPollResult = true
 		h.FinishObservedProcess = sessions.PollObservedProcess
 	}
 	if relaxedStatus {
@@ -617,14 +618,23 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if err := harbor.Run(ctx, r, h); err != nil {
 		return err
 	}
+	endingStates := map[int]string{}
 	if len(r.EndingProcessSessions) > 0 {
+		endingStates = sessions.EndingProcessStates(r.EndingProcessSessions)
+	}
+	if tb41Polls {
+		for id, state := range sessions.EndingProcessStates(nil) {
+			endingStates[id] = state
+		}
+	}
+	if len(endingStates) > 0 {
 		at, err := harbor.Clock()
 		if err != nil {
 			return err
 		}
 		if err := log.Encode(map[string]any{"event": "session_end_processes", "monotonic_ns": at,
-			"source_process_states": sessions.EndingProcessStates(r.EndingProcessSessions),
-			"teardown_action":       "cancel_streams_then_remove_sandbox"}); err != nil {
+			"source_process_states": endingStates, "recorded_ending_handles": r.EndingProcessSessions,
+			"teardown_action": "cancel_streams_then_remove_sandbox"}); err != nil {
 			return err
 		}
 	}

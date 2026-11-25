@@ -51,6 +51,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export ZB_TB41_RUNTIME="$runtime" ZB_TB41_UNIT="/run/$unit" ZB_CGROUP_EVENTS="$out/events.jsonl"
 export ZB_GUEST_PYTHON="${ZB_GUEST_PYTHON:-/opt/venv/bin/python}"
 if [[ "$arm" == traced ]]; then
+    [[ -x "$trace/native-deep-scan" ]] || { echo "missing executable $trace/native-deep-scan" >&2; exit 1; }
     python3 - "$runtime/runtime.json" "$stage/bitmap/firecracker" <<'PY'
 import json, os, shutil, sys
 from pathlib import Path
