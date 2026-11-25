@@ -47,6 +47,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"music-harmony":         musicHarmonySetup,
 	royTask:                 {output: "/results/TB3_Conf_Answers.csv", inputCheck: royInputCheck, initialCheck: royInitialCheck},
 	"wal-recovery-ordering": walRecoverySetup,
 	"session-window-debug":  sessionWindowSetup,

@@ -1,5 +1,31 @@
 [
   {
+    "task": "music-harmony",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-music@sha256:7c8b744190a2af85fc1f278330d50e7ef31ac415773290d9e11248147be300c6",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "view_image",
+      "write_stdin"
+    ],
+    "effects": [
+      "Inspect the supplied harmony score, install the local offline music-analysis wheels, render and view temporary score images, and write a MusicXML file."
+    ],
+    "trials": [
+      {
+        "trial": "6493d436-a17e-431c-bfe5-988e501f006e",
+        "trajectory_sha256": "7033d6a5214cc6e18b8b52fbe1caf2054ae3016ef9901c36e6b168ccec9cf740",
+        "rollout_sha256": "a9d8fb4d5b1cb7ec07db50380825a3a8cbe588bbd9eb8c3521b643b42ef632c3"
+      }
+    ]
+  },
+  {
     "task": "coq-block-bound",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-coq-block-bound@sha256:030118a00c37bf068e533935c849e8b35bfd83662d7cf09c3f9fa453917e91d3",
