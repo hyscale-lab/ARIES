@@ -47,6 +47,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	hofTopologyTask:            hofTopologyOfflineSetup,
 	bipedTask:                  bipedSetup,
 	"freecad-platform-drawing": {output: "/app/part.FCStd", inputCheck: "echo '51b9da9c17a09b25fc00b7b38f290fb729cb6d67c8b0f643d0c02fe80debe360  /app/e0fe7718e6.png' | sha256sum -c -", initialCheck: "test ! -e /app/part.FCStd && test ! -e /app/build_part.py\n" + cadReady},
 	"freecad-spring-clip":      {output: "/app/answer_base.FCStd", initialCheck: "test ! -e /app/answer.py && test ! -e /app/answer_edit.FCStd && test ! -e /app/answer_base.FCStd\n" + cadReady},
@@ -211,7 +212,11 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 		}
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
-	if task.packagesSHA != "" {
+	if r.Trial == hofTopologyOfflineTrial {
+		if err := stageHOFWheels(ctx, m, id, packages); err != nil {
+			return "", nil, err
+		}
+	} else if task.packagesSHA != "" {
 		if err := installPackages(ctx, m, id, packages, task.packagesSHA); err != nil {
 			return "", nil, err
 		}

@@ -1,5 +1,34 @@
 [
   {
+    "task": "hof-topology-interpenetration",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-hof-topology-interpenetration@sha256:d5db936be8f7a1b25b7d694ba92eba72220e418e259a19884359b4b657bb1276",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "needs_network": false,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "effects": [
+      "Read seven local hydrogen-bonded organic framework CIFs and compute graph topology, interpenetration, periodic coordination counts, and node distances.",
+      "Install pinned offline Python wheels during replay and extract the source-identified MofStructure wheel, bundled Systre JAR, and RCSR archive.",
+      "Retain two source host-side web completion events and the original guest release metadata request. The guest has no external network for this reconstruction and records the actual request output."
+    ],
+    "trials": [
+      {
+        "trial": "aabc93fe-c1d8-4e28-af4b-e4e9bcee0540",
+        "trajectory_sha256": "c8799d404acb92bbc757fdd35ba5d2dde954d042302f0b4ea3a3a0c3e87e918b",
+        "rollout_sha256": "bbe86e6140ff185fbd6097492b01c2e4b918632d63e9c374e85d414db53dff00"
+      }
+    ]
+  },
+  {
     "task": "biped-contact-dynamics",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-biped-contact-dynamics@sha256:0732743873d164a9d893b77f3502a02d5e03a400ca31c411526c7d0c5bdafdae",
