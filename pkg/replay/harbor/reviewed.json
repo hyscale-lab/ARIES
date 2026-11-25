@@ -1,5 +1,95 @@
 [
   {
+    "task": "freecad-platform-drawing",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-freecad-platform-drawing@sha256:460dcef0b0595b6730dd49b31e040f75bd61738f15a0ec9a31d880bd986839f9",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "view_image",
+      "update_plan"
+    ],
+    "effects": [
+      "Inspect local CAD inputs, scripts and rendered images, construct parametric FreeCAD geometry for an engineering drawing or roller chain spring clip, and save the part in the workload directory."
+    ],
+    "trials": [
+      {
+        "trial": "a4d84523-40cc-4174-95ba-3b8db9883aee",
+        "trajectory_sha256": "4194a8fc4f39654aaaf413d9aa2d35f4286fe369faaa3878c638197e36496dba",
+        "rollout_sha256": "cb27ac7878313b203c8c73f620b50eb868fab2a643c24ce80e837fe0af8bfa11"
+      },
+      {
+        "trial": "9fd6a8b8-3075-4054-9caa-3aa13f6bd407",
+        "trajectory_sha256": "21341911317b13a30199d76f8b4d9994c61103c78079300c8e0b65c2989188ce",
+        "rollout_sha256": "45789677819ec324e4546004bb3173b43157e8cffc1a9c322e6075ef2097b8a7"
+      },
+      {
+        "trial": "9b95500e-748c-4b16-914d-eb4ce21c9773",
+        "trajectory_sha256": "219d6255d0ff05ec416d302b5db59a53845ff3047b097bf3b1d8e28aa2686e1d",
+        "rollout_sha256": "0863f4ebc79d186b28ae5600cc0ef8fd45194be0fdcf6f9a0d90db9fa5fea1f8"
+      },
+      {
+        "trial": "9f99d667-6eb7-450a-a715-2eb335095856",
+        "trajectory_sha256": "62097232eed24958762cd1dad2ce5da432dc8c18278814d6ad4a087466e85d45",
+        "rollout_sha256": "e12f1fb15e1397e33737d69dbe54ddd8faa450a97b82fc50fafe8f660c5d9dea"
+      },
+      {
+        "trial": "08255123-7f37-4ac3-ad5a-ec7e9a4e3d39",
+        "trajectory_sha256": "1a5dd73383e26b5809deab527a4fe770bc8d1a28a73e6f73bec3d574e74a86fd",
+        "rollout_sha256": "2d2953fb31185c6b0dc2cd1703259d1c01d073060442af7d9681ecc441064639"
+      }
+    ]
+  },
+  {
+    "task": "freecad-spring-clip",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-freecad-spring-clip@sha256:7aa09b73b53b780098c9a4484844c2caadcf81abecfb1fb19672781e5cde3767",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "view_image",
+      "update_plan"
+    ],
+    "effects": [
+      "Inspect local CAD inputs, scripts and rendered images, construct parametric FreeCAD geometry for an engineering drawing or roller chain spring clip, and save the part in the workload directory."
+    ],
+    "trials": [
+      {
+        "trial": "6c8b8d90-1910-46d9-a0a2-18a330d69a71",
+        "trajectory_sha256": "662f1f3aacd49d1d1e80acd6148c56302bcfb64e3bd816e2a7d473e904a566f2",
+        "rollout_sha256": "c3dbaa1ed2a63ca619606c0b49f5b83439b7b2ff90372b14032beb9578e1e134"
+      },
+      {
+        "trial": "ce6044db-e5ea-430d-91e0-7272a0695992",
+        "trajectory_sha256": "5198c140f6d7870f03fef7f8908024df624315fc8db3a9697d63c0eefbb64852",
+        "rollout_sha256": "6bc1eb675cf8598383fea5a09dd409e1ad53859c1be3088a87561b21faa2ddb3"
+      },
+      {
+        "trial": "06c8cac1-50a8-4b51-933f-f221f143d7a2",
+        "trajectory_sha256": "aa4c558a4791da575f3636c7e1ffefa33b79b168586fff68b849753c2bbe47ce",
+        "rollout_sha256": "ef8996e8e88987dc6e167a5e82636578a34a3437ad3749df9900bb4ec562b36e"
+      },
+      {
+        "trial": "a9e95de2-9628-4159-9e65-d04c4e03c787",
+        "trajectory_sha256": "f10cb2d1e2fe0145aef6475148a821750ef96d694491e1a4e5651846b6e52e03",
+        "rollout_sha256": "4454c5aa500d72088d7fcd5cddb321137eb1ceb4dcad924fdd41a086f8514e48"
+      },
+      {
+        "trial": "e2cdc89f-e58d-4c66-b906-19bdd0956af2",
+        "trajectory_sha256": "67fbdd26738ea07a8db7aaf2a7d00e2ea60df44a232369b2f0daca4c087f8932",
+        "rollout_sha256": "6d5ddbe9fe20f8ab7f1f519a1ed21c81f2fdf35d1eef320e1aca86e8eea57495"
+      }
+    ]
+  },
+  {
     "task": "music-harmony",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-music@sha256:7c8b744190a2af85fc1f278330d50e7ef31ac415773290d9e11248147be300c6",

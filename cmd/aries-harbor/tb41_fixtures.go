@@ -43,6 +43,10 @@ test ! -e Main.vo
 }
 
 var tb41PatchAliases = map[string]string{
+	"a4d84523-40cc-4174-95ba-3b8db9883aee": "QBVFWp",
+	"6c8b8d90-1910-46d9-a0a2-18a330d69a71": "tRCUcS",
+	"e2cdc89f-e58d-4c66-b906-19bdd0956af2": "7h6rxD",
+
 	"b253c7f7-9591-448e-8e10-c0f35e2771d9": "xolPyo",
 	"c782489c-4925-42a5-9873-42eb5dd86a86": "0dBF6j",
 	"9fb8d078-0d6a-4629-bcac-1d246656345f": "jRd0KF",
@@ -52,6 +56,13 @@ var tb41PatchAliases = map[string]string{
 
 func tb41SourceSetup(trial string, task taskSetup) taskSetup {
 	switch trial {
+	case "9fd6a8b8-3075-4054-9caa-3aa13f6bd407", "9b95500e-748c-4b16-914d-eb4ce21c9773", "9f99d667-6eb7-450a-a715-2eb335095856":
+		task.packagesSHA = "25a171383f021a29ad1b6028b77ef1a019e8b385e4b673acd763186ef8f5c892"
+		task.packagesField = "cad_pillow_wheel_archive_sha256"
+		task.initialCheck += `
+echo '23d27a3e0307ec2244cc51e7287b919aa68d097504ebe19df4e76a98a3eea5bd  /opt/zb-cad/wheels/pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl' | sha256sum -c -
+/opt/conda/bin/python -c 'import importlib.util; assert importlib.util.find_spec("PIL") is None'`
+
 	case "23163f44-25fb-47c7-8a9c-5aabc8e918f6", "c1962991-d260-46b5-8047-535da8dd7955",
 		"ecd96589-9286-4639-918e-d6a81933aa6f", "42a81732-26cc-4817-8e52-ae846d24410e":
 		task.packagesSHA = "e45d5f8a8fcf4e15144f869adeb010553493c791d1b2cec2d7c03b6ce2bb2fbe"
@@ -85,3 +96,6 @@ readlink "$alias_dir/apply_patch"`
 	}
 	return task
 }
+
+const cadReady = `/opt/conda/bin/python -c 'import FreeCAD,sys; assert FreeCAD.Version()[:3]==["0","21","2"] and sys.version_info[:2]==(3,11)'
+` + noShellPatch
