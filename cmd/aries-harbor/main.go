@@ -62,6 +62,7 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
+	periodicSocket := flag.String("periodic-socket", "", "native page collector socket for five-second runnable and transition captures")
 	intraStep := flag.Int("intra-tool-step", 0, "recorded step for experimental intra-tool tracing")
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
@@ -271,10 +272,13 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
+	if *periodicSocket != "" && (*observer != "" || *intraStep != 0 || *probe != "") {
+		return errors.New("periodic collector owns all trace boundaries")
+	}
+	return native(ctx, o, r, *image, *periodicSocket, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, periodicSocket, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -568,6 +572,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			}
 			return nil
 		},
+	}
+	if periodicSocket != "" {
+		h.Periodic = nativePeriodic(periodicSocket, id, socket)
 	}
 	if opamPID {
 		h.Exec = mapCompilerWait(h.Exec, log.Encode)
