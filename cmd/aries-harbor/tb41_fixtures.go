@@ -43,6 +43,8 @@ test ! -e Main.vo
 }
 
 var tb41PatchAliases = map[string]string{
+	"bd4fd537-e83d-4864-a71d-d6e4911288e4": "BYIvm9",
+	"a2334355-6f34-41d5-9499-dc4873806dfb": "xtwPGq",
 	"a4d84523-40cc-4174-95ba-3b8db9883aee": "QBVFWp",
 	"6c8b8d90-1910-46d9-a0a2-18a330d69a71": "tRCUcS",
 	"e2cdc89f-e58d-4c66-b906-19bdd0956af2": "7h6rxD",
@@ -56,6 +58,13 @@ var tb41PatchAliases = map[string]string{
 
 func tb41SourceSetup(trial string, task taskSetup) taskSetup {
 	switch trial {
+	case "a27cb98a-fce4-4f32-b6b3-7f923ae19176":
+		task.initialCheck += "\nmkdir -p /tmp/codex-home/skills\ntest -z \"$(ls -A /tmp/codex-home/skills)\""
+	case "b763a908-c85a-451f-94fc-3727a75d1ef0":
+		task.packagesSHA = "9f255a2ec972389b541e0ecfb2dc4a2e5597b2aa53899dcedab3e6214aa43a49"
+		task.packagesField = "music_fonts_wheels_archive_sha256"
+		task.initialCheck += "\ntest -d /usr/share/fonts/truetype/dejavu\ndpkg-query -W fonts-dejavu-core fonts-dejavu-mono"
+
 	case "9fd6a8b8-3075-4054-9caa-3aa13f6bd407", "9b95500e-748c-4b16-914d-eb4ce21c9773", "9f99d667-6eb7-450a-a715-2eb335095856":
 		task.packagesSHA = "25a171383f021a29ad1b6028b77ef1a019e8b385e4b673acd763186ef8f5c892"
 		task.packagesField = "cad_pillow_wheel_archive_sha256"
