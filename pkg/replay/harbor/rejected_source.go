@@ -3,6 +3,9 @@ package harbor
 // The native harness refused this request before starting a shell. Match the
 // exact ATIF reply and retain the original request-to-rejection interval.
 func rejectedBeforeGuest(trial string, c indexedCall) bool {
+	if refusal, ok := cadHarnessRefusals[c.call.ID]; ok {
+		return trial == refusal.trial && c.step == refusal.step && c.call.Name == "exec_command" && digest([]byte(c.output)) == refusal.sha
+	}
 	if trial == "720d990f-65c3-4e3a-8613-c813937dd7d4" && c.step == 11 &&
 		c.call.ID == "call_zA4CJyQ1w3PXPk6iaDhcWYyN" && c.call.Name == "exec_command" &&
 		digest([]byte(c.output)) == "60697f48d70cc5dd5d41067d17ba36871845c0b68266b4cfa8e8d1368ada7e03" {
@@ -21,4 +24,18 @@ func rejectedBeforeGuest(trial string, c indexedCall) bool {
 		return c.step == 16 && c.call.ID == "call_v4nkzoHaJeps4Eqq4LlfEMjI" && c.call.Name == "exec_command" && digest([]byte(c.output)) == "b9e9cfff1f5e943ceff0be7070c172b29b531251dba20f63d0dc009984001c78"
 	}
 	return false
+}
+
+var cadHarnessRefusals = map[string]struct {
+	trial string
+	step  int
+	sha   string
+}{
+	"call_csFtGRnYJX2hPgOSZJNfewd1": {"a4d84523-40cc-4174-95ba-3b8db9883aee", 21, "f3431cfceea3b9cbf22495e61df5ddaf0e37672b4e7008bc8ea94aeb4667a6ab"},
+	"call_VobtTkN3dXgCtrlbKgWPcFxw": {"9fd6a8b8-3075-4054-9caa-3aa13f6bd407", 21, "0c6ed8e2660bcf2adc5dba94267e5de896ca30b10b78997a8a3a94d4def43cb8"},
+	"call_ihWRS90MMNNTPRWwLhhrj3Qd": {"9b95500e-748c-4b16-914d-eb4ce21c9773", 22, "c0f0e56feee960e6c79f15afedebee623eea4ce1dc7adedfec5a1c03d11176db"},
+	"call_utaXtycmaQaI1OcfvyrdWGzv": {"9f99d667-6eb7-450a-a715-2eb335095856", 22, "c56ab1e9e1e3c452df45b874a395dc46b1cb37005ef0d49800b22b76888a76ba"},
+	"call_8c8QBqsBMOjxHwuTNohNb64p": {"08255123-7f37-4ac3-ad5a-ec7e9a4e3d39", 25, "b01188ead14cd87883cd4178951f5dacc6f3de2aa34970bd5579a8e6abb62438"},
+	"call_GgGYe56u8lcLuf4FhY5ZoRVT": {"a9e95de2-9628-4159-9e65-d04c4e03c787", 23, "7cee4c3612a5153c95fa299af81728588c434ac61f6c8065a7998fe2dfbc5c92"},
+	"call_cqIyaA7SGNgBDyk3a2hW2H8L": {"e2cdc89f-e58d-4c66-b906-19bdd0956af2", 19, "97196690ad4122a17bf0cc82ca1748cb1ce1af23d3b66de75987681fe5ec8e91"},
 }
