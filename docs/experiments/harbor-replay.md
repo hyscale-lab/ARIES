@@ -55,3 +55,5 @@ bin/aries-harbor -trajectory trajectory.json -rollout rollout.jsonl \
 ```
 
 Use `call_id` from the source timeline and `source_call_id` from the run receipts to compare recorded and live dispatch and first-reply times. The original pilot has no process polls. The separate `TestReplaySeparatesLateTerminalPoll` verifies a live retained handle and a first `running` response when the recording expected a terminal poll. The next observation uses the same handle and has separate dispatch and result receipts. For this source family it waits at most five seconds.
+
+Three more original ROY recordings share the same task digest, resource configuration, input files, and guest readiness profile. Their approved artifact hashes are in [reviewed.json](../../pkg/replay/harbor/reviewed.json). Use the same image and replay command with their own source pairs.

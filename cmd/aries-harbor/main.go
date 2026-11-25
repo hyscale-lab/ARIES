@@ -29,9 +29,9 @@ import (
 //go:embed fix_git_ready.py
 var initialGitState string
 
-func sourceShellCommand(trial string, call replay.Call) core.Command {
+func sourceShellCommand(task, trial string, call replay.Call) core.Command {
 	cmd := core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir}
-	if trial == royTrial {
+	if task == royTask {
 		cmd.Args[1] = royShellEnvironment + cmd.Args[1]
 	}
 	if trial == "5854a3a5-de1f-4d9e-8123-75a524459770" {
@@ -500,7 +500,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		}
 	}
 	sessions := harbor.NewCodexProcessSessions(ctx, func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
-		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call), nil, stdout, stderr)
+		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Task, r.Trial, call), call), nil, stdout, stderr)
 	})
 	defer sessions.Close()
 	tb41Polls := r.Job == harbor.TerminalBench4SourceJob

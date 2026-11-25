@@ -108,7 +108,7 @@ exit 7`
 		}
 		cwd := check("mktemp -d /tmp/aries-group-control.XXXXXX")
 		sessions := harbor.NewProcessSessions(ctx, func(ctx context.Context, c replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
-			return m.ExecStream(ctx, id, g.start(sourceShellCommand("", c), c), nil, stdout, stderr)
+			return m.ExecStream(ctx, id, g.start(sourceShellCommand("", "", c), c), nil, stdout, stderr)
 		})
 		defer sessions.Close()
 		var execute shellCall = sessions.Execute

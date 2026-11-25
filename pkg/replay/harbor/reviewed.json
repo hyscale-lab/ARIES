@@ -15,6 +15,21 @@
         "trial": "d16a13fe-8381-4594-b6f6-60bb6f3aa660",
         "trajectory_sha256": "89aa86c826d91294ebfd3a546143ed921bb05c71df32db31955778fd79dde211",
         "rollout_sha256": "d37d808db61644ae9c8309ad4a31e5e42406142a457a8b77a059f28a45d68991"
+      },
+      {
+        "trial": "dbe42b6c-9481-42c4-a378-fab63284df36",
+        "trajectory_sha256": "e309e0f50ae47d8393e9a36e0f40b1143890a8ffbec4895d7d2a73667ec4c849",
+        "rollout_sha256": "169017bb3763645c29bb2760168df4a13ecf4224d9be8e41a55adb3bd5ed7595"
+      },
+      {
+        "trial": "dd384846-6e88-4795-a56a-994771cfe15c",
+        "trajectory_sha256": "ce4bd9ffc10695052744ccd0ef124be05b0021d0425cfc68bde8680ab5e7fd18",
+        "rollout_sha256": "eef6faecb8801b29cf3aeb2a5a9ba6221f8f8e474c4e95a755f8e435f21496e9"
+      },
+      {
+        "trial": "f244ab87-aa99-4a6d-b5bd-c21c1841a6d8",
+        "trajectory_sha256": "a6419e6d059aaaf2ab8508e5f2aa6a9c07937fd08db13c08a5566d549d7e25f1",
+        "rollout_sha256": "ca71d09ab00b5e71e2264ff24b32a19b44e7d711926c57ff9d4c21e610199c0d"
       }
     ]
   },

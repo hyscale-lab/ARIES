@@ -21,7 +21,6 @@ const debianCurlSHA = "6e8e1dac4bc58e974f2654b53c6e4d5210cc8b7f492f1ad5660cdab5a
 const codexPrefixSHA = "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab"
 
 const royTask = "roy-polymorph-cn"
-const royTrial = "d16a13fe-8381-4594-b6f6-60bb6f3aa660"
 const royShellEnvironment = `export PATH=/opt/venv/bin:/root/.local/bin:"$PATH"; `
 const royInputCheck = `export LC_ALL=C
 test "$(sha256sum data/*.mol data/TB3_Conf_Properties.csv | sha256sum)" = '236aeefd45cca191035b28b385bc8226eca7b4c2bf8fb1d8966bfd7b8f288bb4  -'`
@@ -179,7 +178,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 		return "", nil, fmt.Errorf("no ready-state definition for %s", r.Task)
 	}
 	if r.Task == royTask {
-		command := sourceShellCommand(r.Trial, replay.Call{Login: true, Workdir: r.Workdir, Script: "set -eu\n" + task.inputCheck + "\n" + task.initialCheck})
+		command := sourceShellCommand(r.Task, r.Trial, replay.Call{Login: true, Workdir: r.Workdir, Script: "set -eu\n" + task.inputCheck + "\n" + task.initialCheck})
 		out, err := checked(ctx, m, id, command)
 		return "source_task_ready", map[string]string{"checks": strings.TrimSpace(out)}, err
 	}
