@@ -87,6 +87,9 @@ func (s *ProcessSessions) EndingProcessStates(ids []int) map[int]string {
 	}
 	states := make(map[int]string, len(ids))
 	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
 		p := s.active[id]
 		if p == nil {
 			states[id] = "missing"
@@ -121,12 +124,20 @@ func (s *ProcessSessions) ObserveRelaxed(ctx context.Context, call replay.Call) 
 	return s.execute(ctx, call, true, false, true)
 }
 
-func (s *ProcessSessions) FinishRelaxed(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+func diagnosticProcessID(call replay.Call) int {
+	return -int(call.Sequence)
+}
+
+func observedProcessPoll(call replay.Call) replay.Call {
 	if call.Operation == "Exec" {
-		call.SessionID = -int(call.Sequence)
+		call.SessionID = diagnosticProcessID(call)
 		call.Operation = "PollProcess"
 	}
-	return s.FinishObservedProcess(ctx, call)
+	return call
+}
+
+func (s *ProcessSessions) FinishRelaxed(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	return s.FinishObservedProcess(ctx, observedProcessPoll(call))
 }
 
 func (s *ProcessSessions) WasRetained(id int) bool {
@@ -146,8 +157,9 @@ func (s *ProcessSessions) FinishObservedProcess(ctx context.Context, call replay
 	return s.execute(ctx, call, true, true, false)
 }
 
-// PollObservedProcess allows one additional empty poll after a terminal poll yielded.
+// PollObservedProcess observes the same live command once after a source-terminal reply yielded.
 func (s *ProcessSessions) PollObservedProcess(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	call = observedProcessPoll(call)
 	if call.Operation != "PollProcess" || call.ExitCode == ProcessRunning {
 		return core.CommandResult{}, errors.New("expected an original terminal process poll")
 	}
@@ -159,7 +171,7 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 	unnamed := trackUnnamed && call.Operation == "Exec"
 	key := call.SessionID
 	if unnamed {
-		key = -int(call.Sequence)
+		key = diagnosticProcessID(call)
 	}
 	s.lock.Lock()
 	p := s.active[key]

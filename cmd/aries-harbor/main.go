@@ -532,11 +532,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		IntraTool:             intraTool,
 		Record:                func(e harbor.Receipt) error { return log.Encode(e) },
 		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
-			if relaxedStatus && (call.Operation == "Exec" || call.Operation == "StartProcess" || call.Operation == "PollProcess") {
+			if (relaxedStatus || tb41Polls) && (call.Operation == "Exec" || call.Operation == "StartProcess" || call.Operation == "PollProcess") {
 				return sessions.ObserveRelaxed(ctx, call)
 			}
 			if call.Operation == "StartProcess" || call.Operation == "PollProcess" {
-				if processDrift || tb41Polls {
+				if processDrift {
 					return sessions.ObserveDrift(ctx, call)
 				}
 				return sessions.Execute(ctx, call)

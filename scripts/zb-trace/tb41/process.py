@@ -84,6 +84,43 @@ def attribution(native, destination):
                               {k:v for k,v in regular.items() if k!='files'}))
 
 
+def verify_foreground_yields(events, divergent, keys):
+    diagnostics = {}
+    for event in events:
+        if 'diagnostic_process_id' in event:
+            diagnostics.setdefault(event['diagnostic_process_id'], []).append(event)
+    verified = []
+    binding = keys[:-2] + ('expected_exit_code',)
+    for reply in divergent:
+        if reply.get('operation') != 'Exec' or reply['exit_code'] != -1 or reply['expected_exit_code'] < 0:
+            continue
+        identity = -reply['sequence']
+        matching = diagnostics.pop(identity, [])
+        if identity >= 0 or reply.get('source_process_session_id') is not None or len(matching) not in (1, 3):
+            raise ValueError('foreground yield requires sequence-local diagnostic evidence')
+        first = matching[0]
+        if (first['event'] != 'diagnostic_process_observation'
+                or first['status_basis'] != 'real_process_running_at_source_terminal_reply'
+                or any(first.get(k) != reply.get(k) for k in keys)
+                or first['monotonic_ns'] < reply['monotonic_ns']):
+            raise ValueError('foreground yield diagnostic disagrees with the first reply')
+        observation = dict(sequence=reply['sequence'], diagnostic_process_id=identity)
+        if len(matching) == 3:
+            dispatch, result = matching[1:]
+            if (dispatch['event'] != 'diagnostic_process_dispatch' or 'exit_code' in dispatch
+                    or result['event'] != 'diagnostic_process_observation'
+                    or any(r['status_basis'] != 'additional_join_after_source_reply'
+                           or any(r.get(k) != reply.get(k) for k in binding) for r in (dispatch, result))
+                    or not first['monotonic_ns'] <= dispatch['monotonic_ns'] <= result['monotonic_ns']
+                    or type(result.get('exit_code')) is not int or result['exit_code'] < -1):
+                raise ValueError('invalid bounded observation of a foreground yield')
+            observation['bounded_observed_exit_code'] = result['exit_code']
+        verified.append(observation)
+    if diagnostics:
+        raise ValueError('unbound foreground yield diagnostic')
+    return verified
+
+
 def process(run, output):
     events = list(rows(run/'events.jsonl'))
     if events[-1]['event'] != 'removed':
@@ -108,6 +145,9 @@ def process(run, output):
                 ending_handles=[int(h) for h,state in handles.items() if state=='running'],
                 ending_retained_handles=[int(h) for h,state in handles.items() if state=='terminal_retained'])
     process_status['divergent_first_replies']=[{k:r.get(k) for k in keys} for r in divergent]
+    foreground = verify_foreground_yields(events, divergent, keys)
+    if foreground:
+        process_status['foreground_yield_observations'] = foreground
     create, = [r for r in events if r['event']=='create_start']
     lifecycle = [r['event'] for r in events]
     required = ['source_task_ready','snapshot_complete','restore_complete','session_start','tool_dispatch','session_end']

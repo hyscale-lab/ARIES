@@ -295,3 +295,83 @@ func TestBoundedDiagnosticStillRunning(t *testing.T) {
 		t.Fatalf("first reply and diagnostic must retain their running observations: %v", events)
 	}
 }
+
+func TestSourceTerminalExecYieldUsesSeparateDiagnosticIdentity(t *testing.T) {
+	for _, finish := range []bool{false, true} {
+		t.Run(fmt.Sprint(finish), func(t *testing.T) {
+			terminal := make(chan struct{})
+			sessions := NewProcessSessions(t.Context(), func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
+				if call.Sequence == 1 {
+					select {
+					case <-terminal:
+						_, _ = fmt.Fprint(stdout, "late output")
+					case <-ctx.Done():
+						return core.CommandResult{}, ctx.Err()
+					}
+				}
+				return core.CommandResult{}, nil
+			})
+			defer sessions.Close()
+			recording := &Recording{Plan: replay.Plan{Calls: []replay.Call{
+				{Operation: "Exec", Sequence: 1, YieldTime: 10 * time.Millisecond},
+				{Operation: "Exec", Sequence: 2, YieldTime: time.Second},
+			}}, Events: []Event{
+				{Kind: "exec_command", CallID: "late", Step: 1, Sequence: 1},
+				{Kind: "function_call_output", CallID: "late", Step: 1, Sequence: 1},
+				{Kind: "exec_command", CallID: "next", Step: 2, Sequence: 2},
+				{Kind: "function_call_output", CallID: "next", Step: 2, Sequence: 2},
+			}}
+			var first, result Receipt
+			var next bool
+			h := Hooks{
+				KeepBoundedPollResult: true,
+				Exec:                  sessions.ObserveRelaxed,
+				Boundary:              func(context.Context, string, int) error { return nil },
+				FinishObservedProcess: sessions.PollObservedProcess,
+				Record: func(r Receipt) error {
+					if r.Sequence == 1 {
+						switch r.Event {
+						case "tool_reply":
+							first = r
+						case "diagnostic_process_dispatch":
+							if r.DiagnosticID != -1 || r.SessionID != 0 {
+								t.Fatalf("wrong follow-up identity: %+v", r)
+							}
+							if finish {
+								close(terminal)
+							}
+						case "diagnostic_process_observation":
+							if r.StatusBasis == "additional_join_after_source_reply" {
+								result = r
+							}
+						}
+					}
+					if r.Event == "tool_reply" && r.Sequence == 2 {
+						next = true
+					}
+					return nil
+				},
+			}
+			if err := Run(t.Context(), recording, h); err != nil {
+				t.Fatal(err)
+			}
+			want := ProcessRunning
+			if finish {
+				want = 0
+			}
+			if first.Exit == nil || *first.Exit != ProcessRunning || first.SessionID != 0 ||
+				first.Expected == nil || *first.Expected != 0 || first.DiagnosticID != 0 {
+				t.Fatalf("first reply changed: %+v", first)
+			}
+			if result.Exit == nil || *result.Exit != want || result.DiagnosticID != -1 || result.SessionID != 0 {
+				t.Fatalf("wrong bounded observation: %+v", result)
+			}
+			if finish && result.Stdout != "late output" {
+				t.Fatalf("bounded observation lost pending output: %+v", result)
+			}
+			if !next || len(sessions.EndingProcessStates(nil)) != 0 {
+				t.Fatal("later source call or source handle state changed")
+			}
+		})
+	}
+}

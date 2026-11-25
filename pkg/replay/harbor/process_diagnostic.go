@@ -15,13 +15,15 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 		event.StatusBasis = "real_terminal_before_source_running_poll"
 		return emit(h, event)
 	}
-	if (call.Operation == "PollProcess" || (h.RelaxedMeasuredStatus && call.Operation == "Exec")) &&
+	if (call.Operation == "PollProcess" || ((h.RelaxedMeasuredStatus || h.KeepBoundedPollResult) && call.Operation == "Exec")) &&
 		first.ExitCode == ProcessRunning && call.ExitCode >= 0 {
 		event.StatusBasis = "real_process_running_at_source_terminal_poll"
 		if call.Operation == "Exec" {
 			event.StatusBasis = "real_process_running_at_source_terminal_reply"
+			event.SessionID = 0
+			event.DiagnosticID = diagnosticProcessID(call)
 		}
-		if err := emit(h, event); err != nil {
+		if err := emit(h, event); err != nil || h.FinishObservedProcess == nil {
 			return err
 		}
 		join := func() error {

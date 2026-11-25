@@ -44,6 +44,7 @@ type Receipt struct {
 	RunnableTargetNS *int64              `json:"target_runnable_ns,omitempty"`
 	RunnableActualNS *int64              `json:"actual_runnable_ns,omitempty"`
 	SessionID        int                 `json:"source_process_session_id,omitempty"`
+	DiagnosticID     int                 `json:"diagnostic_process_id,omitempty"`
 	Operation        string              `json:"operation,omitempty"`
 	StatusBasis      string              `json:"status_basis,omitempty"`
 	Time             int64               `json:"monotonic_ns"`
@@ -314,7 +315,7 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 			receipt.StatusBasis = "real_terminal_status_differs_from_source"
 			return emit(h, receipt)
 		}
-		if h.RelaxedMeasuredStatus {
+		if h.RelaxedMeasuredStatus || (h.KeepBoundedPollResult && call.Operation == "Exec" && call.ExitCode >= 0 && out.ExitCode == ProcessRunning) {
 			return recordProcessDrift(ctx, h, call, receipt, out)
 		}
 		if h.FinishObservedProcess != nil && call.SessionID != 0 {
