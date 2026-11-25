@@ -29,7 +29,7 @@ finish() {
     fi
 }
 trap finish EXIT
-args=()
+args=(-periodic-socket observer-light)
 export ZB_CHECKPOINT_NAMESPACE_DIR="$runtime/checkpoints/aries"
 export PYTHONDONTWRITEBYTECODE=1
 export ZB_TB41_RUNTIME="$runtime" ZB_TB41_UNIT="/run/$unit" ZB_CGROUP_EVENTS="$out/events.jsonl"
@@ -62,7 +62,7 @@ PY
         sleep .1
     done
     [[ -S "$out/boundary.sock" ]] && grep -q '^ready ' "$out/slots.log"
-    args+=(-periodic-socket "$out/boundary.sock")
+    args=(-periodic-socket "$out/boundary.sock")
 fi
 cp "$runtime/runtime.json" "$out/effective-runtime.json"
 source_dir=${ZB_SOURCE_DIR:-$stage}

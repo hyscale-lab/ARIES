@@ -77,7 +77,14 @@ def process(run, output):
     events = list(rows(run/'events.jsonl'))
     if events[-1]['event'] != 'removed':
         raise ValueError('incomplete runtime cleanup')
-    groups, process_status = identify(events, complete=True)
+    ending = [r for r in events if r['event']=='session_end_processes']
+    handles = {}
+    if ending:
+        receipt, = ending
+        handles = receipt['source_process_states']
+        if any(state not in ('running','terminal_retained') for state in handles.values()):
+            raise ValueError('missing source process at teardown')
+    groups, process_status = identify(events, complete=True, ending_handles=list(map(int, handles)))
     create, = [r for r in events if r['event']=='create_start']
     lifecycle = [r['event'] for r in events]
     required = ['source_task_ready','snapshot_complete','restore_complete','session_start','tool_dispatch','session_end']
@@ -130,7 +137,7 @@ def process(run, output):
         with gzip.open(output/'boundaries.jsonl.gz','xt') as stream:
             for r in rows(native/'boundaries.jsonl'):
                 write(stream,{k:v for k,v in r.items() if k not in {'guest_telemetry','content_sample','original_snapshot_sample','dirty'}})
-    elif captures:
+    elif any(c.get("pause_ack_monotonic_ns") or c.get("resume_request_monotonic_ns") for c in captures):
         raise ValueError('harness trace without native evidence')
     (output/'run.json').write_text(json.dumps(meta,indent=2)+'\n')
 

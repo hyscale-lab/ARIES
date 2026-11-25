@@ -62,7 +62,7 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
-	periodicSocket := flag.String("periodic-socket", "", "native page collector socket for five-second runnable and transition captures")
+	periodicSocket := flag.String("periodic-socket", "", "native page collector socket for five-second runnable and transition captures, or observer-light for the paired clock control")
 	intraStep := flag.Int("intra-tool-step", 0, "recorded step for experimental intra-tool tracing")
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
@@ -573,7 +573,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 			return nil
 		},
 	}
-	if periodicSocket != "" {
+	if periodicSocket == "observer-light" {
+		h.Periodic = func(context.Context, string, int, []string) (harbor.Freeze, error) { return harbor.Freeze{}, nil }
+	} else if periodicSocket != "" {
 		h.Periodic = nativePeriodic(periodicSocket, id, socket)
 	}
 	if opamPID {
