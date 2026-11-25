@@ -4,6 +4,7 @@ package harbor
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
@@ -21,8 +22,9 @@ import (
 )
 
 const (
-	Job = "17d1a7f6-3339-4670-8b70-3b145979f57f"
-	Row = "f8d623c8-5f1b-4f9c-8deb-d110fa91e1d2"
+	Job                     = "17d1a7f6-3339-4670-8b70-3b145979f57f"
+	Row                     = "f8d623c8-5f1b-4f9c-8deb-d110fa91e1d2"
+	TerminalBench4SourceJob = "a538f69d-7756-444a-9dfe-43a0ab10b3a8"
 )
 
 //go:embed reviewed.json
@@ -73,6 +75,8 @@ type workload struct {
 	Task         string   `json:"task"`
 	Workdir      string   `json:"workdir"`
 	Image        string   `json:"image"`
+	Job          string   `json:"job_id"`
+	Row          string   `json:"row_id"`
 	Effects      []string `json:"effects"`
 	Trials       []struct {
 		Trial      string
@@ -147,8 +151,8 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 	if t.Schema != "ATIF-v1.7" || t.Session == "" || t.Agent.Name != "codex" || t.Agent.Model != "gpt-6-astra" {
 		return nil, errors.New("unexpected ATIF identity")
 	}
-	r := &Recording{NeedsNetwork: w.NeedsNetwork, VCPUs: w.VCPUs, MemoryMiB: w.MemoryMiB, StorageMiB: w.StorageMiB, Task: w.Task, Workdir: w.Workdir, Image: w.Image, ReviewedEffects: w.Effects, Trial: trial, Job: Job, Row: Row, Session: t.Session, Model: t.Agent.Model, TrajectoryHash: digest(atif), RolloutHash: digest(rollout)}
-	r.Plan.SourceRunID = Job
+	r := &Recording{NeedsNetwork: w.NeedsNetwork, VCPUs: w.VCPUs, MemoryMiB: w.MemoryMiB, StorageMiB: w.StorageMiB, Task: w.Task, Workdir: w.Workdir, Image: w.Image, ReviewedEffects: w.Effects, Trial: trial, Job: cmp.Or(w.Job, Job), Row: cmp.Or(w.Row, Row), Session: t.Session, Model: t.Agent.Model, TrajectoryHash: digest(atif), RolloutHash: digest(rollout)}
+	r.Plan.SourceRunID = r.Job
 	r.Plan.SourceTaskID = trial
 	ordinary, web, err := splitWebActions(t.Steps, slices.Contains(w.Tools, "web_search_call"))
 	if err != nil {
@@ -185,7 +189,7 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 	active := map[string]uint64{}
 	var activeStep int
 	var cwd string
-	var complete, sessionBound bool
+	var complete, sessionBound, seenSession bool
 	started := map[string]bool{}
 	for line := 1; sc.Scan(); line++ {
 		var raw struct {
@@ -212,6 +216,10 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 			continue
 		}
 		if raw.Type == "session_meta" {
+			if seenSession {
+				return nil, errors.New("duplicate native session metadata")
+			}
+			seenSession = true
 			sessionBound = p.SessionID == t.Session
 			continue
 		}
@@ -421,7 +429,7 @@ func processPoll(c indexedCall, origin, ts time.Time, sequence uint64) (replay.C
 	if !ok {
 		return replay.Call{}, errors.New("missing poll observation")
 	}
-	call := replay.Call{Operation: "PollProcess", SessionID: args.SessionID, YieldTime: time.Duration(max(5000, args.YieldMs)) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: []byte(body)}
+	call := replay.Call{Operation: "PollProcess", SessionID: args.SessionID, YieldTime: time.Duration(min(300000, max(5000, args.YieldMs))) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: []byte(body)}
 	if running := runningHeader.FindStringSubmatch(header); len(running) == 2 && running[1] == strconv.Itoa(args.SessionID) {
 		call.ExitCode = ProcessRunning
 		return call, nil

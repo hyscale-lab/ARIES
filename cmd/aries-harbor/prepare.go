@@ -13,17 +13,42 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/replay/harbor"
 )
 
 const debianCurlSHA = "6e8e1dac4bc58e974f2654b53c6e4d5210cc8b7f492f1ad5660cdab5ac4c6998"
 const codexPrefixSHA = "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab"
 
+const royTask = "roy-polymorph-cn"
+const royTrial = "d16a13fe-8381-4594-b6f6-60bb6f3aa660"
+const royShellEnvironment = `export PATH=/opt/venv/bin:/root/.local/bin:"$PATH"; `
+const royInputCheck = `export LC_ALL=C
+test "$(sha256sum data/*.mol data/TB3_Conf_Properties.csv | sha256sum)" = '236aeefd45cca191035b28b385bc8226eca7b4c2bf8fb1d8966bfd7b8f288bb4  -'`
+const royInitialCheck = `test -d /results
+test ! -e /results/TB3_Conf_Answers.csv
+test ! -e /app/fit_roy.py
+if command -v apply_patch; then exit 1; fi
+test "$(command -v python)" = /opt/venv/bin/python
+python - <<'PY'
+from importlib.metadata import version
+from importlib.util import find_spec
+import sys
+
+assert sys.version_info[:2] == (3, 11)
+assert find_spec("sklearn") is None
+for name, expected in {"pandas": "3.0.3", "numpy": "2.4.6", "scipy": "1.17.1", "rdkit": "2026.3.2"}.items():
+    actual = version(name)
+    assert actual == expected, (name, actual)
+    print(name, actual)
+PY`
+
 type taskSetup struct {
 	packagesSHA, packagesField, output, inputCheck, initialCheck string
 }
 
 var taskSetups = map[string]taskSetup{
+	royTask:             {output: "/results/TB3_Conf_Answers.csv", inputCheck: royInputCheck, initialCheck: royInitialCheck},
 	"sanitize-git-repo": {output: "README.md", initialCheck: "test -s README.md && test -s ray_processing/process.py && command -v git"},
 	bnFitTask:           bnFitSetup,
 	"git-leak-recovery": {packagesSHA: sparqlSetup.packagesSHA, output: "secret.txt", initialCheck: gitRecoveryReady},
@@ -152,6 +177,11 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	task, ok := sourceSetup(r)
 	if !ok {
 		return "", nil, fmt.Errorf("no ready-state definition for %s", r.Task)
+	}
+	if r.Task == royTask {
+		command := sourceShellCommand(r.Trial, replay.Call{Login: true, Workdir: r.Workdir, Script: "set -eu\n" + task.inputCheck + "\n" + task.initialCheck})
+		out, err := checked(ctx, m, id, command)
+		return "source_task_ready", map[string]string{"checks": strings.TrimSpace(out)}, err
 	}
 	if r.Task == "compile-compcert" {
 		if err := uploadPinned(ctx, m, id, packages, compilerBootstrapSHA, "/tmp"); err != nil {

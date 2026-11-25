@@ -31,6 +31,9 @@ var initialGitState string
 
 func sourceShellCommand(trial string, call replay.Call) core.Command {
 	cmd := core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir}
+	if trial == royTrial {
+		cmd.Args[1] = royShellEnvironment + cmd.Args[1]
+	}
 	if trial == "5854a3a5-de1f-4d9e-8123-75a524459770" {
 		// The original later commands contain the random directory name verbatim.
 		cmd.Args[1] = strings.Replace(cmd.Args[1], "audit_dir = pathlib.Path(tempfile.mkdtemp(prefix='dclm-sanitize-'))", "audit_dir = pathlib.Path('/tmp/dclm-sanitize-eavsydk9')\naudit_dir.mkdir(mode=0o700)", 1)
@@ -247,7 +250,7 @@ func command(ctx context.Context) error {
 	if ((r.Trial == hfLoopbackTrial && *hfHarness == "") || r.Trial == hfDefaultThreadsTrial || r.Trial == datasetPythonTrial || r.Task == "sanitize-git-repo") != (*curlPackages != "") {
 		return errors.New("provide the pinned curl archive for the source trial requiring the additional HTTP client")
 	}
-	if r.Task != "fix-git" && (*codexTools == "" || (readySetup.packagesSHA != "" && *osTools == "")) {
+	if r.Task != "fix-git" && r.Task != royTask && (*codexTools == "" || (readySetup.packagesSHA != "" && *osTools == "")) {
 		return errors.New("missing pinned guest tool bundle for this task")
 	}
 	if (*sampler == "") != (*samples == "") {
@@ -500,6 +503,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Trial, call), call), nil, stdout, stderr)
 	})
 	defer sessions.Close()
+	tb41Polls := r.Job == harbor.TerminalBench4SourceJob
 	relaxedStatus := relaxedML || timingAudit || bnFit
 	if relaxedStatus {
 		event := "relaxed_ml_measurement"
@@ -524,7 +528,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 				return sessions.ObserveRelaxed(ctx, call)
 			}
 			if call.Operation == "StartProcess" || call.Operation == "PollProcess" {
-				if processDrift {
+				if processDrift || tb41Polls {
 					return sessions.ObserveDrift(ctx, call)
 				}
 				return sessions.Execute(ctx, call)
@@ -571,9 +575,12 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if opamLog {
 		h.Exec = mapCompilerLog(h.Exec, log.Encode)
 	}
-	if processDrift {
+	if processDrift || tb41Polls {
 		h.FinishObservedProcess = sessions.FinishObservedProcess
 		h.WasRetained = sessions.WasRetained
+	}
+	if tb41Polls {
+		h.FinishObservedProcess = sessions.PollObservedProcess
 	}
 	if relaxedStatus {
 		h.FinishObservedProcess = sessions.FinishRelaxed

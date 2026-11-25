@@ -40,3 +40,18 @@ scripts/harbor-replay/run-traced.sh ./bin/aries-harbor scripts/zb-trace /path/to
     -image "$BENCHMARK_IMAGE" -socket "$CONTAINERD_SOCKET" \
     -checkpoint-dir "$CHECKPOINT_DIR" -shim-dir "$SHIM_DIR" -io-dir "$IO_DIR"
 ```
+
+## Terminal-Bench 4.1 replay pilot
+
+The 4.1 cohort pilot uses the [original `roy-polymorph-cn` trial](https://hub.harborframework.com/jobs/a538f69d-7756-444a-9dfe-43a0ab10b3a8/trials/d16a13fe-8381-4594-b6f6-60bb6f3aa660) from the Terminal-Bench 4.0 job that Harbor regraded. ARIES pins the original artifact pair, source job and row, and the OCI manifest rebuilt from the [original task Dockerfile and data](https://github.com/harbor-framework/terminal-bench/tree/452bf305c6daa62fc59061d22133a7cbc7c1572e/tasks/roy-polymorph-cn). Import the digest-qualified image into the selected containerd namespace before starting the pilot. Guest readiness verifies the task inputs, virtual environment, first-run output paths and the absence of the command that produced the recorded exit 2. The five guest replies should be `0, 0, 0, 2, 0` in source order. One recorded web action and the plan updates remain host-side timeline events.
+
+```sh
+bin/aries-harbor -trajectory trajectory.json -rollout rollout.jsonl > source-timeline.json
+bin/aries-harbor -trajectory trajectory.json -rollout rollout.jsonl \
+  -image docker.io/library/zb-tb41-roy@sha256:3ed43bff698735f15fa9db6e020df8e44e1d3ec37e8828ebc53eba054e509a77 \
+  -namespace aries -socket "$CONTAINERD_SOCKET" -io-dir "$IO_DIR" \
+  -shim-dir "$SHIM_DIR" -checkpoint-dir "$CHECKPOINT_DIR" \
+  -native-checkpoint -log replay.jsonl
+```
+
+Use `call_id` from the source timeline and `source_call_id` from the run receipts to compare recorded and live dispatch and first-reply times. The original pilot has no process polls. The separate `TestReplaySeparatesLateTerminalPoll` verifies a live retained handle and a first `running` response when the recording expected a terminal poll. The next observation uses the same handle and has separate dispatch and result receipts. For this source family it waits at most five seconds.

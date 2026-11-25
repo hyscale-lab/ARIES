@@ -1,5 +1,24 @@
 [
   {
+    "task": "roy-polymorph-cn",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-roy@sha256:3ed43bff698735f15fa9db6e020df8e44e1d3ec37e8828ebc53eba054e509a77",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": ["exec_command", "update_plan", "web_search_call"],
+    "effects": ["Read local conformer data, fit the spectroscopic relationship and write a local results CSV"],
+    "trials": [
+      {
+        "trial": "d16a13fe-8381-4594-b6f6-60bb6f3aa660",
+        "trajectory_sha256": "89aa86c826d91294ebfd3a546143ed921bb05c71df32db31955778fd79dde211",
+        "rollout_sha256": "d37d808db61644ae9c8309ad4a31e5e42406142a457a8b77a059f28a45d68991"
+      }
+    ]
+  },
+  {
     "task": "fix-git",
     "workdir": "/app/personal-site",
     "image": "docker.io/alexgshaw/fix-git@sha256:389b9c8247610c2c5be080b1ac00429007c2c69bf57f7f26c79f0f75ba2d5c74",

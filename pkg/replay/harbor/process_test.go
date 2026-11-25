@@ -135,6 +135,64 @@ func TestDiagnosticTerminalJoinReadsActualRemainingOutput(t *testing.T) {
 	}
 }
 
+func TestReplaySeparatesLateTerminalPoll(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	release := make(chan struct{})
+	sessions := NewProcessSessions(ctx, func(ctx context.Context, _ replay.Call, stdout, _ io.Writer) (core.CommandResult, error) {
+		select {
+		case <-ctx.Done():
+			return core.CommandResult{}, ctx.Err()
+		case <-release:
+		}
+		fmt.Fprint(stdout, "terminal output")
+		return core.CommandResult{ExitCode: 4}, nil
+	})
+	defer sessions.Close()
+	calls := []replay.Call{
+		{Sequence: 1, Operation: "StartProcess", SessionID: 13, ExitCode: ProcessRunning, YieldTime: 10 * time.Millisecond},
+		{Sequence: 2, Operation: "PollProcess", SessionID: 13, ExitCode: ProcessRunning, YieldTime: 10 * time.Millisecond},
+		{Sequence: 3, Operation: "PollProcess", SessionID: 13, ExitCode: 4, YieldTime: 40 * time.Millisecond},
+	}
+	r := &Recording{Plan: replay.Plan{Calls: calls}, Events: []Event{
+		{Kind: "exec_command", Sequence: 1, CallID: "start"},
+		{Kind: "write_stdin", Sequence: 2, CallID: "running"},
+		{Kind: "write_stdin", Sequence: 3, CallID: "terminal"},
+	}}
+	var replies []Receipt
+	err := Run(ctx, r, Hooks{
+		Exec:                  sessions.ObserveDrift,
+		FinishObservedProcess: sessions.PollObservedProcess,
+		Boundary:              func(context.Context, string, int) error { return nil },
+		Record: func(receipt Receipt) error {
+			if receipt.Event == "diagnostic_process_dispatch" {
+				close(release)
+			}
+			if receipt.Event == "tool_reply" || receipt.Event == "diagnostic_process_dispatch" || receipt.Event == "diagnostic_process_observation" {
+				replies = append(replies, receipt)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 6 {
+		t.Fatalf("got %d replies or diagnostics", len(replies))
+	}
+	for i, receipt := range replies[:3] {
+		if receipt.Event != "tool_reply" || receipt.Exit == nil || *receipt.Exit != ProcessRunning || receipt.SessionID != 13 || receipt.Sequence != uint64(i+1) {
+			t.Fatalf("first reply %d: %+v", i+1, receipt)
+		}
+	}
+	first, dispatch, last := replies[2], replies[4], replies[5]
+	if dispatch.Event != "diagnostic_process_dispatch" || dispatch.Time < first.Time ||
+		last.Event != "diagnostic_process_observation" || last.Time < dispatch.Time || last.SourceCallID != "terminal" ||
+		last.SessionID != 13 || last.Exit == nil || *last.Exit != 4 || last.Stdout != "terminal output" {
+		t.Fatalf("diagnostic did not preserve the original handle and reply: %+v %+v %+v", first, dispatch, last)
+	}
+}
+
 func TestCodexYieldBeginsAfterLaunchAndEarlyExitGrace(t *testing.T) {
 	allowStart := make(chan struct{})
 	started := make(chan struct{})

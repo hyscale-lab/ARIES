@@ -117,6 +117,15 @@ func (s *ProcessSessions) FinishObservedProcess(ctx context.Context, call replay
 	return s.execute(ctx, call, true, true, false)
 }
 
+// PollObservedProcess allows one additional empty poll after a terminal poll yielded.
+func (s *ProcessSessions) PollObservedProcess(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	if call.Operation != "PollProcess" || call.ExitCode == ProcessRunning {
+		return core.CommandResult{}, errors.New("expected an original terminal process poll")
+	}
+	call.YieldTime = min(call.YieldTime, 5*time.Second)
+	return s.ObserveDrift(ctx, call)
+}
+
 func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain, join, trackUnnamed bool) (core.CommandResult, error) {
 	unnamed := trackUnnamed && call.Operation == "Exec"
 	key := call.SessionID

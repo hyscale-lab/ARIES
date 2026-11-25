@@ -10,7 +10,7 @@ import (
 )
 
 func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source Receipt, first core.CommandResult) error {
-	event := Receipt{Event: "diagnostic_process_observation", Step: source.Step, Line: source.Line, Sequence: call.Sequence, SessionID: call.SessionID, Operation: call.Operation, Exit: &first.ExitCode, Expected: &call.ExitCode}
+	event := Receipt{Event: "diagnostic_process_observation", SourceCallID: source.SourceCallID, Step: source.Step, Line: source.Line, Sequence: call.Sequence, SessionID: call.SessionID, Operation: call.Operation, Exit: &first.ExitCode, Expected: &call.ExitCode}
 	if call.ExitCode == ProcessRunning && first.ExitCode >= 0 {
 		event.StatusBasis = "real_terminal_before_source_running_poll"
 		return emit(h, event)
@@ -25,11 +25,17 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 			return err
 		}
 		join := func() error {
-			last, err := h.FinishObservedProcess(ctx, call)
 			event.StatusBasis = "additional_join_after_source_poll"
 			if call.Operation == "Exec" {
 				event.StatusBasis = "additional_join_after_source_reply"
 			}
+			dispatch := event
+			dispatch.Event = "diagnostic_process_dispatch"
+			dispatch.Exit = nil
+			if err := emit(h, dispatch); err != nil {
+				return err
+			}
+			last, err := h.FinishObservedProcess(ctx, call)
 			event.Exit = &last.ExitCode
 			event.ProcessTiming = last.Timing
 			event.Stdout, event.Stderr = last.Stdout, last.Stderr
