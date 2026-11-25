@@ -1,0 +1,33 @@
+--- provision_baseline.sh
++++ provision_biped.sh
+@@ -115,7 +115,7 @@
+   address = "$socket.ttrpc"
+ [plugins."io.containerd.snapshotter.v1.devmapper"]
+   pool_name = "$unit"
+-  base_image_size = "10737418240"
++  base_image_size = "21474836480"
+   root_path = "$work/devmapper"
+ [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+   platform = "linux/amd64"
+@@ -158,7 +158,7 @@
+ PY
+ 
+ "$bin/firecracker-containerd" --config "$work/containerd.toml" config dump |
+-    python3 -c 'import sys,tomllib; p=tomllib.loads(sys.stdin.read())["plugins"]; assert p["io.containerd.server.v1.grpc"]["address"]==sys.argv[1]; assert p["io.containerd.server.v1.ttrpc"]["address"]==sys.argv[1]+".ttrpc"; assert p["io.containerd.snapshotter.v1.devmapper"]["base_image_size"]=="10737418240"' "$socket"
++    python3 -c 'import sys,tomllib; p=tomllib.loads(sys.stdin.read())["plugins"]; assert p["io.containerd.server.v1.grpc"]["address"]==sys.argv[1]; assert p["io.containerd.server.v1.ttrpc"]["address"]==sys.argv[1]+".ttrpc"; assert p["io.containerd.snapshotter.v1.devmapper"]["base_image_size"]=="21474836480"' "$socket"
+ 
+ if ! sudo -n systemctl is-active --quiet "$unit"; then
+     sudo -n systemd-run --unit="$unit" --service-type=simple --property=Delegate=yes \
+@@ -177,7 +177,11 @@
+ test -S "$socket"
+ test -S "$socket.ttrpc"
+ "${ctr[@]}" plugins ls | awk '$1=="io.containerd.snapshotter.v1" && $2=="devmapper" && $NF=="ok" { good = 1 } END { exit !good }'
+-"${ctr[@]}" images pull --local --platform linux/amd64 --snapshotter devmapper "$image"
++test -s "$BIPED_OCI_ARCHIVE"
++[[ "$BIPED_OCI_TAG" == docker.io/library/zb-tb41-biped-contact-dynamics:qualified ]]
++"${ctr[@]}" images import --local --platform linux/amd64 --snapshotter devmapper --digests - < "$BIPED_OCI_ARCHIVE"
++"${ctr[@]}" images tag "$BIPED_OCI_TAG" "$image"
++"${ctr[@]}" images ls | awk -v expected="$image" '$1 == expected && $3 == substr(expected, index(expected,"@")+1) { good=1 } END { exit !good }'
+ "${ctr[@]}" images check --snapshotter devmapper
+ if [[ "$variant" == v1 || "$variant" == v2 ]]; then
+     printf 'BASELINE_RUNTIME_READY socket=%s namespace=aries image=%s\n' "$socket" "$image"
