@@ -1671,6 +1671,61 @@ func TestReplayEmptyTracePreservesSourceEvaluationWithoutVerifier(t *testing.T) 
 	}
 }
 
+func TestReplaySavesSourceRejectionSeparatelyInBothResponseModes(t *testing.T) {
+	const sequence = 1
+	const delay = time.Second
+	const callID = "toolu_fixture"
+	const sourceTime = "2026-11-05T12:00:00Z"
+	at, err := time.Parse(time.RFC3339, sourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, skip := range []bool{false, true} {
+		call := replay.Call{Sequence: sequence, ToolCallID: callID, Operation: "Edit", StartOffset: delay,
+			SourceRejection: &replay.SourceRejection{Reason: replay.RejectionFileNotRead, Duration: delay}}
+		rig, caller, plan := newReplayRig(t, core.Evaluation{Status: core.StatusUnavailable}, call)
+		plan.OriginType, plan.StartedAt, plan.SkipResponseCheck = replay.OriginHarbor, at, skip
+		rig.runner.loadSource = func(context.Context) (replay.Plan, error) { return plan, nil }
+		result, err := rig.runner.Run(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		task := result.Tasks[0]
+		if task.Replay.Status != core.StatusSucceeded || task.Replay.Error != "" ||
+			task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded ||
+			len(task.Replay.Timing.Calls) != 0 || len(task.Replay.Responses.Calls) != 0 ||
+			(task.Replay.Responses.Status == "skipped") != skip || !reflect.DeepEqual(plan, caller.plan) {
+			t.Fatalf("unexpected task result: %+v", task.Replay)
+		}
+		encoded, err := json.Marshal(task.Replay)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved struct {
+			Rejections []struct {
+				Sequence uint64    `json:"source_sequence"`
+				CallID   string    `json:"tool_call_id"`
+				Tool     string    `json:"operation"`
+				Reason   string    `json:"reason"`
+				Started  time.Time `json:"source_started_at"`
+				Returned time.Time `json:"source_returned_at"`
+			} `json:"source_rejections"`
+		}
+		if err := json.Unmarshal(encoded, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if len(saved.Rejections) != 1 {
+			t.Fatalf("missing saved source rejection: %s", encoded)
+		}
+		rejection := saved.Rejections[0]
+		if rejection.Sequence != sequence || rejection.CallID != callID || rejection.Tool != "Edit" ||
+			rejection.Reason != "file_not_read" || !rejection.Started.Equal(at.Add(delay)) ||
+			!rejection.Returned.Equal(at.Add(delay+delay)) {
+			t.Fatalf("wrong saved source rejection: %s", encoded)
+		}
+	}
+}
+
 func TestReplayFailedSandboxPreparationBlocksCalls(t *testing.T) {
 	const firstReplaySequence = 1
 	call := replay.Call{Sequence: firstReplaySequence, Operation: "Stat", Path: "/target"}

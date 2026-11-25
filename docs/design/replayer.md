@@ -58,7 +58,7 @@ One replay trace belongs to one task occurrence. Replay selects the same benchma
 
 Toolathlon is [deferred](#10-open-questions-and-deferred-features). Its setup requires an MCP-capable harness and prepares task-specific gateway services; the gRPC sandbox-call trace does not cover those MCP interactions (`internal/app/wiring/benchmark/toolathlon.go:21-36`; `pkg/benchmark/toolathlon/sandbox.go:66-175`).
 
-With the default policy, a strict gRPC result difference is a **replay mismatch**. Stop new calls on the first strict mismatch. Report a caller execution failure. A changed response SHA-256 alone is diagnostic and does not stop scheduling. Keep canonical response byte count and gRPC status strict for all calls, and check `Exec` exit code and successful `WriteFile` byte count explicitly. Do not change the expected response to make the trace pass. Calls already in flight must finish or be stopped before bridge revocation. Confirm caller stop and bridge revocation before treating replay as complete (`pkg/bridge/grpc/caller.go`; `pkg/runner/runner.go`). The [reused evaluation](#8-reused-evaluation-in-the-first-version) cannot turn a strict replay mismatch into success. Audit IDs and clocks are not response data. A hash difference can occur with or without a strict mismatch.
+With the default policy, a strict gRPC result difference is a **replay mismatch**. Stop new calls on the first strict mismatch. Report a caller execution failure. A changed response SHA-256 alone is diagnostic and does not stop scheduling. For native replay, keep canonical response byte count and gRPC status strict for all calls, and check `Exec` exit code and successful `WriteFile` byte count explicitly. Do not change the expected response to make the trace pass. Calls already in flight must finish or be stopped before bridge revocation. Confirm caller stop and bridge revocation before treating replay as complete (`pkg/bridge/grpc/caller.go`; `pkg/runner/runner.go`). The [reused evaluation](#8-reused-evaluation-in-the-first-version) cannot turn a strict replay mismatch into success. Audit IDs and clocks are not response data. A hash difference can occur with or without a strict mismatch.
 
 ## 3. Current evidence and gaps
 
@@ -91,7 +91,7 @@ Live gRPC runs with `--record-for-replay` extend the tool-call record while keep
 
 The recorder and caller use one versioned, deterministic outcome encoding. It length-prefixes the method and each deterministic protobuf response message. Stream bodies use fixed chunks, not the target's read sizes. The final fields hold the RPC status and message. The digest covers the response assembled and sent by the bridge, not output cut by a cap. It cannot prove that the client received each byte (`pkg/bridge/grpc/audit.go:41-83`; `pkg/bridge/grpc/caller.go:122-220`; `pkg/bridge/grpc/files.go:375-381`).
 
-Live audits retain printable request text in `tool-calls.jsonl`. The recorder marks omitted stdin and write content with `replay_error` (`pkg/bridge/grpc/bridge.go:423-447`; `pkg/bridge/grpc/files.go:420-449`). Before replay starts its task sandbox or sends any call, `LoadReplaySource` reads every record and validates the complete source. It rejects a rejected or canceled call, a missing input or outcome, and each failed `WriteFile`. An admitted non-write call that fails after sandbox dispatch can remain replayable when its inputs and outcome are complete. If call 11 omits a `WriteFile` body, replay reports the trace as not replayable. It does not send calls 1–10 (`pkg/bridge/grpc/replay.go:44-193,234-320`). The private audit retains bounded `Exec` output text or lossless base64 when recording, without a separate debug flag. A single `Exec` record beyond the 128 MiB line bound keeps a bounded `replay_error` marker. After confirmed harness stop and bridge revocation, Runner fails that recording task and skips evaluation (`pkg/bridge/grpc/audit.go:85-109`; `pkg/runner/runner.go:316-353`; `pkg/replay/responses.go:19-70`). If the combined 256 MiB audit limit latches a failure, bridge revocation and collection are unconfirmed; Runner blocks evaluation and reports the actual cleanup result (`pkg/bridge/internal/bridgekit/audit.go:130-165,249-258`; `pkg/bridge/session.go:220-320`; `pkg/runner/runner.go:329-345`). Captured output and `aries.log` can contain task-supplied text. Keep both private, and never deliberately log known credentials. A private payload format for omitted inputs is [deferred](#10-open-questions-and-deferred-features).
+Live audits retain printable request text in `tool-calls.jsonl`. The recorder marks omitted stdin and write content with `replay_error` (`pkg/bridge/grpc/bridge.go:423-447`; `pkg/bridge/grpc/files.go:420-449`). Before replay starts its task sandbox or sends any call, `LoadReplaySource` reads every record and validates the complete source. For native recordings, it rejects a refused or canceled call, a missing input, and each failed `WriteFile`. Checked replay also rejects missing response evidence. A native non-write call that fails after sandbox dispatch can remain replayable when its evidence meets these checks. If call 11 omits a `WriteFile` body, replay reports the trace as not replayable. It does not send calls 1–10 (`pkg/bridge/grpc/replay.go:44-193,234-320`). The private audit retains bounded `Exec` output text or lossless base64 when recording, without a separate debug flag. A single `Exec` record beyond the 128 MiB line bound keeps a bounded `replay_error` marker. After confirmed harness stop and bridge revocation, Runner fails that recording task and skips evaluation (`pkg/bridge/grpc/audit.go:85-109`; `pkg/runner/runner.go:316-353`; `pkg/replay/responses.go:19-70`). If the combined 256 MiB audit limit latches a failure, bridge revocation and collection are unconfirmed; Runner blocks evaluation and reports the actual cleanup result (`pkg/bridge/internal/bridgekit/audit.go:130-165,249-258`; `pkg/bridge/session.go:220-320`; `pkg/runner/runner.go:329-345`). Captured output and `aries.log` can contain task-supplied text. Keep both private, and never deliberately log known credentials. A private payload format for omitted inputs is [deferred](#10-open-questions-and-deferred-features).
 
 When recording, the control plane records a confirmed harness-completion marker with the same bridge host clock as call `timestamp`. Runner sends `CompleteHarness` after positive harness stop and before bridge release; the control server stamps its receipt (`pkg/runner/runner.go:316-334`; `pkg/bridge/session.go:109-130`; `pkg/bridge/control/server.go:160-174`). Release alone would include unrelated cleanup delay. The signal can arrive after the actual stop, so it is not an exact harness-stop time. A missing marker prevents replay readiness but does not skip release. For recording runs, per-task `bridge/runtime.json` stores schema version, `run_id`, `harness_completed_at`, benchmark type, logical task ID, image reference, pinned revisions, and runtime IDs (`pkg/bridge/session.go:30-43,80-107,283-320`). It does not contain a prepared sandbox snapshot, image digest, or credentials.
 
@@ -101,7 +101,7 @@ The loader requires recording metadata `run_id` to match the parent result, incl
 
 ## 5. Replayer components
 
-**Trace sanity check (parser).** Before task sandbox creation, preflight reads the versioned gRPC trace and per-task `bridge/runtime.json` for each selected occurrence. It checks the saved log length and SHA-256 digest before parsing calls. It rejects early refusals, canceled calls, missing inputs, `replay_error`, a missing completion marker, and an incomplete audit. Strict mode also rejects missing response checks. Both modes reject invalid comparison fields when present. The loader requires a matching benchmark type, logical task ID, and unique parent occurrence in `run-result.json`. Preflight reports image and revision differences separately from identity. It computes call-start offsets from the earliest `started_at` and the final wait from the latest completion `timestamp` to the completion marker. It rejects a negative final wait. An empty trace has no call offsets or final wait. File `sequence` identifies a source record in completion order, not start order. Only after preflight succeeds does Runner create and prepare the sandbox. A live [replay-ready trace](#4-capture-contract) supplies the parser with request inputs, timing, and response evidence (`pkg/bridge/grpc/replay.go`; `pkg/runner/runner.go`).
+**Trace sanity check (parser).** Before task sandbox creation, preflight reads the versioned gRPC trace and per-task `bridge/runtime.json` for each selected occurrence. It checks the saved log length and SHA-256 digest before parsing calls. It rejects missing inputs, `replay_error`, a missing completion marker, and an incomplete audit. Native sources cannot include refused or canceled calls. Strict mode also rejects missing response checks. Both modes reject invalid comparison fields when present. The loader requires a matching benchmark type, logical task ID, and unique parent occurrence in `run-result.json`. Preflight reports image and revision differences separately from identity. It computes call-start offsets from the earliest `started_at` and the final wait from the latest completion `timestamp` to the completion marker. It rejects a negative final wait. An empty trace has no call offsets or final wait. File `sequence` identifies a source record in completion order, not start order. Only after preflight succeeds does Runner create and prepare the sandbox. A live [replay-ready trace](#4-capture-contract) supplies the parser with request inputs, timing, and response evidence (`pkg/bridge/grpc/replay.go`; `pkg/runner/runner.go`).
 
 Before task sandbox creation, whole-run preflight reports equal starts across occurrences through the owning run's Logrus logger in `aries.log`. Runner also reports equal starts within an occurrence. Each warning names the source run, source occurrence, source sequences, and common timestamp and offset. It contains no command, response output, or credentials.
 
@@ -115,7 +115,7 @@ Calls can overlap. Launch an overdue call as soon as possible, without moving la
 
 **Replay-only timing correlation.** The caller sends the source audit's existing `sequence` through `aries-replay-source-sequence` metadata on each gRPC call. This metadata is separate from `tool_call_id`; it does not add a live source identifier. The bridge rejects malformed values before sandbox dispatch and writes `replay_source_sequence` into the replay audit for all five RPCs (`pkg/bridge/grpc/caller.go:115-121`; `pkg/bridge/grpc/bridge.go:465-495`; `pkg/bridge/grpc/files.go:60-89`). Source and replay audit `sequence` values both follow completion order and cannot pair overlapping calls. Each sequence stays local to its source run and occurrence; no global operation identity is invented. After confirmed caller stop and bridge revocation with finalized audit collection, Runner reads only bounded shared audit fields. It pairs records by `replay_source_sequence`. When the app caller established a shared epoch, its side-effect-free `ReplayAt` metadata method exposes that epoch to Runner. `ReadTiming` compares each observed bridge start against `ReplayAt + StartOffset`, with `basis: "shared_replay_origin"`. This retains cross-occurrence displacement, staging delay, late readiness, and UTC clock skew instead of normalizing every occurrence independently. Without a shared epoch, `basis: "occurrence_first_start"` keeps the earlier comparison against that occurrence's earliest bridge start. Reading metadata never arms an unused clock. `task.replay.timing.calls` stores the source sequence and signed `drift_ns`. Missing, duplicate, or unrepresentable correlation makes timing `unavailable` with a reason; it does not turn a matching response into a mismatch or change the reused grade. Empty traces have no per-call timing. No response body is read or reported for timing.
 
-**Replay-only response correlation.** When comparison is enabled, Runner reads finalized private replay audit evidence after positive caller stop and bridge revocation. It compares each `response_sha256` with the source call by `replay_source_sequence`. `task.replay.responses.calls` records source sequence, expected and actual hashes, and `matched` or `drifted` status (`pkg/runner/runner.go`; `pkg/replay/responses.go`). This summary is separate from timing, replay execution status, and the reused grade. A missing or ambiguous audit makes the summary `unavailable` without changing replay status. Log hashes on every recorded drift, even when another strict check failed on that call. For `Exec`, log labeled source and replay stdout/stderr through the normal logger and stderr. Encode non-UTF-8 output as labeled base64; if the source audit has no captured output, log `source output unavailable`. File-call logs show hashes only. Never copy response text into `run-result.json` or a caller error. When comparison is disabled, Runner reports `skipped` without per-call comparisons.
+**Replay-only response correlation.** When comparison is enabled, Runner reads finalized private replay audit evidence after positive caller stop and bridge revocation. For native replay it compares each `response_sha256` with the source call by `replay_source_sequence`. `task.replay.responses.calls` records source sequence, expected and actual hashes, and `matched` or `drifted` status (`pkg/runner/runner.go`; `pkg/replay/responses.go`). This summary is separate from timing, replay execution status, and the reused grade. A missing or ambiguous audit makes the summary `unavailable` without changing replay status. Log hashes on every recorded drift, even when another strict check failed on that call. For `Exec`, log labeled source and replay stdout/stderr through the normal logger and stderr. Encode non-UTF-8 output as labeled base64; if the source audit has no captured output, log `source output unavailable`. File-call logs show hashes only. Never copy response text into `run-result.json` or a caller error. When comparison is disabled, Runner reports `skipped` without per-call comparisons. See [Harbor response comparison](#harbor-response-comparison) for imported evidence.
 
 **Tool caller.** A separate task-attached caller container or pod runs the replay mode of the pinned `aries-bridge` image. The caller requires private access to the native gRPC endpoint, which has no client authentication (`pkg/replay/managed/caller.go:38-100`; `cmd/aries/wiring.go:157-179`; `pkg/bridge/grpc/bridge.go:1-3,220-237`). The caller stages the validated plan through private deployment file transfer and runs without host mounts or credentials (`pkg/replay/managed/caller.go`). It uses the generated gRPC client for `Exec`, `Stat`, `ReadFile`, `ReadLines`, and `WriteFile`. For writes, send one header and the retained body in chunks. Half-close the stream and check that the target accepted the full body. Preserve a recorded `tool_call_id` when present; the new run uses its own task and sandbox identities (`pkg/bridge/grpc/caller.go`; `pkg/replay/managed/caller.go`). Give each call a bounded context; the server has no fixed call deadline (`docs/implementation/grpc-bridge.md:351-354`).
 
@@ -143,7 +143,7 @@ See the [current replay limitations](../replay-limitations.md) for supported wor
 
 Replay schedules RPCs from recorded `started_at` offsets and permits overlapping calls (`pkg/bridge/grpc/replay.go:181-197`; `pkg/bridge/grpc/caller.go:52-92`). It does not reproduce sandbox startup, preparation, idle lifetime, or removal timing. Thus the original number of simultaneously live sandboxes and the original resource contention are not guaranteed. Fresh sandbox preparation and sanitization remain required. The [lifecycle](#6-lifecycle-and-results) still requires positive caller isolation for replay or positive harness isolation for live runs. Positive bridge revocation and confirmed sandbox removal remain required (`pkg/runner/runner.go:413-432,471-488,514-549`; `docs/design.md:131-164`).
 
-A replay-ready trace requires finalized evidence, complete request inputs, a common clock origin, and a task match. By default, it also requires response fingerprints. Check these before the first replay call. Test response capture for `Exec`, `Stat`, `ReadFile`, `ReadLines`, and `WriteFile`, including a returned `created` value and an expected RPC error. Test omitted binary input, writes above 16 MiB, early refusals, canceled calls, and negative final waits. Confirm that each rejects the complete source before sandbox creation or any replay call. Test caller readiness before the first call. Test recorded call-start spacing, final delay, an empty trace, overlapping starts, and a mismatch with another call in flight. Confirm that replay never invokes `Benchmark.Evaluate`, and that a missing parent result fails preflight. Confirm that an inherited source grade never hides a replay mismatch or isolation failure. These cases exercise the [capture contract](#4-capture-contract), [components](#5-replayer-components), and [lifecycle](#6-lifecycle-and-results) (`pkg/bridge/grpc/v1/sandbox.proto:15-36,66-202`; `pkg/bridge/grpc/audit.go:73-109`; `pkg/runner/runner.go`).
+A replay-ready trace requires finalized evidence, complete request inputs, a common clock origin, and a task match. By default, it also requires source comparison evidence. Check these before the first replay call. Test response capture for `Exec`, `Stat`, `ReadFile`, `ReadLines`, and `WriteFile`, including a returned `created` value and an expected RPC error. Test omitted binary input, writes above 16 MiB, native early refusals, canceled calls, and negative final waits. Confirm that each rejects the complete source before sandbox creation or any replay call. Test caller readiness before the first call. Test recorded call-start spacing, final delay, an empty trace, overlapping starts, and a mismatch with another call in flight. Confirm that replay never invokes `Benchmark.Evaluate`, and that a missing parent result fails preflight. Confirm that an inherited source grade never hides a replay mismatch or isolation failure. These cases exercise the [capture contract](#4-capture-contract), [components](#5-replayer-components), and [lifecycle](#6-lifecycle-and-results) (`pkg/bridge/grpc/v1/sandbox.proto:15-36,66-202`; `pkg/bridge/grpc/audit.go:73-109`; `pkg/runner/runner.go`).
 
 Matching requests and response fingerprints shows equivalent **bridge-visible** behavior, not identical sandbox state. A script can launch background work after its RPC ends, and the bridge does not log later filesystem changes (`docs/design/bridge.md:167-175`; `pkg/bridge/grpc/bridge.go:348-427`). The live Runner evaluates task state separately; first-version replay deliberately does not (`pkg/runner/interfaces.go:17-24`; `docs/design.md:160-171`). Docker and Kubernetes can give different results for the same task image. Docker typed reads use the daemon; Kubernetes reads run inside the container (`docs/design/bridge.md:144-156`; `pkg/deployment/docker/files.go:3-12`; `pkg/deployment/kubernetes/files.go:3-10`). Do not normalize these response differences. Report SHA-only differences as nonfatal drift. Stop new calls on the first strict mismatch. Keep both separate from the reused source evaluation.
 
@@ -222,9 +222,16 @@ Historical sources recorded before the capture extension lack response checks, f
 Recording stores the execution occurrence in `bridge/runtime.json` as
 `occurrence_id`, separately from the logical `task_id`. Preflight and admission
 reload match the recorded occurrence to its entry in the parent `run-result.json`.
-An older finalized trace can omit `occurrence_id` only if its call log is nonempty
+An older finalized native trace can omit `occurrence_id` only if its call log is nonempty
 and every call identifies the selected occurrence. An empty trace needs the
 metadata ID because it has no calls to prove the binding.
+
+The loader reads `origin_type` from the occurrence metadata. Only an absent
+field defaults to `aries`. The plan retains the origin and any
+`task_package_digest`. Harbor metadata requires explicit `run_id` and
+`occurrence_id`. The loader accepts converted Harbor `Exec`, successful
+add-file records, and [confirmed source refusals](#94-harbor-conversion-and-replay).
+See the [synthetic occurrence and exact field contract](../../pkg/bridge/grpc/testdata/harbor-source/README.md).
 
 ### 9.3 Starting-state checks and application flow
 
@@ -235,6 +242,108 @@ The application now selects a replay branch before model preparation and preflig
 The app executes each selected occurrence once, with `execution.concurrency` as the allocation limit. It creates one fresh Runner, benchmark occurrence, sandbox, bridge session, and caller per admitted source. It releases these runtime owners before admitting replacement work. It does not prepare every loop-produced sandbox at once or create new loop iterations. Logical task IDs, source occurrence identities, and fresh execution identities remain separate. Local execution-ID strings can match across runs; their run IDs distinguish the executions. Zero-call occurrences remain in results, with or without a grade. Source artifacts stay unchanged; replay writes a separate run directory.
 
 The first version [reuses available source grades](#8-reused-evaluation-in-the-first-version) from `run-result.json`. It needs no replay judge model or evaluation-mode field. Show the inherited result with its source identity, separate from replay execution and isolation status. Rerunning a verifier or comparing new and old grades is future work.
+
+### 9.4 Harbor conversion and replay
+
+**Convert before replay.** The standalone Python converter reads one Harbor
+trial (`--harbor-trial`) or all trials in one complete Harbor job (`--harbor-run`).
+Exactly one input flag and an explicit, new `--output-dir` are required. The
+converter publishes a complete source or fails without publishing a partial job.
+ARIES does not read the original Harbor artifacts at replay time. The
+[operator steps](../quick-start.md#replay-a-harbor-codex-recording) cover both modes.
+
+**Bind evidence to the occurrence.** The converter checks the recording agent
+name for trial identity, not to select an artifact format. For Codex-format
+evidence, it joins `agent/codex.txt` with one timestamped rollout. An optional
+`agent/trajectory.json` must agree when present. For Claude-format evidence,
+the timestamped raw session supplies tool events and `agent/claude-code.txt`
+confirms their identity and successful trace completion. A missing tool result
+is not completion evidence. Missing or ambiguous request evidence and
+unsupported operations fail conversion.
+See the [conversion limits](../replay-limitations.md#harbor-conversion-limits).
+The source includes confirmed tool handler refusals before dispatch on the same
+timeline as sandbox requests. A refusal keeps its recorded request and return
+times. It can overlap a dispatched call and can set the end of the timed work
+before the final wait. A trace of only refusals still uses the replay clock.
+No refusal produces a bridge audit entry. Without a shared clock, the first
+dispatched call sets the local baseline for bridge drift.
+The supported benchmark source is Terminal-Bench 2.1. Each trial ID remains a
+separate source occurrence, even for repeated logical task IDs. The converted parent index and each
+occurrence's binding use the [ordinary replay layout](#92-source-occurrence-and-recorded-artifacts).
+The package digest, when present, is not a benchmark revision or image.
+Use the target catalog for sandbox preparation and the
+[starting-state checks](#93-starting-state-checks-and-application-flow).
+
+**Replay operations, not sessions.** One recorded Bash command and its optional
+empty-input wait become one `Exec` at the command's Codex request time. Replay
+does not send a poll. The converter requires a uniquely paired final result.
+Interactive input, process termination, session reuse, and command construction
+from prior responses are unsupported. A successful single add-file patch
+becomes `WriteFile` with the recorded path and complete bytes. A later call in
+the same trial can read that file, but no other trial shares its sandbox.
+
+**Preserve the request schedule.** Whole-run conversion retains the UTC times
+and orders trials by first request, then trial ID. Confirmed zero-call trials
+come last, in trial-ID order. Missing traces are not zero-call evidence.
+Whole-run replay measures request offsets from the earliest selected request.
+Concurrency and readiness can delay admission without resetting offsets.
+A single selected occurrence starts at its first request (offset zero).
+The final wait for a nonempty trial is the interval from the latest recorded
+return to `agent_execution.finished_at`, not to verifier or job completion.
+For either origin, drift is the observed replay bridge admission offset minus
+the recorded offset. The source offset measures recorded tool requests for Harbor
+and bridge admissions for native ARIES. Neither measures shell runtime.
+
+#### Harbor response comparison
+
+Converted sources use the same [response option](../configuration.md#sandbox-call-replay)
+as native sources. When checks are enabled, preflight requires Harbor comparison
+evidence for each dispatched call.
+Harbor `Exec` checks the exit code independently and compares the decoded UTF-8
+payload length with stdout bytes plus stderr bytes. Status headers and JSON
+escaping are not payload. For comparable output, a length difference fails;
+different bytes of equal length are diagnostic. Unknown stream interleaving
+allows a length check but not an exact byte comparison. Known truncation or
+missing diagnostic capture is inconclusive, not a confirmed mismatch. Harbor
+`WriteFile` checks RPC success and returned byte count against the request body.
+The converter does not infer source truncation from an output limit or invent
+native response digests. See the
+[comparison map](../research/harbor-codex-replay.md) and
+[result fields](../run-results.md#sandbox-call-replay-results). Neither drift
+nor an environment warning can override a strict failure or change the
+[historical grade](#8-reused-evaluation-in-the-first-version).
+
+#### Claude Bash examples
+
+A completed `Bash` call can have a known command and exit code but no captured
+process output. Missing output is not an empty string. If all request evidence
+is present, checked replay rejects the source at preflight. Unchecked replay
+can execute it. A completed command with a nonzero exit code is not a dispatch
+or completion failure.
+
+The converter accepts either boolean `dangerouslyDisableSandbox` value and a
+positive integer `timeout` in milliseconds. It verifies agreement between
+artifacts. A structured Bash result can repeat `dangerouslyDisableSandbox`.
+The value must be boolean and must agree with a recorded request value.
+The converter omits both settings from replay evidence and execution.
+Neither requires a profile field or depends on the response policy.
+ARIES runs inside its task
+sandbox and keeps its own deadlines. It does not reproduce Claude Code's
+inner sandbox or change mounts, permissions, or network access.
+
+A configured limit is not evidence of a timeout. Nonzero exit, elapsed time,
+and a background start do not establish that the command timed out. A background
+start is not completion. Both modes still require a correlated, completed
+operation. Special handling for a confirmed source timeout requires a concrete
+recorded example.
+
+In the inspected `adaptive-rejection-sampler__49vm4vT` trial, the `600000` ms
+call has a linked `local_bash` completion notification and a result with
+`is_error: false` and `interrupted: false` (`agent/claude-code.txt`, lines 11–14).
+The status records establish completion. The request and return were 21.678
+seconds apart, but elapsed time alone does not establish completion. The call
+has no recorded numeric exit code. The `300000` ms call also returned without
+interruption (lines 23–24). Neither is an example of a timeout firing.
 
 ## 10. Open questions and deferred features
 

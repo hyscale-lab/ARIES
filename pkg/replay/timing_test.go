@@ -18,6 +18,51 @@ import (
 
 const timingFixtureStart = "2026-11-05T12:00:00Z"
 
+func TestSourceRejectionsRequireNoBridgeEvidence(t *testing.T) {
+	const rejectedSequence = 1
+	const execSequence = rejectedSequence + 1
+	const gap = time.Second
+	const digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	at, err := time.Parse(time.RFC3339Nano, timingFixtureStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := Call{Sequence: rejectedSequence, Operation: "Edit", SourceRejection: &SourceRejection{Reason: RejectionFileNotRead, Duration: gap}}
+	exec := Call{Sequence: execSequence, Operation: "Exec", StartOffset: gap, HarborOutput: new(string)}
+	exit := exec.StrictExitCode()
+	actual := map[string]any{"replay_source_sequence": execSequence, "started_at": at.Add(gap).Format(time.RFC3339Nano),
+		"operation_class": "exec", "status": "completed", "grpc_code": "OK", "exit_code": exit, "response_sha256": digest}
+	unexpected := map[string]any{"replay_source_sequence": rejectedSequence, "started_at": timingFixtureStart}
+	for _, tc := range []struct {
+		name, want string
+		calls      []Call
+		records    []map[string]any
+	}{
+		{"only rejection", "available", []Call{rejected}, nil},
+		{"mixed", "available", []Call{rejected, exec}, []map[string]any{actual}},
+		{"missing actual", "unavailable", []Call{rejected, exec}, nil},
+		{"unexpected rejection admission", "unavailable", []Call{rejected, exec}, []map[string]any{unexpected}},
+		{"extra rejection admission", "unavailable", []Call{rejected, exec}, []map[string]any{actual, unexpected}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTimingAudit(t, tc.records...)
+			plan := Plan{OriginType: OriginHarbor, Calls: tc.calls}
+			timing, responses := ReadTiming(path, plan), ReadResponses(path, plan, logrus.New())
+			if timing.Status != tc.want || responses.Status != tc.want {
+				t.Fatalf("timing = %+v; responses = %+v; want %s", timing, responses, tc.want)
+			}
+			if tc.name == "mixed" {
+				if len(timing.Calls) != 1 || timing.Calls[0].SourceSequence != execSequence || timing.Calls[0].DriftNS != 0 ||
+					len(responses.Calls) != 1 || responses.Calls[0].SourceSequence != execSequence {
+					t.Fatalf("wrong dispatch evidence: timing = %+v; responses = %+v", timing, responses)
+				}
+			} else if len(timing.Calls) != 0 || len(responses.Calls) != 0 {
+				t.Fatalf("unexpected reports: timing = %+v; responses = %+v", timing, responses)
+			}
+		})
+	}
+}
+
 func writeTimingAudit(t *testing.T, records ...map[string]any) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tool-calls.jsonl")

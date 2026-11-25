@@ -162,6 +162,92 @@ a historical grade; it does not run a fresh verifier or judge. Check
 [replay results](run-results.md#sandbox-call-replay-results) and
 [replay limits](replay-limitations.md) before comparing grades.
 
+## Replay a Harbor Codex recording
+
+Run from the ARIES repository root on Linux with Python 3.10 or later,
+`renameat2` support, and a local Docker daemon. Use only trusted recordings:
+replay executes their recorded commands in fresh task sandboxes.
+
+Set `HARBOR_RUN` to a complete Harbor job for Terminal-Bench 2.1 with
+supported evidence. Set `TRIAL_ID` to one of its trial directory names.
+For the example profile below, use a job for the `fix-git` logical task.
+
+```sh
+HARBOR_RUN=/path/to/harbor/job
+TRIAL_ID=fix-git__replace_with_trial_id
+mkdir -p runs/harbor-import
+
+# Convert a complete job. This source can replay the job or one trial.
+python3 scripts/convert_harbor.py --harbor-run "$HARBOR_RUN" \
+  --output-dir runs/harbor-import/job
+
+# Alternative: convert one trial directly. Do not pass both input flags.
+python3 scripts/convert_harbor.py --harbor-trial "$HARBOR_RUN/$TRIAL_ID" \
+  --output-dir runs/harbor-import/trial
+```
+
+Each destination must be new and its parent must exist. The converter rejects
+unsupported or incomplete evidence without publishing a partial source.
+The agent name must match across the trial configuration and result.
+It does not select the artifact format.
+For supported calls and required files, see the
+[Harbor source limits](replay-limitations.md#harbor-conversion-limits).
+For a converted Claude Code trace without full response evidence, set
+`"must_check_response": false` inside `replay` in the profile below.
+Replay still requires a complete trace and reports execution errors.
+See the [profile fragments](configuration.md#sandbox-call-replay) and the
+[Claude Bash examples](design/replayer.md#claude-bash-examples).
+Build the bridge image from the same ARIES version as the CLI before replay.
+
+Save this complete Docker profile as `runs/harbor-import/whole.json`.
+Use the target benchmark catalog and list every selected logical task in
+`benchmark.tasks`. Put logical task IDs there, not Harbor trial IDs.
+The target sandbox workdir must match the recorded `Exec` workdir.
+
+```json
+{
+  "name": "harbor-replay",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "",
+  "execution": { "concurrency": 2 },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": ["fix-git"]
+  },
+  "sandbox": { "deployment": { "backend": "docker" } },
+  "bridge": {
+    "type": "hermes-grpc",
+    "mode": "managed",
+    "deployment": { "backend": "docker" }
+  },
+  "replay": { "source": "job", "deployment": { "backend": "docker" } },
+  "output_dir": "runs/harbor-replayed"
+}
+```
+
+```sh
+make bridge-image
+./bin/aries runs/harbor-import/whole.json
+```
+
+For one occurrence, copy the profile to `runs/harbor-import/one.json` and set
+`replay.source` to `job/<trial-id>` using the actual trial directory name.
+You can also set it to `trial` to replay the single-trial conversion above.
+Keep the parent `run-result.json` in place in both cases. Run the same command
+with the new profile:
+
+```sh
+./bin/aries runs/harbor-import/one.json
+```
+
+`replay.source` is relative to the profile; `output_dir` is relative to the
+working directory. The converted source stays unchanged. Read
+`runs/harbor-replayed/<run-id>/run-result.json` and `aries.log`, even if ARIES
+exits with an error. Check replay status, responses, timing, grade provenance,
+caller stop, bridge revocation, and cleanup separately. No Codex harness,
+model, verifier, or judge runs. See [replay results](run-results.md#sandbox-call-replay-results).
+
 ## Inspect the result
 
 Results are saved under `runs/`, in a directory named with the run timestamp and

@@ -29,6 +29,9 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
   or [replay](../docs/configuration.md#sandbox-call-replay).
 - Require historical response checks unless the replay profile disables them.
   Always validate source integrity and request evidence.
+- [Convert Harbor evidence](../docs/quick-start.md#replay-a-harbor-codex-recording)
+  before replay. The app and scheduler consume only the converted source.
+  Keep import inputs separate from replay outputs.
 
 `profiles/experiments/` holds the paper-reproduction profiles; their settings are
 documented in [configuration](../docs/configuration.md#paper-reproduction-profiles).

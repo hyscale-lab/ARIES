@@ -546,9 +546,15 @@ func TestReplayChildExecutionBudgetBoundaries(t *testing.T) {
 		{name: "call overhead overflow", timeout: maxDuration},
 		{name: "final wait overhead overflow", timeout: time.Second, plan: replay.Plan{FinalWait: maxDuration - time.Second}},
 		{name: "offset overhead overflow", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: maxDuration - time.Second}}}},
+		{name: "rejection return overhead overflow", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{
+			StartOffset: maxDuration - time.Second - startTimeout, SourceRejection: &replay.SourceRejection{Duration: time.Second},
+		}}}},
 		{name: "largest call budget", timeout: maxDuration - startTimeout, valid: true},
 		{name: "largest final wait", timeout: time.Second, plan: replay.Plan{FinalWait: maxDuration - time.Second - startTimeout}, valid: true},
 		{name: "largest offset", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: maxDuration - time.Second - startTimeout}}}, valid: true},
+		{name: "largest rejection return", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{
+			StartOffset: maxDuration - time.Second - time.Second - startTimeout, SourceRejection: &replay.SourceRejection{Duration: time.Second},
+		}}}, valid: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wait, err := executionTimeout(test.plan, test.timeout)

@@ -21,10 +21,11 @@ func ReadTiming(path string, plan Plan) core.ReplayTiming {
 	if path == "" {
 		return unavailable("replay bridge audit is missing")
 	}
+	count := plan.DispatchCount()
 	var starts map[uint64]time.Time
 	var first time.Time
 	err := readPrivateAudit(path, false, func(decoder *json.Decoder) error {
-		starts = make(map[uint64]time.Time, len(plan.Calls))
+		starts = make(map[uint64]time.Time, count)
 		for {
 			var record struct {
 				SourceSequence *uint64 `json:"replay_source_sequence"`
@@ -50,7 +51,7 @@ func ReadTiming(path string, plan Plan) core.ReplayTiming {
 			if first.IsZero() || started.Before(first) {
 				first = started
 			}
-			if len(starts) > len(plan.Calls) {
+			if len(starts) > count {
 				return errors.New("replay bridge audit has extra calls")
 			}
 		}
@@ -58,14 +59,18 @@ func ReadTiming(path string, plan Plan) core.ReplayTiming {
 	if err != nil {
 		return unavailable(err.Error())
 	}
-	if len(starts) != len(plan.Calls) {
+	if len(starts) != count {
 		return unavailable("replay bridge audit has missing calls")
 	}
 	if plan.ReplayAt != nil {
 		first = plan.ReplayAt.Round(0)
 	}
 	timing := core.ReplayTiming{Status: "available", Basis: basis}
+	var firstDispatchOffset time.Duration
 	for _, call := range plan.Calls {
+		if call.SourceRejection != nil {
+			continue
+		}
 		started, exists := starts[call.Sequence]
 		if !exists || call.Sequence == 0 || call.StartOffset < 0 {
 			return unavailable("replay bridge audit has an unknown source sequence")
@@ -74,8 +79,13 @@ func ReadTiming(path string, plan Plan) core.ReplayTiming {
 		if !first.Add(offset).Equal(started) {
 			return unavailable("replay bridge audit start offset is not representable")
 		}
-		drift := offset - call.StartOffset
-		if drift > offset {
+		// Local drift compares the first bridge start in each trace.
+		if plan.ReplayAt == nil && len(timing.Calls) == 0 && plan.Calls[0].SourceRejection != nil {
+			firstDispatchOffset = call.StartOffset
+		}
+		sourceOffset := call.StartOffset - firstDispatchOffset
+		drift := offset - sourceOffset
+		if sourceOffset < 0 || drift > offset {
 			return unavailable("replay bridge audit start drift is not representable")
 		}
 		timing.Calls = append(timing.Calls, core.ReplayCallTiming{SourceSequence: call.Sequence, DriftNS: drift.Nanoseconds()})

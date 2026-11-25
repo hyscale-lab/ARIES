@@ -97,10 +97,11 @@ func executionTimeout(plan replay.Plan, callTimeout time.Duration) (time.Duratio
 	budget := callTimeout + plan.FinalWait + startTimeout
 	last := time.Duration(0)
 	for _, call := range plan.Calls {
-		if call.StartOffset < 0 || call.StartOffset > maxDuration-budget {
+		end, valid := call.ScheduleEnd()
+		if !valid || end > maxDuration-budget {
 			return 0, errors.New("invalid replay schedule")
 		}
-		last = max(last, call.StartOffset)
+		last = max(last, end)
 	}
 	if plan.ReplayAt != nil && len(plan.Calls) != 0 {
 		now := time.Now().Round(0)

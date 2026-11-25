@@ -13,12 +13,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"testing/synctest"
 	"time"
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -87,6 +89,228 @@ func expectedReplayCall(operation string, messages ...proto.Message) replay.Call
 	return call
 }
 
+func TestReplayCallsRejectsUnsupportedOriginBeforeRPC(t *testing.T) {
+	response := &sandboxv1.ExecResponse{}
+	call := expectedReplayCall("Exec", response)
+	var called atomic.Bool
+	client := replayEndpoint(t, &replayServer{exec: func(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+		called.Store(true)
+		return response, nil
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+	defer cancel()
+	for _, origin := range []string{replay.OriginHarbor, "unknown"} {
+		plan := replay.Plan{OriginType: origin, Calls: []replay.Call{call}}
+		if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err == nil {
+			t.Errorf("unsupported origin %q was accepted", origin)
+		}
+	}
+	if called.Load() {
+		t.Error("unsupported origin sent an RPC")
+	}
+}
+
+func TestReplayHarborExec(t *testing.T) {
+	const privateText = "é\n"
+	const changedExit = 7
+	const privateRPC = "private transport text"
+	for _, tc := range []struct {
+		name, source, stdout, stderr, want string
+		sourceCut, targetCut, rpcError     bool
+		exit                               int32
+	}{
+		{name: "UTF-8 and newline", source: privateText, stdout: privateText},
+		{name: "empty", source: ""},
+		{name: "newline missing", source: privateText, stdout: "é", want: "output length mismatch"},
+		{name: "content drift", source: privateText, stdout: "aé"},
+		{name: "unknown interleaving", source: privateText, stdout: "\n", stderr: "é"},
+		{name: "unknown interleaving length mismatch", source: privateText, stdout: "\n", stderr: "a", want: "output length mismatch"},
+		{name: "source truncated", source: "é", stdout: privateText, sourceCut: true},
+		{name: "target truncated", source: privateText, stdout: "é", targetCut: true},
+		{name: "both truncated exit mismatch", source: privateText, stdout: "é", sourceCut: true, targetCut: true, exit: changedExit, want: "exit code mismatch"},
+		{name: "exit mismatch", source: privateText, stdout: privateText, exit: changedExit, want: "exit code mismatch"},
+		{name: "transport error", source: privateText, rpcError: true, want: "RPC failed (Unavailable)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+			defer cancel()
+			call := replay.Call{Operation: "Exec", HarborOutput: &tc.source, HarborTruncated: tc.sourceCut, ExitCode: new(int32)}
+			server := &replayServer{exec: func(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+				if tc.rpcError {
+					return nil, status.Error(codes.Unavailable, privateRPC)
+				}
+				return &sandboxv1.ExecResponse{Stdout: []byte(tc.stdout), Stderr: []byte(tc.stderr), Truncated: tc.targetCut, ExitCode: tc.exit, Reason: sandboxv1.Reason_REASON_COMPLETED}, nil
+			}}
+			err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{call}})
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), privateRPC)) {
+				t.Fatalf("caller error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func harborTestWrite(t *testing.T, path, body string, count int64, rpcError bool, privateRPC string) func(grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]) error {
+	t.Helper()
+	return func(stream grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]) error {
+		first, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if header := first.GetHeader(); header.GetPath() != path || header.GetSize() != int64(len(body)) {
+			t.Error("WriteFile header differs from converted source")
+		}
+		var got []byte
+		for {
+			req, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			got = append(got, req.GetChunk()...)
+		}
+		if string(got) != body {
+			t.Error("WriteFile body differs from converted source")
+		}
+		if rpcError {
+			return status.Error(codes.PermissionDenied, privateRPC)
+		}
+		return stream.SendAndClose(&sandboxv1.WriteFileResponse{BytesWritten: count})
+	}
+}
+
+func TestReplayHarborFinalizedOutput(t *testing.T) {
+	const sequence = 1
+	const output = "private-é\n"
+	const changed = "private-ø\n"
+	const changedExit = 7
+	for _, tc := range []struct {
+		name, source, stdout, stderr, want string
+		truncated                          bool
+		exit                               int
+	}{
+		{name: "exact", source: output, stdout: output, want: "matched"},
+		{name: "empty", want: "matched"},
+		{name: "drift", source: output, stderr: changed, want: "drifted"},
+		{name: "two streams", source: output, stdout: "private-", stderr: "é\n", want: "length_matched"},
+		{name: "length mismatch", source: output, stdout: changed + "\n", want: "length_mismatch"},
+		{name: "truncated", source: output, stdout: "private-", truncated: true, want: "inconclusive"},
+		{name: "truncated with changed exit", source: output, stdout: "private-", truncated: true, exit: changedExit, want: "exit_mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := newFakeExecutor(nil)
+			target.stdout, target.stderr = []byte(tc.stdout), []byte(tc.stderr)
+			target.exitCode = tc.exit
+			manager, client, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+			ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+			defer cancel()
+			plan := replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{{
+				Operation: "Exec", Sequence: sequence, Script: "true", HarborOutput: &tc.source, HarborTruncated: tc.truncated, ExitCode: new(int32),
+			}}}
+			err := ReplayCalls(ctx, replayTestDeadline, client, plan)
+			if (err != nil) != (tc.want == "length_mismatch" || tc.want == "exit_mismatch") {
+				t.Fatalf("unexpected caller outcome: %v", err)
+			}
+			stop(t, manager)
+			var logs bytes.Buffer
+			logger := logrus.New()
+			logger.SetOutput(&logs)
+			results := replay.ReadResponses(endpoint.LogPaths[0], plan, logger)
+			data, err := json.Marshal(results)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if results.Status != "available" || len(results.Calls) != len(plan.Calls) || results.Calls[0].Status != tc.want {
+				t.Fatalf("results = %s, want available %q", data, tc.want)
+			}
+			if bytes.Contains(data, []byte("private-")) || bytes.Contains(data, []byte("sha256")) || bytes.Contains(logs.Bytes(), []byte("private-")) {
+				t.Fatal("Harbor diagnostics contain private evidence")
+			}
+		})
+	}
+}
+
+func TestReplayHarborFinalizedWriteWithoutRetainedBody(t *testing.T) {
+	const writeSequence = 1
+	const execSequence = writeSequence + 1
+	const path = "/app/example.txt"
+	const body = "private\fbody"
+	const output = "kept\n"
+	target := newFakeExecutor(make(fstest.MapFS))
+	target.stdout = []byte(output)
+	manager, client, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+	ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+	defer cancel()
+	sourceOutput := output
+	plan := replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{
+		{Operation: "WriteFile", Sequence: writeSequence, Path: path, Body: []byte(body)},
+		{Operation: "Exec", Sequence: execSequence, Script: "true", HarborOutput: &sourceOutput, ExitCode: new(int32)},
+	}}
+	if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	for _, record := range readToolCalls(t, endpoint.LogPaths[0]) {
+		if record["operation_class"] == kindFileWrite && record["replay_error"] != "write-content-omitted" {
+			t.Fatal("test did not produce an omitted write body")
+		}
+	}
+	responses := replay.ReadResponses(endpoint.LogPaths[0], plan, logrus.New())
+	if responses.Status != "available" || len(responses.Calls) != len(plan.Calls) {
+		t.Fatalf("finalized responses are incomplete: %+v", responses)
+	}
+	for index, call := range responses.Calls {
+		if call.SourceSequence != plan.Calls[index].Sequence || call.Status != "matched" {
+			t.Fatalf("unexpected finalized response: %+v", call)
+		}
+	}
+}
+
+func TestReplayHarborSourceRejectionOverlapsDispatchedCalls(t *testing.T) {
+	const firstSequence = 1
+	const rejectionSequence = firstSequence + 1
+	const lastSequence = rejectionSequence + 1
+	const dispatched = lastSequence - 1
+	const interval = 40 * time.Millisecond
+	const action = "/app/example.txt"
+	const original = "original content"
+	for _, skip := range []bool{false, true} {
+		target := newFakeExecutor(fstest.MapFS{"app/example.txt": {Data: []byte(original)}})
+		manager, client, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+		plan := replay.Plan{OriginType: replay.OriginHarbor, SkipResponseCheck: skip, Calls: []replay.Call{
+			{Sequence: firstSequence, Operation: "Exec", Script: "true", HarborOutput: new(string)},
+			{Sequence: rejectionSequence, Operation: "Edit", ToolCallID: "toolu_fixture", StartOffset: interval,
+				SourceRejection: &replay.SourceRejection{Reason: replay.RejectionFileNotRead, Duration: interval + interval}},
+			{Sequence: lastSequence, Operation: "Exec", Script: "true", HarborOutput: new(string), StartOffset: interval + interval},
+		}, FinalWait: interval}
+		ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+		start := time.Now()
+		err := ReplayCalls(ctx, replayTestDeadline, client, plan)
+		cancel()
+		if err != nil || time.Since(start) < interval*time.Duration(lastSequence)+plan.FinalWait {
+			t.Fatalf("missing the rejection's source return or final wait: %v", err)
+		}
+		stop(t, manager)
+		timing := replay.ReadTiming(endpoint.LogPaths[0], plan)
+		if timing.Status != "available" || len(timing.Calls) != dispatched ||
+			timing.Calls[0].SourceSequence != firstSequence || timing.Calls[1].SourceSequence != lastSequence {
+			t.Fatalf("unexpected bridge starts: %+v", timing)
+		}
+		if !skip {
+			responses := replay.ReadResponses(endpoint.LogPaths[0], plan, logrus.New())
+			if responses.Status != "available" || len(responses.Calls) != dispatched ||
+				responses.Calls[0].SourceSequence != firstSequence || responses.Calls[1].SourceSequence != lastSequence {
+				t.Fatalf("unexpected bridge responses: %+v", responses)
+			}
+		}
+		file := target.files[fsName(action)]
+		if file == nil || string(file.Data) != original || target.fileOps != 0 || len(target.commands) != dispatched {
+			t.Fatal("replay changed the file or made an unexpected sandbox call")
+		}
+	}
+}
+
 func TestReplayUncheckedKeepsRPCAndWriteFailures(t *testing.T) {
 	const path = "/app/example.txt"
 	const body = "synthetic"
@@ -141,40 +365,87 @@ func TestReplayLegacySerializedZeroExit(t *testing.T) {
 	const script = "true"
 	const first = 0
 	const callCount = 1
-	reply := &sandboxv1.ExecResponse{Reason: sandboxv1.Reason_REASON_COMPLETED}
-	call := expectedReplayCall("Exec", reply)
-	call.Script = script
-	encoded, err := replay.EncodePlan(replay.Plan{Calls: []replay.Call{call}}, replay.MaxPlanBytes)
-	if err != nil {
+	for _, tc := range []struct{ name, origin string }{
+		{name: "native"},
+		{name: "Harbor", origin: replay.OriginHarbor},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := &sandboxv1.ExecResponse{Reason: sandboxv1.Reason_REASON_COMPLETED}
+			call := expectedReplayCall("Exec", reply)
+			if tc.origin == replay.OriginHarbor {
+				call = replay.Call{Operation: "Exec", HarborOutput: new(string), ExitCode: new(int32)}
+			}
+			call.Script = script
+			encoded, err := replay.EncodePlan(replay.Plan{OriginType: tc.origin, Calls: []replay.Call{call}}, replay.MaxPlanBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			zeroExit := []byte(`,"exit_code":0`)
+			if !bytes.Contains(encoded, zeroExit) {
+				t.Fatalf("staged plan omitted the explicit zero exit: %s", encoded)
+			}
+			// The old encoder omitted zero exits from staged plans.
+			legacy := bytes.ReplaceAll(encoded, zeroExit, nil)
+			var plan replay.Plan
+			if err := json.Unmarshal(legacy, &plan); err != nil || len(plan.Calls) != callCount || plan.Calls[first].ExitCode != nil {
+				t.Fatalf("legacy plan did not omit the exit: %v", err)
+			}
+			dispatched := make(chan string, callCount)
+			server := &replayServer{exec: func(_ context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+				dispatched <- request.GetScript()
+				return reply, nil
+			}}
+			ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
+			defer cancel()
+			if err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), plan); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-dispatched:
+				if got != script {
+					t.Fatalf("dispatched %q, want %q", got, script)
+				}
+			default:
+				t.Fatal("replay did not dispatch the staged call")
+			}
+		})
+	}
+}
+
+func TestReplayHarborFinalizedOmittedWriteWithFailedReply(t *testing.T) {
+	const sequence = 1
+	const path = "/app/example.txt"
+	const body = "private\fbody"
+	target := newFakeExecutor(make(fstest.MapFS))
+	manager, _, endpoint := startBridge(t, target, Options{CaptureReplay: true, OmitRawLog: true})
+	stream := &failedWriteReply{
+		ctx: metadata.NewIncomingContext(t.Context(), metadata.Pairs(replaySourceSequenceKey, strconv.Itoa(sequence))),
+		requests: []*sandboxv1.WriteFileRequest{
+			{Part: &sandboxv1.WriteFileRequest_Header{Header: &sandboxv1.WriteFileHeader{Path: path, Size: int64(len(body))}}},
+			{Part: &sandboxv1.WriteFileRequest_Chunk{Chunk: []byte(body)}},
+		},
+	}
+	svc := &service{session: manager.active}
+	if err := svc.WriteFile(stream); err != nil {
 		t.Fatal(err)
 	}
-	zeroExit := []byte(`,"exit_code":0`)
-	if !bytes.Contains(encoded, zeroExit) {
-		t.Fatalf("staged plan omitted the explicit zero exit: %s", encoded)
+	if stream.reply.GetBytesWritten() != int64(len(body)) {
+		t.Fatal("bridge did not attempt a full write reply")
 	}
-	// The old encoder omitted zero exits from staged plans.
-	legacy := bytes.ReplaceAll(encoded, zeroExit, nil)
-	var plan replay.Plan
-	if err := json.Unmarshal(legacy, &plan); err != nil || len(plan.Calls) != callCount || plan.Calls[first].ExitCode != nil {
-		t.Fatalf("legacy plan did not omit the exit: %v", err)
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != sequence || records[0]["status"] != "completed" || records[0]["stdin_encoding"] != "binary-omitted" {
+		t.Fatal("test did not produce a completed write with omitted body")
 	}
-	dispatched := make(chan string, callCount)
-	server := &replayServer{exec: func(_ context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
-		dispatched <- request.GetScript()
-		return reply, nil
+	plan := replay.Plan{OriginType: replay.OriginHarbor, Calls: []replay.Call{
+		{Operation: "WriteFile", Sequence: sequence, Path: path, Body: []byte(body)},
 	}}
-	ctx, cancel := context.WithTimeout(t.Context(), replayTestDeadline)
-	defer cancel()
-	if err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), plan); err != nil {
-		t.Fatal(err)
+	responses := replay.ReadResponses(endpoint.LogPaths[0], plan, logrus.New())
+	if responses.Status != "available" || len(responses.Calls) != len(plan.Calls) || responses.Calls[0].Status != "operation_failed" {
+		t.Fatalf("expected finalized response-send failure: %+v", responses)
 	}
-	select {
-	case got := <-dispatched:
-		if got != script {
-			t.Fatalf("dispatched %q, want %q", got, script)
-		}
-	default:
-		t.Fatal("replay did not dispatch the staged call")
+	if records[0]["replay_error"] != "response-send-failed" {
+		t.Fatal("bridge did not retain the response-send marker")
 	}
 }
 
@@ -667,6 +938,33 @@ type scheduledReplayClient struct {
 
 func (client scheduledReplayClient) Exec(ctx context.Context, _ *sandboxv1.ExecRequest, _ ...grpc.CallOption) (*sandboxv1.ExecResponse, error) {
 	return client.exec(ctx)
+}
+
+func TestReplayCallsDoNotBlockDispatchDuringSourceRejection(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const step = time.Second
+		const budget = 6 * step
+		started := time.Now()
+		origin := started.Add(step)
+		ctx, cancel := context.WithTimeout(t.Context(), budget)
+		defer cancel()
+		client := scheduledReplayClient{exec: func(context.Context) (*sandboxv1.ExecResponse, error) {
+			if elapsed := time.Since(origin); elapsed != step {
+				t.Errorf("RPC launched at %s, want %s", elapsed, step)
+			}
+			return &sandboxv1.ExecResponse{Reason: sandboxv1.Reason_REASON_COMPLETED}, nil
+		}}
+		plan := replay.Plan{OriginType: replay.OriginHarbor, ReplayAt: &origin, FinalWait: step, Calls: []replay.Call{
+			{Operation: "Edit", SourceRejection: &replay.SourceRejection{Reason: replay.RejectionFileNotRead, Duration: step + step}},
+			{Operation: "Exec", StartOffset: step, HarborOutput: new(string)},
+		}}
+		if err := ReplayCalls(ctx, step, client, plan); err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(origin); elapsed != plan.Calls[0].SourceRejection.Duration+plan.FinalWait {
+			t.Fatalf("caller returned at %s, want source return plus final wait", elapsed)
+		}
+	})
 }
 
 func TestReplayCallsShareOriginAcrossDelayedCallers(t *testing.T) {

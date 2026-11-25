@@ -1,0 +1,1 @@
+{"schema_version":1,"run_id":"source-run","replay_ready":true,"SandboxID":"source-sandbox","benchmark_type":"terminalbench2","task_id":"task","occurrence_id":"task-001","origin_type":"harbor","harness_completed_at":"2026-11-05T12:00:00Z","tool_calls_bytes":928,"tool_calls_sha256":"187212df55c92bee55b0ea3886f4e065a6c696ef6b96cdd379682189e58b45e4"}
