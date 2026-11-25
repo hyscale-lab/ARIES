@@ -40,6 +40,9 @@ func TestProcessResumesAndReturnsEachStreamOnce(t *testing.T) {
 	if first.ExitCode != ProcessRunning || first.Stdout != "first" {
 		t.Fatal(first)
 	}
+	if states := sessions.EndingProcessStates([]int{7, 8}); states[7] != "running" || states[8] != "missing" {
+		t.Fatalf("unexpected end-of-session observation: %v", states)
+	}
 	close(continueWork)
 	poll := replay.Call{Operation: "PollProcess", SessionID: 7, YieldTime: time.Second}
 	last, err := sessions.Execute(t.Context(), poll)
@@ -61,6 +64,9 @@ func TestDiagnosticPollRetainsEarlyCompletionAndConsumesOutputOnce(t *testing.T)
 	early, err := sessions.ObserveDrift(t.Context(), call)
 	if err != nil || early.ExitCode != 0 || early.Stdout != "finished" || !sessions.WasRetained(12) {
 		t.Fatal(early, err)
+	}
+	if state := sessions.EndingProcessStates([]int{12})[12]; state != "terminal_retained" {
+		t.Fatalf("early terminal process was not retained: %s", state)
 	}
 	call.Operation = "PollProcess"
 	again, err := sessions.ObserveDrift(t.Context(), call)

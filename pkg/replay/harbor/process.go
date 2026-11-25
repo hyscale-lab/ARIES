@@ -76,6 +76,30 @@ const codexEarlyExitGrace = 150 * time.Millisecond
 
 func (s *ProcessSessions) Close() { s.cancel(); s.wg.Wait() }
 
+// EndingProcessStates observes source handles without polling or consuming their output.
+func (s *ProcessSessions) EndingProcessStates(ids []int) map[int]string {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	states := make(map[int]string, len(ids))
+	for _, id := range ids {
+		p := s.active[id]
+		if p == nil {
+			states[id] = "missing"
+			continue
+		}
+		select {
+		case <-p.done:
+			states[id] = "terminal_retained"
+			if p.err != nil {
+				states[id] = "transport_error"
+			}
+		default:
+			states[id] = "running"
+		}
+	}
+	return states
+}
+
 func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.CommandResult, error) {
 	return s.execute(ctx, call, false, false, false)
 }

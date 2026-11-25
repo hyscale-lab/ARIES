@@ -1,0 +1,61 @@
+package harbor
+
+import (
+	"bytes"
+	"encoding/csv"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+)
+
+// Use a Go overlay to run this offline against the ordinary package parser.
+// The source ledger supplies identities. This probe never invokes Run.
+func TestTB41SourceProbe(t *testing.T) {
+	ledger, err := os.ReadFile(os.Getenv("ZB_TB41_LEDGER"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(ledger)).ReadAll()
+	if err != nil || len(rows) != 101 {
+		t.Fatalf("expected 100 selected originals, got %d CSV rows: %v", len(rows), err)
+	}
+	task := slices.Index(rows[0], "task")
+	original := slices.Index(rows[0], "original_id")
+	regrade := slices.Index(rows[0], "regrade_id")
+	if task < 0 || original < 0 || regrade < 0 {
+		t.Fatal("missing selection ledger columns")
+	}
+	for _, row := range rows[1:] {
+		name := row[task] + "_" + row[regrade]
+		dir := filepath.Join(os.Getenv("ZB_TB41_ARCHIVE"), name)
+		atif, err := os.ReadFile(filepath.Join(dir, "trajectory"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rollout, err := os.ReadFile(filepath.Join(dir, "rollout"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workdir string
+		for line := range bytes.SplitSeq(rollout, []byte{'\n'}) {
+			var event struct {
+				Type    string
+				Payload struct{ Cwd string }
+			}
+			if json.Unmarshal(line, &event) == nil && event.Type == "turn_context" {
+				workdir = event.Payload.Cwd
+				break
+			}
+		}
+		w := workload{Task: row[task], Job: TerminalBench4SourceJob, Workdir: workdir,
+			Tools: []string{"exec_command", "update_plan", "write_stdin", "view_image", "web_search_call"}}
+		recording, err := parse(w, row[original], atif, rollout)
+		if err != nil {
+			t.Logf("%s: %v", name, err)
+		} else {
+			t.Logf("%s: parsed %d guest calls", name, len(recording.Plan.Calls))
+		}
+	}
+}

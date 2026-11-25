@@ -611,6 +611,17 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if err := harbor.Run(ctx, r, h); err != nil {
 		return err
 	}
+	if len(r.EndingProcessSessions) > 0 {
+		at, err := harbor.Clock()
+		if err != nil {
+			return err
+		}
+		if err := log.Encode(map[string]any{"event": "session_end_processes", "monotonic_ns": at,
+			"source_process_states": sessions.EndingProcessStates(r.EndingProcessSessions),
+			"teardown_action":       "cancel_streams_then_remove_sandbox"}); err != nil {
+			return err
+		}
+	}
 	if bnFit {
 		return captureBnFitArtifacts(ctx, m, id, r, log)
 	}

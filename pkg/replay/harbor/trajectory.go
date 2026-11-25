@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"reflect"
 	"regexp"
@@ -86,24 +87,25 @@ type workload struct {
 }
 
 type Recording struct {
-	NeedsNetwork    bool        `json:"needs_network"`
-	VCPUs           int         `json:"vcpus"`
-	MemoryMiB       int         `json:"memory_mib"`
-	StorageMiB      int         `json:"storage_mib"`
-	Task            string      `json:"task"`
-	Workdir         string      `json:"workdir"`
-	Image           string      `json:"image"`
-	ReviewedEffects []string    `json:"reviewed_effects"`
-	Trial           string      `json:"trial_id"`
-	Job             string      `json:"job_id"`
-	Row             string      `json:"row_id"`
-	Session         string      `json:"session_id"`
-	Model           string      `json:"model"`
-	TrajectoryHash  string      `json:"trajectory_sha256"`
-	RolloutHash     string      `json:"rollout_sha256"`
-	Steps           []Step      `json:"steps"`
-	Events          []Event     `json:"events"`
-	Plan            replay.Plan `json:"-"`
+	EndingProcessSessions []int       `json:"ending_process_sessions,omitempty"`
+	NeedsNetwork          bool        `json:"needs_network"`
+	VCPUs                 int         `json:"vcpus"`
+	MemoryMiB             int         `json:"memory_mib"`
+	StorageMiB            int         `json:"storage_mib"`
+	Task                  string      `json:"task"`
+	Workdir               string      `json:"workdir"`
+	Image                 string      `json:"image"`
+	ReviewedEffects       []string    `json:"reviewed_effects"`
+	Trial                 string      `json:"trial_id"`
+	Job                   string      `json:"job_id"`
+	Row                   string      `json:"row_id"`
+	Session               string      `json:"session_id"`
+	Model                 string      `json:"model"`
+	TrajectoryHash        string      `json:"trajectory_sha256"`
+	RolloutHash           string      `json:"rollout_sha256"`
+	Steps                 []Step      `json:"steps"`
+	Events                []Event     `json:"events"`
+	Plan                  replay.Plan `json:"-"`
 }
 
 func digest(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }
@@ -333,9 +335,10 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 			}
 		}
 	}
-	if len(pending) != 0 {
+	if len(pending) != 0 && r.Job != TerminalBench4SourceJob {
 		return nil, errors.New("source includes unconsumed session handles")
 	}
+	r.EndingProcessSessions = slices.Sorted(maps.Keys(pending))
 	return r, nil
 }
 

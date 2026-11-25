@@ -30,6 +30,11 @@
         "trial": "f244ab87-aa99-4a6d-b5bd-c21c1841a6d8",
         "trajectory_sha256": "a6419e6d059aaaf2ab8508e5f2aa6a9c07937fd08db13c08a5566d549d7e25f1",
         "rollout_sha256": "ca71d09ab00b5e71e2264ff24b32a19b44e7d711926c57ff9d4c21e610199c0d"
+      },
+      {
+        "trial": "c712dd53-aa72-4d5e-803d-cc875f113016",
+        "trajectory_sha256": "16e12a07b297728100d52d2f3054fa26503c79eeb1e43d94e17fb32a8fd3591c",
+        "rollout_sha256": "c8048ac05801d7f7106198836db61a06ca9290b1719fdc16c4fcb798ec6665f1"
       }
     ]
   },
