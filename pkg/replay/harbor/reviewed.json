@@ -1,5 +1,50 @@
 [
   {
+    "task": "biped-contact-dynamics",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-biped-contact-dynamics@sha256:0732743873d164a9d893b77f3502a02d5e03a400ca31c411526c7d0c5bdafdae",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 4,
+    "memory_mib": 8192,
+    "storage_mib": 20480,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Inspect and edit local synthetic joint-mechanics simulation files, run offline PyDrake and SciPy numerical checks, and poll local compute processes."
+    ],
+    "trials": [
+      {
+        "trial": "93de9f31-5128-4723-9c39-e9dbeae1433c",
+        "trajectory_sha256": "04c2a21686969285b4da983ac0bbd13a6b8be672ad506cb76d921a5adb503b70",
+        "rollout_sha256": "15da1fd0d02cbbbe84be9272692c89ab2daf3a1fd90938c8517d4c760920a1db"
+      },
+      {
+        "trial": "c326fcca-cf4a-40e3-8681-25a1f0d19336",
+        "trajectory_sha256": "977beabf1a711022adac4dec5135ed0e86b32eef7ccb2e048cafd250150351c6",
+        "rollout_sha256": "fe3400fd1abb261897797568c1c762f1c18e68c2b744b0ddfedf25cef3e6cba6"
+      },
+      {
+        "trial": "87dc16e1-1931-4155-9397-33981c437725",
+        "trajectory_sha256": "4c68b8e54c0527e80443e6e7142dc0090271950e84ccd6dd907c53f5b392538d",
+        "rollout_sha256": "6d01d4b727aa2a90fab6952b794e3d1e6efa483fe44419fb196da9ee07808160"
+      },
+      {
+        "trial": "902f08e2-bedd-41c1-b5df-a321f0a01cf4",
+        "trajectory_sha256": "66b0c462064a15c1d57d77fbcbbf21b1625e05e4b3a6740092b07d21255999ff",
+        "rollout_sha256": "01f89538b3e14da2c9a419b3101b0a2d329460a2b10ea155a8b2b082ab7e8480"
+      },
+      {
+        "trial": "35f53aa3-8479-4e39-9d57-fe4a1728e766",
+        "trajectory_sha256": "09444b0601d7e11ec67f4d320534aeaaee828165fccad6a72b5a4dfddb8a91c0",
+        "rollout_sha256": "1a42251a82964fdc9afed9079959cb344488f41c6fdc2fb158877cfa2f3e6eeb"
+      }
+    ]
+  },
+  {
     "task": "freecad-platform-drawing",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-freecad-platform-drawing@sha256:460dcef0b0595b6730dd49b31e040f75bd61738f15a0ec9a31d880bd986839f9",

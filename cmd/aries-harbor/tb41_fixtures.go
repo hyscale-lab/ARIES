@@ -86,7 +86,11 @@ git --version`
 	case "bc842776-b412-4c72-8cc4-508c45838176", "e06d4044-711f-464c-819a-167164b8f3a2":
 		task.initialCheck += "\n" + sourceHarnessDirectory
 	}
-	if suffix, ok := tb41PatchAliases[trial]; ok {
+	suffix := tb41PatchAliases[trial]
+	if suffix == "" {
+		suffix = bipedPatchAliases[trial]
+	}
+	if suffix != "" {
 		task.initialCheck += "\nalias_dir=/root/.codex/tmp/arg0/codex-arg0" + suffix + `
 target=/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex
 test -x "$target"
