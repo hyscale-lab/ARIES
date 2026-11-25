@@ -1,5 +1,45 @@
 [
   {
+    "task": "coq-block-bound",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-coq-block-bound@sha256:030118a00c37bf068e533935c849e8b35bfd83662d7cf09c3f9fa453917e91d3",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Read and edit the local Coq theorem proof and scratch files, invoke the Coq compiler and proof checker, and poll local compiler processes."
+    ],
+    "trials": [
+      {
+        "trial": "df2e611e-481e-4a9c-9589-25eebeada90b",
+        "trajectory_sha256": "2a5456cbef54538284a3452328214544665715dce15a709f0104e3ad679ae75d",
+        "rollout_sha256": "f93f3f9f958f59624d73f69e03b6c937188371a1fa3842da815dda635ff0c944"
+      },
+      {
+        "trial": "b253c7f7-9591-448e-8e10-c0f35e2771d9",
+        "trajectory_sha256": "db53f53a152c456cc8f6e35b85d0d1bd7afa1b8bb5cda9bc4e3488f0448e13ba",
+        "rollout_sha256": "92c428e0375b5617c299e594759605091ed915e7175d76a7495ba859e5849109"
+      },
+      {
+        "trial": "3b7b0e81-6cb0-4b99-8d35-2f430c1ef639",
+        "trajectory_sha256": "d9c8edef6c9be8808e5c59db16c8607dc7617d54d0fd4a766568acb1a9960253",
+        "rollout_sha256": "ee4d0e270ce3de9994a275a250596a0749be65cd767508c6bf685bb73640d818"
+      },
+      {
+        "trial": "c0d13143-58bd-41fc-a1aa-173a2a2836a3",
+        "trajectory_sha256": "bb694137d8ec1f1647bb8921e00c247f26ec1538f5416c21b1c2a41903111c3a",
+        "rollout_sha256": "06a7cbfc300c94e611116bb8ce3ea06fa9307de68bfb1014aee2c413a43f11bb"
+      }
+    ]
+  },
+  {
     "task": "wal-recovery-ordering",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-wal-recovery-ordering@sha256:9b6ee31cb767789ff42e30a0346dfe0e7cdc11eb3acfe0c23bc4a8f1e6fe8be6",

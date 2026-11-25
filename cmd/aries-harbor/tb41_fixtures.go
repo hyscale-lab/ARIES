@@ -32,7 +32,18 @@ test ! -e .git
 test "$(sha256sum data/*.json | sha256sum)" = 'be11bd4dbade41b92b77b7f0be9334b23bb3b46f58d67fc071171da4d0cb6982  -'`,
 }
 
-var cargoPatchAliases = map[string]string{
+var coqBlockSetup = taskSetup{
+	output: "Main.v",
+	initialCheck: `echo 'dd3552e0af3b757ad66d9a7c6efb589a54d5010357980e2638fd710d060f6f6e  Main.v' | sha256sum -c -
+coqc --version | grep 'version 8.18.0'
+coqc --version | grep 'OCaml 4.13.1'
+test ! -e Main.vo
+` + noShellPatch,
+	inputCheck: `echo 'e76ac036d4e920f3917b0a50c40842172e261d85c8b40d4dbbc73a9e3f89ed70  _CoqProject' | sha256sum -c -`,
+}
+
+var tb41PatchAliases = map[string]string{
+	"b253c7f7-9591-448e-8e10-c0f35e2771d9": "xolPyo",
 	"c782489c-4925-42a5-9873-42eb5dd86a86": "0dBF6j",
 	"9fb8d078-0d6a-4629-bcac-1d246656345f": "jRd0KF",
 	"3494bc2e-744c-4565-b6d7-90c7894218f1": "ynSWtA",
@@ -64,7 +75,7 @@ git --version`
 	case "bc842776-b412-4c72-8cc4-508c45838176", "e06d4044-711f-464c-819a-167164b8f3a2":
 		task.initialCheck += "\n" + sourceHarnessDirectory
 	}
-	if suffix, ok := cargoPatchAliases[trial]; ok {
+	if suffix, ok := tb41PatchAliases[trial]; ok {
 		task.initialCheck += "\nalias_dir=/root/.codex/tmp/arg0/codex-arg0" + suffix + `
 target=/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex
 test -x "$target"
