@@ -74,6 +74,11 @@ source_stage=/local/zb-relaxed-ml-01
 if [[ $node == amd183 ]]; then source_stage=$stage; fi
 (cd "$source_stage" && sha256sum --quiet -c SHA256SUMS)
 if [[ "$variant:$kind" == v1:deep && ! -f "$runtime/runtime.json" ]]; then
+    provision=${ZB_PROVISION_BASELINE:-$(dirname "$(realpath "$0")")/../../../zb-trace/provision_baseline.sh}
+    if [[ ! -f "$provision" && -z "${ZB_PROVISION_BASELINE:-}" ]]; then
+        provision="$source_stage/provision_baseline-quiet.sh"
+    fi
+    provision=$(realpath -e "$provision")
     donor="$source_stage/stack-v1/runtime"
     diagnostic=/local/zb-torch-deep-v3/runtime/common-rootfs.ext4
     mkdir -p "$runtime"
@@ -81,7 +86,7 @@ if [[ "$variant:$kind" == v1:deep && ! -f "$runtime/runtime.json" ]]; then
     cp --sparse=always --reflink=auto "$diagnostic" "$runtime/common-rootfs.ext4"
     chmod a-w "$runtime/common-rootfs.ext4"
     bootstrap=docker.io/alexgshaw/fix-git@sha256:389b9c8247610c2c5be080b1ac00429007c2c69bf57f7f26c79f0f75ba2d5c74
-    bash "$source_stage/provision_baseline.sh" "$(dirname "$runtime")" "$unit" "$donor/runtime.json" v1 "$bootstrap"
+    bash "$provision" "$(dirname "$runtime")" "$unit" "$donor/runtime.json" v1 "$bootstrap"
 fi
 image=$(python3 -B -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"])' "$stage/image.json")
 expected=$(python3 -B -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256_manifest"])' "$stage/image.json")

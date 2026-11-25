@@ -42,6 +42,11 @@ test "$(cat /sys/devices/system/cpu/smt/active)" = 0
 (cd "$stage" && sha256sum --quiet -c SHA256SUMS)
 if pgrep -x 'firecracker|[.]firecracker-re' >/dev/null; then exit 1; fi
 if [[ ! -f "$runtime/runtime.json" ]]; then
+    provision=${ZB_PROVISION_BASELINE:-$(dirname "$(realpath "$0")")/../zb-trace/provision_baseline.sh}
+    if [[ ! -f "$provision" && -z "${ZB_PROVISION_BASELINE:-}" ]]; then
+        provision="$stage/provision_baseline-quiet.sh"
+    fi
+    provision=$(realpath -e "$provision")
     case $variant in
         v1)
             donor=/local/zb-torch-gloo-e047-01/runtime
@@ -56,7 +61,7 @@ if [[ ! -f "$runtime/runtime.json" ]]; then
     cp --reflink=auto -a "$donor/bin" "$donor/jailer.json" "$common/common-vmlinux.bin" \
         "$common/common-vmlinux.config" "$common/common-rootfs.ext4" "$runtime/"
     chmod a-w "$runtime/common-rootfs.ext4"
-    bash "$stage/provision_baseline.sh" "$(dirname "$runtime")" "$unit" "$donor/runtime.json" "$variant" "$torch_image"
+    bash "$provision" "$(dirname "$runtime")" "$unit" "$donor/runtime.json" "$variant" "$torch_image"
 fi
 (cd "$runtime"; sha256sum --quiet -c <<'HASHES'
 292a537a4bdb05fe4323352ecf74299c13c732b9e430d153d5bd5e53772fed5f  common-rootfs.ext4
