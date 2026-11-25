@@ -61,15 +61,24 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 	if h.IntraTool != nil && h.IntraTool.Step == first.Step {
 		return errors.New("intra-tool sampling requires an individual, foreground source call")
 	}
-	if err := h.Boundary(ctx, "pre-tool", first.Step); err != nil {
+	ready, err := Clock()
+	if err != nil {
+		return err
+	}
+	if err := h.boundary(ctx, "pre-tool", first.Step, ready); err != nil {
 		return err
 	}
 	work, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
+	var lastReply int64
 	defer func() {
 		cancel()
 		wg.Wait()
-		runErr = errors.Join(runErr, h.Boundary(ctx, "post-tool", first.Step))
+		if h.clock != nil && lastReply != 0 {
+			h.clock.cursor = h.clock.runnable(lastReply)
+			h.clock.step = first.Step
+		}
+		runErr = errors.Join(runErr, h.boundary(ctx, "post-tool", first.Step, lastReply))
 	}()
 	var processJoins []func() error
 	if h.FinishObservedProcess != nil {
@@ -82,11 +91,11 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 	done := make(chan parallelReply, n)
 	start := time.Now()
 	next, finished := 0, 0
+	var batchStart int64
 	dispatch := func(e Event, receipt Receipt) error {
 		call := r.Plan.Calls[e.Sequence-1]
 		receipt = toolReceipt(h, receipt, call)
-		receipt.Event = "tool_dispatch"
-		if err := emit(h, receipt); err != nil {
+		if err := h.dispatchReceipt(receipt, "parallel-tool"); err != nil {
 			return err
 		}
 		wg.Add(1)
@@ -98,13 +107,49 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 		}()
 		return nil
 	}
+	handleReply := func(outcome parallelReply) error {
+		e := outcome.request
+		call := r.Plan.Calls[e.Sequence-1]
+		lastReply = max(lastReply, outcome.mono)
+		if err := recordReply(ctx, h, call, outcome.receipt, outcome.output, outcome.mono, outcome.err); err != nil {
+			return err
+		}
+		if _, err := recordSourceEvent(ctx, h, sourceReplies[e.Sequence]); err != nil {
+			return err
+		}
+		finished++
+		return nil
+	}
 	for finished < n {
 		var timer *time.Timer
-		var dispatchTime <-chan time.Time
-		if next < n {
-			delay := events[next].SourceTime.Sub(events[0].SourceTime) - time.Since(start)
-			timer = time.NewTimer(max(0, delay))
-			dispatchTime = timer.C
+		var tick <-chan time.Time
+		var periodic bool
+		cursor := batchStart
+		if h.clock == nil {
+			if next < n {
+				delay := events[next].SourceTime.Sub(events[0].SourceTime) - time.Since(start)
+				timer = time.NewTimer(max(0, delay))
+				tick = timer.C
+			}
+		} else {
+			due := h.clock.next
+			periodic = true
+			if next < n {
+				cursor = batchStart + int64(events[next].SourceTime.Sub(events[0].SourceTime))
+				if next == 0 {
+					cursor = h.clock.cursor
+				}
+				if cursor <= due {
+					due = cursor
+					periodic = false
+				}
+			}
+			at, err := Clock()
+			if err != nil {
+				return err
+			}
+			timer = time.NewTimer(max(0, time.Duration(due-h.clock.runnable(at))))
+			tick = timer.C
 		}
 		select {
 		case <-ctx.Done():
@@ -112,7 +157,26 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 				timer.Stop()
 			}
 			return ctx.Err()
-		case <-dispatchTime:
+		case <-tick:
+			if periodic {
+				// Consume a ready reply first so the final batch reply can coalesce with the timer.
+				select {
+				case outcome := <-done:
+					if err := handleReply(outcome); err != nil {
+						return err
+					}
+					continue
+				default:
+				}
+				at, err := Clock()
+				if err != nil {
+					return err
+				}
+				if err := h.capture(ctx, "parallel-tool", first.Step, at, true); err != nil {
+					return err
+				}
+				continue
+			}
 			e := events[next]
 			receipt := first
 			if next > 0 {
@@ -121,25 +185,23 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 					return err
 				}
 			}
+			if h.clock != nil {
+				h.clock.cursor = cursor
+			}
 			if err := dispatch(e, receipt); err != nil {
 				return err
+			}
+			if h.clock != nil && next == 0 {
+				batchStart = h.clock.lastDispatch
 			}
 			next++
 		case outcome := <-done:
 			if timer != nil {
 				timer.Stop()
 			}
-			e := outcome.request
-			call := r.Plan.Calls[e.Sequence-1]
-			receipt := outcome.receipt
-			if err := recordReply(ctx, h, call, receipt, outcome.output, outcome.mono, outcome.err); err != nil {
+			if err := handleReply(outcome); err != nil {
 				return err
 			}
-			reply := sourceReplies[e.Sequence]
-			if _, err := recordSourceEvent(ctx, h, reply); err != nil {
-				return err
-			}
-			finished++
 		}
 	}
 	// A late terminal poll in this diagnostic can add a join. Preserve the

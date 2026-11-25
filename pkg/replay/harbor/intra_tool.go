@@ -40,7 +40,7 @@ type toolCompletion struct {
 }
 
 func (h Hooks) executeTool(ctx context.Context, call replay.Call, receipt Receipt) (core.CommandResult, int64, error) {
-	if h.IntraTool == nil || receipt.Step != h.IntraTool.Step {
+	if h.clock == nil && (h.IntraTool == nil || receipt.Step != h.IntraTool.Step) {
 		output, err := h.Exec(ctx, call)
 		finished, clockErr := Clock()
 		return output, finished, errors.Join(err, clockErr)
@@ -54,6 +54,38 @@ func (h Hooks) executeTool(ctx context.Context, call replay.Call, receipt Receip
 		finished, clockErr := Clock()
 		completed <- toolCompletion{output, finished, errors.Join(err, clockErr)}
 	}()
+
+	if h.clock != nil {
+		stop := func(err error) (core.CommandResult, int64, error) {
+			cancel()
+			result := <-completed
+			return result.output, result.time, errors.Join(result.err, err)
+		}
+		for {
+			wall, err := Clock()
+			if err != nil {
+				return stop(err)
+			}
+			timer := time.NewTimer(max(0, time.Duration(h.clock.next-h.clock.runnable(wall))))
+			select {
+			case result := <-completed:
+				timer.Stop()
+				return result.output, result.time, result.err
+			case <-ctx.Done():
+				timer.Stop()
+				return stop(ctx.Err())
+			case <-timer.C:
+			}
+			select {
+			case result := <-completed:
+				return result.output, result.time, result.err
+			default:
+			}
+			if err := h.capture(ctx, "tool", receipt.Step, wall, true); err != nil {
+				return stop(err)
+			}
+		}
+	}
 
 	timer := time.NewTimer(h.IntraTool.Interval)
 	defer timer.Stop()

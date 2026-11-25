@@ -15,6 +15,7 @@ import (
 // Hooks stay on the host. Boundary returns only after the VM is running again.
 // Its own freeze receipts identify the exact pause/resume bounds.
 type Hooks struct {
+	clock                 *replayClock
 	deferProcessJoin      func(func() error)
 	WasRetained           func(int) bool
 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
@@ -22,6 +23,7 @@ type Hooks struct {
 	DiagnosticVideoImages bool
 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
 	Boundary              func(context.Context, string, int) error
+	Periodic              func(context.Context, string, int, []string) (Freeze, error)
 	Record                func(Receipt) error
 	IntraTool             *IntraToolOptions
 }
@@ -33,6 +35,12 @@ type Receipt struct {
 	SourceKind       string              `json:"source_kind,omitempty"`
 	ParallelSize     int                 `json:"parallel_size,omitempty"`
 	Event            string              `json:"event"`
+	Phase            string              `json:"phase,omitempty"`
+	Triggers         []string            `json:"triggers,omitempty"`
+	PauseAckNS       int64               `json:"pause_ack_monotonic_ns,omitempty"`
+	ResumeRequestNS  int64               `json:"resume_request_monotonic_ns,omitempty"`
+	RunnableTargetNS *int64              `json:"target_runnable_ns,omitempty"`
+	RunnableActualNS *int64              `json:"actual_runnable_ns,omitempty"`
 	SessionID        int                 `json:"source_process_session_id,omitempty"`
 	Operation        string              `json:"operation,omitempty"`
 	StatusBasis      string              `json:"status_basis,omitempty"`
@@ -90,25 +98,40 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 	if h.DiagnosticVideoImages && r.Task != "video-processing" {
 		return errors.New("unreviewed video diagnostic")
 	}
-	if h.Exec == nil || h.Boundary == nil || h.Record == nil {
+	if h.Exec == nil || (h.Boundary == nil && h.Periodic == nil) || h.Record == nil {
 		return errors.New("missing replay hooks")
 	}
 	if err := h.IntraTool.Validate(r); err != nil {
 		return err
 	}
+	sessionStart, err := Clock()
+	if err != nil {
+		return err
+	}
+	if h.Periodic != nil {
+		if h.IntraTool != nil {
+			return errors.New("periodic tracing and intra-tool diagnostics are mutually exclusive")
+		}
+		h.clock = newReplayClock(sessionStart)
+	}
 	defer func() {
 		// A failed initial capture may have acquired observers that still need release.
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
-		runErr = errors.Join(runErr, h.Boundary(cleanup, "session-end", 0))
+		boundaryTime, clockErr := Clock()
+		runErr = errors.Join(runErr, clockErr, h.boundary(cleanup, "session-end", 0, boundaryTime))
+		if h.clock != nil {
+			end, clockErr := Clock()
+			runErr = errors.Join(runErr, clockErr, h.markTraceBlocked(h.clock.cursor, end, "session-end", 0))
+		}
 		if runErr == nil {
 			runErr = emit(h, Receipt{Event: "session_end"})
 		}
 	}()
-	if err := emit(h, Receipt{Event: "session_start"}); err != nil {
+	if err := h.Record(Receipt{Event: "session_start", Time: sessionStart}); err != nil {
 		return err
 	}
-	if err := h.Boundary(ctx, "session-start", 0); err != nil {
+	if err := h.boundary(ctx, "session-start", 0, sessionStart); err != nil {
 		return err
 	}
 	for i := 0; i < len(r.Events); i++ {
@@ -136,16 +159,30 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		}
 		call := r.Plan.Calls[e.Sequence-1]
 		receipt = toolReceipt(h, receipt, call)
-		if err := h.Boundary(ctx, "pre-tool", e.Step); err != nil {
+		ready, err := Clock()
+		if err != nil {
 			return err
 		}
-		receipt.Event = "tool_dispatch"
-		if err := emit(h, receipt); err != nil {
+		if err := h.boundary(ctx, "pre-tool", e.Step, ready); err != nil {
+			return err
+		}
+		if err := h.dispatchReceipt(receipt, "tool"); err != nil {
 			return err
 		}
 		out, replyTime, err := h.executeTool(ctx, call, receipt)
-		captureErr := h.Boundary(ctx, "post-tool", e.Step)
-		if err := recordReply(ctx, h, call, receipt, out, replyTime, errors.Join(err, captureErr)); err != nil {
+		if h.clock == nil {
+			captureErr := h.boundary(ctx, "post-tool", e.Step, replyTime)
+			if err := recordReply(ctx, h, call, receipt, out, replyTime, errors.Join(err, captureErr)); err != nil {
+				return err
+			}
+			continue
+		}
+		h.clock.cursor = h.clock.runnable(replyTime)
+		h.clock.step = e.Step
+		if err := recordReply(ctx, h, call, receipt, out, replyTime, err); err != nil {
+			return err
+		}
+		if err := h.boundary(ctx, "post-tool", e.Step, replyTime); err != nil {
 			return err
 		}
 	}
@@ -157,19 +194,48 @@ func recordSourceEvent(ctx context.Context, h Hooks, e Event) (Receipt, error) {
 	if e.Wait > 0 {
 		receipt.Event = "wait_start"
 		receipt.RequestedNS = int64(e.Wait)
-		if err := emit(h, receipt); err != nil {
-			return receipt, err
-		}
-		timer := time.NewTimer(e.Wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return receipt, ctx.Err()
-		case <-timer.C:
+		if h.clock == nil {
+			if err := emit(h, receipt); err != nil {
+				return receipt, err
+			}
+		} else {
+			target := h.clock.cursor
+			receipt.Time = h.clock.wallDeadline(target)
+			receipt.RunnableTargetNS = &target
+			if err := h.Record(receipt); err != nil {
+				return receipt, err
+			}
 		}
 		receipt.Event = "wait_end"
-		if err := emit(h, receipt); err != nil {
-			return receipt, err
+		if h.clock == nil {
+			timer := time.NewTimer(e.Wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return receipt, ctx.Err()
+			case <-timer.C:
+			}
+			if err := emit(h, receipt); err != nil {
+				return receipt, err
+			}
+		} else {
+			h.clock.cursor += int64(e.Wait)
+			target := h.clock.cursor
+			step := h.clock.step
+			if step == 0 {
+				step = e.Step
+			}
+			wall, err := h.waitRunnable(ctx, step, target)
+			if err != nil {
+				return receipt, err
+			}
+			actual := h.clock.runnable(wall)
+			receipt.Time = wall
+			receipt.RunnableTargetNS, receipt.RunnableActualNS = &target, &actual
+			if err := h.Record(receipt); err != nil {
+				return receipt, err
+			}
+			receipt.RunnableTargetNS, receipt.RunnableActualNS = nil, nil
 		}
 		receipt.Event = "source_event"
 	}
@@ -179,6 +245,25 @@ func recordSourceEvent(ctx context.Context, h Hooks, e Event) (Receipt, error) {
 
 	return receipt, nil
 }
+func (h Hooks) dispatchReceipt(receipt Receipt, phase string) error {
+	receipt.Event = "tool_dispatch"
+	if h.clock == nil {
+		return emit(h, receipt)
+	}
+	wall, err := Clock()
+	if err != nil {
+		return err
+	}
+	target, actual := h.clock.cursor, h.clock.runnable(wall)
+	h.clock.lastDispatch = actual
+	if err := h.markTraceBlocked(target, wall, phase, receipt.Step); err != nil {
+		return err
+	}
+	receipt.Time = wall
+	receipt.RunnableTargetNS, receipt.RunnableActualNS = &target, &actual
+	return h.Record(receipt)
+}
+
 func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	receipt.Operation = call.Operation
 	if call.SessionID != 0 {
