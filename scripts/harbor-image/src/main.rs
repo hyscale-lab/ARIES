@@ -8,6 +8,7 @@ use std::io::{self, Cursor, Write};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageDecoder, ImageEncoder, ImageFormat, ImageReader};
 
@@ -41,7 +42,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         encoder.encode_image(&resized)?;
         encoded
     } else {
-        return Err("unexpected PNG resize in reviewed recording".into());
+        let resized = image.resize_exact(target.0, target.1, FilterType::Triangle).to_rgba8();
+        let mut encoded = Vec::new();
+        let mut encoder = PngEncoder::new(&mut encoded);
+        if let Some(profile) = icc { encoder.set_icc_profile(profile)?; }
+        if let Some(exif) = exif { encoder.set_exif_metadata(exif)?; }
+        encoder.write_image(resized.as_raw(), target.0, target.1, image::ColorType::Rgba8.into())?;
+        encoded
     };
     write!(io::stdout().lock(),
         r#"[{{"type":"input_image","image_url":"data:{mime};base64,{}","detail":"high"}}]"#,
