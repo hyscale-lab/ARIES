@@ -594,7 +594,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	}
 	if tb41Polls {
 		h.KeepBoundedPollResult = true
-		h.RecordTerminalDivergence = true
+		h.RecordSourceDivergence = true
 		h.FinishObservedProcess = sessions.PollObservedProcess
 	}
 	if relaxedStatus {
