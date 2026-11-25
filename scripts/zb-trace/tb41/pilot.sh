@@ -6,6 +6,7 @@ runtime=$(realpath "$2")
 unit=$3
 arm=$4
 out=$(realpath -m "$5")
+shift 5
 [[ "$unit" =~ ^fcmod-zepbound-[a-z0-9-]+$ && "$arm" =~ ^(light|traced)$ ]]
 trace=$(dirname "$(realpath "$0")")
 socket=/run/$unit/containerd.sock
@@ -13,8 +14,15 @@ ctr=("$runtime/bin/firecracker-ctr" -a "$socket" -n aries)
 mkdir -m700 "$out"
 exec 9>"$runtime/.tb41.lock"
 flock -n 9
-tasks=$("${ctr[@]}" tasks ls -q)
-[[ -z "$tasks" ]]
+namespaces=$("${ctr[@]}" namespaces ls -q)
+for ns in $namespaces; do
+    tasks=$("$runtime/bin/firecracker-ctr" -a "$socket" -n "$ns" tasks ls -q)
+    [[ -z "$tasks" ]]
+done
+if pgrep -x firecracker >/dev/null || pgrep -x qemu-system-x86 >/dev/null; then
+    echo "another VM is active on the assigned solo worker" >&2
+    exit 1
+fi
 cp "$runtime/runtime.json" "$out/runtime.before.json"
 collector=
 slots=
@@ -74,4 +82,4 @@ source = json.load(open(sys.argv[1]))
 print(source["image"], source["vcpus"], source["memory_mib"], source["storage_mib"])
 PYREAD
 )
-"$stage/aries-harbor" -native-checkpoint -socket "$socket" -namespace aries -checkpoint-dir "$runtime/checkpoints" -shim-dir "$runtime/shim" -io-dir "/run/$unit/aries-io" -trajectory "$source_dir/trajectory" -rollout "$source_dir/rollout" -image "$image" -vcpus "$cpus" -memory-mib "$mem" -storage-mib "$disk" -sampler "${ZB_TB41_SAMPLER:-$trace/sample.py}" -log "$out/events.jsonl" -samples "$out/samples.jsonl" "${args[@]}"
+"$stage/aries-harbor" -native-checkpoint -socket "$socket" -namespace aries -checkpoint-dir "$runtime/checkpoints" -shim-dir "$runtime/shim" -io-dir "/run/$unit/aries-io" -trajectory "$source_dir/trajectory" -rollout "$source_dir/rollout" -image "$image" -vcpus "$cpus" -memory-mib "$mem" -storage-mib "$disk" -sampler "${ZB_TB41_SAMPLER:-$trace/sample.py}" -log "$out/events.jsonl" -samples "$out/samples.jsonl" "${args[@]}" "$@"
