@@ -47,7 +47,8 @@ def collect(host, cache, results):
                 evidence=dict(attempt=run,node=host.split('@')[-1].split('.')[0],exit_status=status,
                               driver_last_line=lines[-1] if lines else None)
                 if (dest/'events.jsonl').exists():
-                    events=[json.loads(s) for s in (dest/'events.jsonl').read_text().splitlines() if s]
+                    with (dest/'events.jsonl').open('rb') as stream:
+                        events=[json.loads(line) for line in stream if line.strip()]
                     evidence['source_trial']=events[0]['trial_id'] if events else None
                     evidence['first_replies']=[{k:e.get(k) for k in ('step_id','sequence','source_call_id','exit_code','expected_exit_code')} for e in events if e['event']=='tool_reply']
                 (draft/'attempt.json').write_text(json.dumps(evidence,indent=2)+'\n')
