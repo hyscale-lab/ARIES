@@ -73,6 +73,17 @@ def parse_window(raw, output, row, slots, previous):
                 kvm_dirty={**row['dirty'],'slots':slot_rows},classes=classes),tagged
 
 
+def attribution(native, destination):
+    with gzip.open(destination, 'xt', compresslevel=3) as stream:
+        for r in rows(native/'boundaries.jsonl'):
+            g=r['guest_telemetry']['guest']
+            regular=g.get('regular_files')
+            write(stream,dict(index=r['index'],probe_begin_ns=g['begin_monotonic_ns'],
+                              probe_end_ns=g['end_monotonic_ns'],pfn_scan=g.get('pfn_scan'),
+                              regular_files=None if regular is None else
+                              {k:v for k,v in regular.items() if k!='files'}))
+
+
 def process(run, output):
     events = list(rows(run/'events.jsonl'))
     if events[-1]['event'] != 'removed':
@@ -134,6 +145,7 @@ def process(run, output):
                 previous=r
         if previous is None or previous['phase']!='session-end' or len(previous['original_snapshot_sample'])!=8192:
             raise ValueError('missing final checkpoint comparison')
+        attribution(native,output/'attribution.jsonl.gz')
         with gzip.open(output/'boundaries.jsonl.gz','xt') as stream:
             for r in rows(native/'boundaries.jsonl'):
                 write(stream,{k:v for k,v in r.items() if k not in {'guest_telemetry','content_sample','original_snapshot_sample','dirty'}})
