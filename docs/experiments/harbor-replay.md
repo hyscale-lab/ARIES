@@ -57,3 +57,13 @@ bin/aries-harbor -trajectory trajectory.json -rollout rollout.jsonl \
 Use `call_id` from the source timeline and `source_call_id` from the run receipts to compare recorded and live dispatch and first-reply times. The original pilot has no process polls. The separate `TestReplaySeparatesLateTerminalPoll` verifies a live retained handle and a first `running` response when the recording expected a terminal poll. The next observation uses the same handle and has separate dispatch and result receipts. For this source family it waits at most five seconds.
 
 Four more original ROY recordings share the same task digest, resource configuration, input files, and guest readiness profile. Use the same image and replay command with their own source pairs. One recording ends with a live process handle. The final replay capture occurs while that handle is retained, and a post-session receipt records its observed state before stream cancellation and sandbox removal. [Approved artifact hashes](../../pkg/replay/harbor/reviewed.json)
+
+The same CLI admits five originals each for `wal-recovery-ordering`, `session-window-debug`, and `cargo-flight-dispatch`. Use each manifest's digest-qualified rebuilt image and the pinned Codex 0.151.0 `-codex-tools` archive. The readiness profile verifies the copied workload files and checks the required guest tools. The first patch action may be a Codex-intercepted action or an ordinary shell invocation. ARIES executes the reviewed intercepted patches through the native Codex patch entry point. The ordinary shell still observes its original PATH and any source-specific alias. Two window sources contain host-rejected commands, so ARIES keeps their recorded harness intervals and binds their replies without a guest dispatch.
+
+| Original sources | `-os-tools` archive SHA-256 |
+| --- | --- |
+| WAL `23163f44`, `c1962991`, `ecd96589`, `42a81732` | `e45d5f8a8fcf4e15144f869adeb010553493c791d1b2cec2d7c03b6ce2bb2fbe` |
+| Session window `8c294d70`, `75a70fea`, `7bb66704`, `55c43499` | `b5bde9f81915e55cd43ab0c2f0236ef2de9141701d8a369cb8320fd7c176d5b1` |
+| Cargo `3494bc2e` | `d0f04134a875e55e61c5441abd559a7d12657ee9a7ba1f7b2e736573ff1ee6fc` |
+
+Use the archived tool packages only for the listed sources. The Bookworm archives were built for their respective images. The Trixie session-window archive uses its own package set.

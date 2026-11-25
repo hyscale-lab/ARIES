@@ -1,5 +1,139 @@
 [
   {
+    "task": "wal-recovery-ordering",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-wal-recovery-ordering@sha256:9b6ee31cb767789ff42e30a0346dfe0e7cdc11eb3acfe0c23bc4a8f1e6fe8be6",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Read and patch local storage-engine Python files and test durable commit ordering and crash recovery with temporary data."
+    ],
+    "trials": [
+      {
+        "trial": "23163f44-25fb-47c7-8a9c-5aabc8e918f6",
+        "trajectory_sha256": "2883fc2c32dcba8ca8a58044250b9844d218387392dfc21ac7c6cb7fb5b9615d",
+        "rollout_sha256": "2c90353452dfd97b03fdd23545acd0cb0c2fdaa729794da476f89250b53b3872"
+      },
+      {
+        "trial": "c1962991-d260-46b5-8047-535da8dd7955",
+        "trajectory_sha256": "d8b7ab97e60c559112aa53dc5e4b036b597b711b0ce1b0e1bbbc0300e21d44c0",
+        "rollout_sha256": "0b69c45312456dd4f56b7ddfdae9eda3bffaa52ac5765e21553e9a3ff49437ae"
+      },
+      {
+        "trial": "ecd96589-9286-4639-918e-d6a81933aa6f",
+        "trajectory_sha256": "aeed0c766c1b10810966006918ef047fbe69e6e7d5ce0d9e7f50c6059108c0ba",
+        "rollout_sha256": "868bd54ce2cb2e891edc4a5a13a380baf7fb61ef9e4665a2089fa332fe7b8ae3"
+      },
+      {
+        "trial": "f27fe8ad-7c8a-4c28-884b-809ee57f89ea",
+        "trajectory_sha256": "7ec3ead8dc33a7d69045135a1276d21193e0987cfcdc9c77bd3017081cb263a9",
+        "rollout_sha256": "58f74f3161ca0b198b08afc425a9af2f439bf8d188497217d162f36cd700581b"
+      },
+      {
+        "trial": "42a81732-26cc-4817-8e52-ae846d24410e",
+        "trajectory_sha256": "16ab80d6927142874a1945c347cbf403ffb4681f8c2dbd8c8f9175be5a13dde0",
+        "rollout_sha256": "abe5c08caa5e92d9dfc4b81433ee74d32dbb65f65314f1d439d14135518adc1c"
+      }
+    ]
+  },
+  {
+    "task": "session-window-debug",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-session-window-debug@sha256:3829079b54c23a5d53583889c2e318c433d7688cc45de404bc4e29106998d28f",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Read and patch local event-processor modules and run deterministic local session-window checks."
+    ],
+    "trials": [
+      {
+        "trial": "8c294d70-dba6-43c3-b041-409880af6418",
+        "trajectory_sha256": "38098d5cef62c5341d57e9151e86c592b5c86bd9d00c06d94d76efcc92e3c08e",
+        "rollout_sha256": "b468baf2a405fe0c0a51a703f355d4a6a7f03ccfe9b00d1c6250e4f3095c20b9"
+      },
+      {
+        "trial": "75a70fea-d015-48c3-b800-f6db6f2c8bcf",
+        "trajectory_sha256": "862f9a7aecf3d66a1fabc066a6f6d6334cddf12319a659cb35cd176531bd64f2",
+        "rollout_sha256": "1fe27fedda468ecd5c1e255a661ffbf9d3682a0a1f7c6d375708b85c05d530ae"
+      },
+      {
+        "trial": "7bb66704-bb91-48e2-833d-22d22fd88e91",
+        "trajectory_sha256": "ab642ae5e7757096813d3f2856735d8087247f82c5b0916594b93eeb4f2c1cbe",
+        "rollout_sha256": "74a980c004a66414eb1b013b6704d4abcb1eb03455da3831e49c83887796bf97"
+      },
+      {
+        "trial": "55c43499-8c78-45d5-8b18-9b94ecf65ec2",
+        "trajectory_sha256": "51f4936c2f38ffc8ce8efe77c1a6a8473fdba811b427fc28fc240a33d24b4577",
+        "rollout_sha256": "934b29e80b79822696e7c9050be74e3baf2b21e22ee3ada942138f25720dd6a2"
+      },
+      {
+        "trial": "e06d4044-711f-464c-819a-167164b8f3a2",
+        "trajectory_sha256": "0bec7ee4657d1a7fb076818fd3db8ef0d770fd5b343aa0c434968e3874f5c756",
+        "rollout_sha256": "433c8c370507e41297a73b3f6b93250987da1b2d3938ffaba6d7f2cff8cb8186"
+      }
+    ]
+  },
+  {
+    "task": "cargo-flight-dispatch",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-cargo-flight-dispatch@sha256:eb90c31f653ea38d67c47cc8144c1e8dec6c39f27ecfdd4e85d7364223942cc6",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan"
+    ],
+    "effects": [
+      "Read local benchmark inputs, patch the benchmark planner and write a private JSON output."
+    ],
+    "trials": [
+      {
+        "trial": "bc842776-b412-4c72-8cc4-508c45838176",
+        "trajectory_sha256": "157d3f6533d70d30d1677b799ea39d7d4cd6c318ee745bfb55193930293163ee",
+        "rollout_sha256": "7598b82ee85b68b21a9178a55d91a15d3667aaa42c5fc3180eb0df5becdc78cb"
+      },
+      {
+        "trial": "c782489c-4925-42a5-9873-42eb5dd86a86",
+        "trajectory_sha256": "8d7c6ae80a15e513c25b9158437d9400a80bbd8c222d031d6da9ed754768fe24",
+        "rollout_sha256": "dfbc0db770d064cbd4a946e383baea352e7de8042a4bbf7683a8df7172fe394e"
+      },
+      {
+        "trial": "9fb8d078-0d6a-4629-bcac-1d246656345f",
+        "trajectory_sha256": "38e00f064740aeb66a4df9df1a00056768c83b1b72f83f873a198c3d038a0714",
+        "rollout_sha256": "855fd366f262e4f63ec4b1fd22e6fdff13a46073143b2fa1ad45edd329e277ce"
+      },
+      {
+        "trial": "3494bc2e-744c-4565-b6d7-90c7894218f1",
+        "trajectory_sha256": "7b6b3ab675f816ed75c94cb0a8ecd953c0b8d56aeb8c9b6acf6296d424c93bbb",
+        "rollout_sha256": "0c98ecee94f81ba2064bb826b7222efedc77077ad7621f7899b6db29e49ae65d"
+      },
+      {
+        "trial": "742a1a2c-24e5-41dc-83ab-745b7a50a392",
+        "trajectory_sha256": "f3e7e48111cec330df450daf7027f2cbe4c11b99d9f3e9e8fa415195697fdf7d",
+        "rollout_sha256": "0065801a208119396e2f640991ac405712427a7fb39bcf29df5e85f63b65d371"
+      }
+    ]
+  },
+  {
     "task": "roy-polymorph-cn",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-roy@sha256:3ed43bff698735f15fa9db6e020df8e44e1d3ec37e8828ebc53eba054e509a77",

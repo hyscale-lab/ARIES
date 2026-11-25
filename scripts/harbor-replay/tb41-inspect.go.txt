@@ -57,5 +57,11 @@ func TestTB41SourceProbe(t *testing.T) {
 		} else {
 			t.Logf("%s: parsed %d guest calls", name, len(recording.Plan.Calls))
 		}
+		if reviewed, err := Load(atif, rollout); err == nil {
+			if reviewed.Trial != row[original] || reviewed.Task != row[task] {
+				t.Fatalf("reviewed source identity differs for %s", name)
+			}
+			t.Logf("reviewed %s: %d guest calls", name, len(reviewed.Plan.Calls))
+		}
 	}
 }

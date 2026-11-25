@@ -15,6 +15,10 @@ func rejectedBeforeGuest(trial string, c indexedCall) bool {
 		return c.step == 33 && c.call.ID == "call_u5bhWVBpgQFiJW2VyUEmQ9jd" && c.call.Name == "exec_command" && digest([]byte(c.output)) == "ede32c32061b6e4ecb6fa4648ca471217ad61841d0338719700e54a1a5809278"
 	case "1b1460f4-7006-4469-997e-2034ffed4e78":
 		return c.step == 45 && c.call.ID == "call_J2P1lsvqt2SBn6ZhjLTTfDhf" && c.call.Name == "exec_command" && digest([]byte(c.output)) == "a95344903732e6fbcbaf72ae239d93bf1bef9ded1d5874728a3d4f391149cc14"
+	case "75a70fea-d015-48c3-b800-f6db6f2c8bcf":
+		return c.step == 15 && c.call.ID == "call_jUGvPuCVlj41bS87Bc9iORJy" && c.call.Name == "exec_command" && digest([]byte(c.output)) == "3787cc1f06152af4fa5e164585c2022ac195e59333c5c19cbd1c0673705dc414"
+	case "e06d4044-711f-464c-819a-167164b8f3a2":
+		return c.step == 16 && c.call.ID == "call_v4nkzoHaJeps4Eqq4LlfEMjI" && c.call.Name == "exec_command" && digest([]byte(c.output)) == "b9e9cfff1f5e943ceff0be7070c172b29b531251dba20f63d0dc009984001c78"
 	}
 	return false
 }

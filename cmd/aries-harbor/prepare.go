@@ -47,18 +47,21 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
-	royTask:             {output: "/results/TB3_Conf_Answers.csv", inputCheck: royInputCheck, initialCheck: royInitialCheck},
-	"sanitize-git-repo": {output: "README.md", initialCheck: "test -s README.md && test -s ray_processing/process.py && command -v git"},
-	bnFitTask:           bnFitSetup,
-	"git-leak-recovery": {packagesSHA: sparqlSetup.packagesSHA, output: "secret.txt", initialCheck: gitRecoveryReady},
-	datasetTask:         datasetSetup,
-	markerTask:          markerSetup,
-	financialTask:       financialSetup,
-	sparqlTask:          sparqlSetup,
-	torchTask:           torchSetup,
-	"compile-compcert":  compilerSetup,
-	kvTask:              kvSetup,
-	hfTask:              hfSetup,
+	royTask:                 {output: "/results/TB3_Conf_Answers.csv", inputCheck: royInputCheck, initialCheck: royInitialCheck},
+	"wal-recovery-ordering": walRecoverySetup,
+	"session-window-debug":  sessionWindowSetup,
+	"cargo-flight-dispatch": cargoFlightSetup,
+	"sanitize-git-repo":     {output: "README.md", initialCheck: "test -s README.md && test -s ray_processing/process.py && command -v git"},
+	bnFitTask:               bnFitSetup,
+	"git-leak-recovery":     {packagesSHA: sparqlSetup.packagesSHA, output: "secret.txt", initialCheck: gitRecoveryReady},
+	datasetTask:             datasetSetup,
+	markerTask:              markerSetup,
+	financialTask:           financialSetup,
+	sparqlTask:              sparqlSetup,
+	torchTask:               torchSetup,
+	"compile-compcert":      compilerSetup,
+	kvTask:                  kvSetup,
+	hfTask:                  hfSetup,
 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
@@ -130,7 +133,7 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 		task.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
 		task.initialCheck += "\ntest \"$(command -v patch)\" = /usr/bin/patch\ndpkg-query -W patch"
 	}
-	return task, ok
+	return tb41SourceSetup(r.Trial, task), ok
 }
 
 func checked(ctx context.Context, m *vhive.Manager, id string, cmd core.Command) (string, error) {
