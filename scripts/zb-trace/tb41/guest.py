@@ -30,10 +30,17 @@ for line in sys.stdin:
     row = guest_counters()
     root = Path('/sys/fs/cgroup')
     entries = [root / identity[3:].lstrip('/'), root]
+    row['workload_cgroup_files'] = 'membership not visible on mounted cgroup filesystem'
     for cg in entries:
         try:
             if str(os.getpid()) not in (cg / 'cgroup.procs').read_text().splitlines():
                 continue
+            row['workload_cgroup_files'] = 'membership verified'
+            for name in ('memory.pressure','io.pressure'):
+                try:
+                    row[name]=(cg/name).read_text().strip()
+                except (FileNotFoundError,PermissionError) as error:
+                    row[name]=dict(unavailable=error.__class__.__name__)
             row['cgroup_memory_stat'] = selected(cg / 'memory.stat', {'workingset_refault_anon', 'workingset_refault_file', 'pgscan', 'pgsteal', 'pgmajfault'})
             break
         except (FileNotFoundError, PermissionError):
