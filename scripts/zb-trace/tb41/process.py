@@ -98,6 +98,7 @@ def process(run, output):
     keys=('sequence','step_id','source_call_id','operation','source_process_session_id','exit_code','expected_exit_code')
     bound={tuple(r.get(k) for k in keys) for r in events if r['event']=='diagnostic_process_observation'
            and ((r.get('status_basis')=='real_terminal_before_source_running_poll' and r.get('exit_code',-1)>=0 and r.get('expected_exit_code')==-1)
+                or (r.get('status_basis')=='real_terminal_status_differs_from_source' and r.get('exit_code',-1)>=0 and r.get('expected_exit_code',-1)>=0)
                 or (r.get('status_basis')=='real_process_running_at_source_terminal_poll' and r.get('exit_code')==-1 and r.get('expected_exit_code',-1)>=0))}
     divergent=[r for r in events if r['event']=='tool_reply' and r['exit_code']!=r['expected_exit_code']]
     for r in divergent:

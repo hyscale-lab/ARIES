@@ -15,18 +15,19 @@ import (
 // Hooks stay on the host. Boundary returns only after the VM is running again.
 // Its own freeze receipts identify the exact pause/resume bounds.
 type Hooks struct {
-	clock                 *replayClock
-	deferProcessJoin      func(func() error)
-	WasRetained           func(int) bool
-	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
-	KeepBoundedPollResult bool
-	RelaxedMeasuredStatus bool
-	DiagnosticVideoImages bool
-	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
-	Boundary              func(context.Context, string, int) error
-	Periodic              func(context.Context, string, int, []string) (Freeze, error)
-	Record                func(Receipt) error
-	IntraTool             *IntraToolOptions
+	clock                    *replayClock
+	deferProcessJoin         func(func() error)
+	WasRetained              func(int) bool
+	FinishObservedProcess    func(context.Context, replay.Call) (core.CommandResult, error)
+	KeepBoundedPollResult    bool
+	RecordTerminalDivergence bool
+	RelaxedMeasuredStatus    bool
+	DiagnosticVideoImages    bool
+	Exec                     func(context.Context, replay.Call) (core.CommandResult, error)
+	Boundary                 func(context.Context, string, int) error
+	Periodic                 func(context.Context, string, int, []string) (Freeze, error)
+	Record                   func(Receipt) error
+	IntraTool                *IntraToolOptions
 }
 
 type Receipt struct {
@@ -308,6 +309,11 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 		return fmt.Errorf("step %d image attachment differs from the source", receipt.Step)
 	}
 	if int32(out.ExitCode) != call.ExitCode {
+		if h.RecordTerminalDivergence && out.ExitCode >= 0 && call.ExitCode >= 0 {
+			receipt.Event = "diagnostic_process_observation"
+			receipt.StatusBasis = "real_terminal_status_differs_from_source"
+			return emit(h, receipt)
+		}
 		if h.RelaxedMeasuredStatus {
 			return recordProcessDrift(ctx, h, call, receipt, out)
 		}
