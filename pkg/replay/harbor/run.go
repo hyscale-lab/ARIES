@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -16,6 +18,9 @@ import (
 // Its own freeze receipts identify the exact pause/resume bounds.
 type Hooks struct {
 	clock                  *replayClock
+	lifecycle              *checkpointState
+	Lifecycle              *CheckpointLifecycle
+	RecordToolRequests     bool
 	deferProcessJoin       func(func() error)
 	WasRetained            func(int) bool
 	FinishObservedProcess  func(context.Context, replay.Call) (core.CommandResult, error)
@@ -122,11 +127,29 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if h.Periodic != nil {
+	if h.Lifecycle != nil {
+		if h.Lifecycle.Checkpoint == nil || h.Lifecycle.Restore == nil || r.SourcePlayback {
+			return errors.New("checkpoint replay requires a live plan and both lifecycle hooks")
+		}
+		h.lifecycle = &checkpointState{handles: make(map[int]bool)}
+		h.RecordToolRequests = true
+		// The checkpoint callback can publish a receipt while the replay clock is waiting.
+		record := h.Record
+		var mu sync.Mutex
+		h.Record = func(receipt Receipt) error {
+			mu.Lock()
+			defer mu.Unlock()
+			return record(receipt)
+		}
+	}
+	if h.Periodic != nil || h.lifecycle != nil {
 		if h.IntraTool != nil {
 			return errors.New("periodic tracing and intra-tool diagnostics are mutually exclusive")
 		}
 		h.clock = newReplayClock(sessionStart)
+		if h.Periodic == nil {
+			h.clock.next = math.MaxInt64
+		}
 	}
 	sessionReceipt := Receipt{Event: "session_start", Time: sessionStart, SourcePlayback: r.SourcePlayback}
 	if r.OpenClawTrace != nil {
@@ -137,7 +160,12 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
 		boundaryTime, clockErr := Clock()
-		runErr = errors.Join(runErr, clockErr, h.boundary(cleanup, "session-end", 0, boundaryTime))
+		runErr = errors.Join(runErr, clockErr)
+		if h.lifecycle != nil && h.lifecycle.pending != nil {
+			runErr = errors.Join(runErr, h.finishSuspended(runErr != nil))
+		} else {
+			runErr = errors.Join(runErr, h.boundary(cleanup, "session-end", 0, boundaryTime))
+		}
 		if h.clock != nil {
 			end, clockErr := Clock()
 			runErr = errors.Join(runErr, clockErr, h.markTraceBlocked(h.clock.cursor, end, "session-end", 0))
@@ -173,6 +201,9 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 			if err := runParallel(ctx, h, r, r.Events[i:end], receipt); err != nil {
 				return err
 			}
+			if err := h.startCheckpoint(ctx, e.Step, r.Events[end:]); err != nil {
+				return err
+			}
 			i = end - 1
 			continue
 		}
@@ -181,11 +212,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		}
 		call := r.Plan.Calls[e.Sequence-1]
 		receipt = toolReceipt(h, receipt, call)
-		ready, err := Clock()
-		if err != nil {
-			return err
-		}
-		if err := h.boundary(ctx, "pre-tool", e.Step, ready); err != nil {
+		if err := h.prepareTools(ctx, []Receipt{receipt}); err != nil {
 			return err
 		}
 		if err := h.dispatchReceipt(receipt, "tool"); err != nil {
@@ -224,6 +251,9 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 			if err := processJoin(); err != nil {
 				return err
 			}
+		}
+		if err := h.startCheckpoint(ctx, e.Step, r.Events[i+1:]); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -340,6 +370,7 @@ func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	return receipt
 }
 func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt, out core.CommandResult, replyTime int64, callErr error) error {
+	h.observeHandle(call, out, callErr)
 	receipt.Event = "tool_reply"
 	receipt.Time = replyTime
 	receipt.OutputComparison = compareOutput(call.ResponseStdout, out)

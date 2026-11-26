@@ -54,7 +54,7 @@ func (c *replayClock) wallDeadline(runnable int64) int64 {
 }
 
 func (h Hooks) boundary(ctx context.Context, phase string, step int, transitionTime int64) error {
-	if h.clock == nil {
+	if h.Periodic == nil {
 		return h.Boundary(ctx, phase, step)
 	}
 	return h.capture(ctx, phase, step, transitionTime, false)
@@ -112,6 +112,10 @@ func (h Hooks) markTraceBlocked(ready, actual int64, phase string, step int) err
 
 func (h Hooks) waitRunnable(ctx context.Context, step int, deadline int64) (int64, error) {
 	c := h.clock
+	var completed <-chan struct{}
+	if h.lifecycle != nil && h.lifecycle.pending != nil {
+		completed = h.lifecycle.pending.done
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return 0, err
@@ -124,17 +128,28 @@ func (h Hooks) waitRunnable(ctx context.Context, step int, deadline int64) (int6
 		if now >= deadline {
 			return wall, nil
 		}
-		if now >= c.next {
+		next := deadline
+		// Native checkpoint and restore own the guest. Never freeze it concurrently.
+		if h.lifecycle == nil || h.lifecycle.pending == nil {
+			next = min(next, c.next)
+		}
+		if now >= next {
 			if err := h.capture(ctx, "wait", step, wall, true); err != nil {
 				return 0, err
 			}
 			continue
 		}
-		timer := time.NewTimer(time.Duration(min(deadline, c.next) - now))
+		timer := time.NewTimer(time.Duration(next - now))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return 0, ctx.Err()
+		case <-completed:
+			timer.Stop()
+			if err := h.lifecycle.pending.err; err != nil {
+				return 0, err
+			}
+			completed = nil
 		case <-timer.C:
 		}
 	}

@@ -26,14 +26,17 @@ func main() {
 
 func execute(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("use snapshot, serve, request, or calibrate")
+		return errors.New("use snapshot, serve, request, counters, or calibrate")
 	}
 	command := args[0]
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	var pfnStart, pfnCount uint64
 	var socket, dir string
 	var hostSocket bool
+	var workloadPID int
 	switch command {
+	case "counters":
+		fs.IntVar(&workloadPID, "workload-pid", 0, "workload container init PID in the guest")
 	case "snapshot", "serve":
 		fs.Uint64Var(&pfnStart, "pfn-start", 0, "first guest PFN to inspect")
 		fs.Uint64Var(&pfnCount, "pfn-count", 0, "number of guest PFNs to inspect, zero disables")
@@ -56,6 +59,8 @@ func execute(args []string, out io.Writer) error {
 	}
 	encoder := json.NewEncoder(out)
 	switch command {
+	case "counters":
+		return counters(workloadPID, encoder)
 	case "snapshot":
 		return encoder.Encode(snapshot(pfnStart, pfnCount))
 	case "serve":

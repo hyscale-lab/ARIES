@@ -38,6 +38,7 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 				return err
 			}
 			last, err := h.FinishObservedProcess(ctx, call)
+			h.observeHandle(call, last, err)
 			event.Exit = &last.ExitCode
 			event.ProcessTiming = last.Timing
 			event.Stdout, event.Stderr = last.Stdout, last.Stderr

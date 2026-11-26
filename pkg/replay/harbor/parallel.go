@@ -61,11 +61,14 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 	if h.IntraTool != nil && h.IntraTool.Step == first.Step {
 		return errors.New("intra-tool sampling requires an individual, foreground source call")
 	}
-	ready, err := Clock()
-	if err != nil {
-		return err
+	requests := []Receipt{first}
+	if h.RecordToolRequests {
+		requests[0] = toolReceipt(h, first, r.Plan.Calls[events[0].Sequence-1])
+		for _, e := range events[1:n] {
+			requests = append(requests, toolReceipt(h, sourceReceipt(e), r.Plan.Calls[e.Sequence-1]))
+		}
 	}
-	if err := h.boundary(ctx, "pre-tool", first.Step, ready); err != nil {
+	if err := h.prepareTools(ctx, requests); err != nil {
 		return err
 	}
 	work, cancel := context.WithCancel(ctx)
