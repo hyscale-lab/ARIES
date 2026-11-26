@@ -47,6 +47,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	paymentsTask: paymentsSetup,
 	"embedding-drift-monitor": {
 		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
 		output: "drift_monitor/monitor.py",
@@ -457,6 +458,8 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += hfFinalCheck(r.Trial)
 	}
 	switch r.Trial {
+	case paymentsFirstTrial:
+		cmd += paymentsFinalCheck
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:
@@ -618,6 +621,9 @@ with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/
 	if task == torchTask {
 		python, probe = "/usr/bin/python3", torchNetworkProbe
 	}
+	if task == paymentsTask {
+		probe = paymentsNetworkProbe
+	}
 	command := core.Command{Path: python, Args: []string{"-c", probe}}
 	if recording.Task == nextjsTask {
 		command = core.Command{Path: "/usr/local/bin/node", Args: []string{"-e", nextjsHealthCheck}}
@@ -625,6 +631,9 @@ with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/
 	out, err := checked(ctx, m, id, command)
 	end, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil || !json.Valid([]byte(out)) {
+		if task == paymentsTask {
+			return errors.Join(errors.New("local Payments fixture health readback failed"), err, clockErr)
+		}
 		if recording.Task == nextjsTask {
 			return errors.Join(errors.New("warehouse companion health readback failed"), err, clockErr)
 		}

@@ -318,7 +318,10 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if videoIPP != "" {
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
 	}
-	req.PrivateHostsFile = r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
+	if r.Task == paymentsTask {
+		req.Env = []string{"KAFKA_BROKERS=kafka:9092", "KAFKA_TOPIC=transactions", "KAFKA_CONSUMER_GROUP=transaction-workers", "CUSTOMER_BASE=http://customer:9000"}
+	}
+	req.PrivateHostsFile = r.Task == paymentsTask || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
