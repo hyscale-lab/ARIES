@@ -104,3 +104,39 @@ func (m *Manager) captureNativeCheckpoint(ctx context.Context, id, directory str
 	defer client.Close()
 	return client.Call(ctx, "Firecracker", "CheckpointVM", request, &emptypb.Empty{})
 }
+
+// ParkNativeCheckpoint stops a restored, isolated VM while retaining its
+// original native artifact and guest task identity for a second Resume.
+func (m *Manager) ParkNativeCheckpoint(ctx context.Context, id string) error {
+	if !m.options.NativeCheckpoint || m.options.IdleMode != "checkpoint" {
+		return fmt.Errorf("parking requires native checkpoint mode")
+	}
+	lock, err := m.checkpointLock(ctx, id, true, false)
+	if err != nil {
+		return err
+	}
+	defer unlockCheckpoint(lock)
+	ctx = m.ctx(ctx)
+	state, err := m.loadCheckpoint(id)
+	if err != nil {
+		return err
+	}
+	if state.Phase != "running" || state.NativeDirectory == "" || !state.TaskRunning ||
+		state.Request.ContainerCount > 1 || state.Request.NetNS != "" || len(state.Request.NetworkInterfaces) != 0 {
+		return fmt.Errorf("cannot park native checkpoint in phase %q, running task %t, container count %d, network interfaces %d", state.Phase, state.TaskRunning, state.Request.ContainerCount, len(state.Request.NetworkInterfaces))
+	}
+	processes, err := m.checkpointProcesses(ctx, id)
+	if err != nil {
+		return err
+	}
+	state.Processes = processes
+	state.Phase = "stopping"
+	if err := m.saveCheckpoint(id, state); err != nil {
+		return err
+	}
+	if err := m.stopCheckpointProcesses(ctx, id, state); err != nil {
+		return err
+	}
+	state.Phase = "suspended"
+	return m.saveCheckpoint(id, state)
+}
