@@ -57,6 +57,29 @@ For programmatic use, `harbor.ParseWildClawSource` exposes request arguments and
 
 For a reviewed live plan, `go run ./cmd/wildclaw-docker session.jsonl DISPOSABLE_CONTAINER` runs the recorded tools in a caller-prepared Docker container. Supply the matching task files and shell environment before replay.
 
+### TimeTravelContainer calendar backend
+
+Use a dedicated Linux guest with a standalone TTC daemon and a loaded calendar
+image. The image starts the in-memory calendar token service at
+`/pilot/token.py` and contains the reviewed task workspace. Keep the original
+Harbor verifier on the TTC daemon host. Select the checkpoint or resident
+control explicitly.
+
+```sh
+bin/aries-harbor -wildclaw-calendar session.jsonl -wildclaw-backend ttc \
+  -ttc-command "$TTC" -ttc-image "$CALENDAR_IMAGE" \
+  -ttc-arm checkpoint -ttc-tests "$PRIVATE_TESTS" > ttc-replay.jsonl
+```
+
+`TTC` can be the stock CLI or an executable that forwards its arguments to the
+CLI in the guest. ARIES creates an isolated branch and sets 1 CPU, 512 MiB RAM,
+and no network or swap. It preserves the live token with local dehydrate and
+rehydrate on the same branch around a five-second hold. The control retains
+the running branch through the same hold. The JSONL includes host-monotonic
+lifecycle timestamps, the five tool replies, the verifier result, output hashes
+and cleanup. Collect VMM and TTC memory from the surrounding experiment
+harness. The verifier enters the branch after replay ends.
+
 The optional cohort tests take `WILDCLAW_SOL_TRACE_DIR` and use the bundled inventory by default. Set `WILDCLAW_SOL_INVENTORY` to override its path. Set `WILDCLAW_CALENDAR_TRACE` for the roughly 103-second calendar clock test.
 
 ## Terminal-Bench 4.1 replay pilot

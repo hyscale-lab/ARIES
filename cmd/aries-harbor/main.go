@@ -62,7 +62,12 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	wildSource := flag.String("wildclaw", "", "WildClawBench OpenClaw session JSONL")
 	wildMode := flag.String("wildclaw-mode", "", "inspect, timeline (paced source receipts), or live-plan")
-	wildClaw := flag.String("wildclaw-calendar", "", "inspect the reviewed WildClawBench Sol OpenClaw JSONL and plan")
+	wildClaw := flag.String("wildclaw-calendar", "", "reviewed WildClawBench Sol OpenClaw calendar JSONL")
+	wildBackend := flag.String("wildclaw-backend", "", "calendar live replay backend (ttc)")
+	ttcCommand := flag.String("ttc-command", "", "local TTC executable or an argv-preserving proxy to a dedicated guest daemon")
+	ttcImage := flag.String("ttc-image", "", "prepared local calendar OCI image in the TTC daemon")
+	ttcArm := flag.String("ttc-arm", "", "calendar TTC lifecycle (checkpoint or control)")
+	ttcTests := flag.String("ttc-tests", "", "private verifier path on the TTC daemon host")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
 	periodicSocket := flag.String("periodic-socket", "", "native page collector socket for ten-second runnable and transition captures, or observer-light for the paired clock control")
@@ -130,11 +135,29 @@ func command(ctx context.Context) error {
 	if *wildMode != "" {
 		return errors.New("-wildclaw-mode requires -wildclaw")
 	}
+	if *wildBackend != "" || *ttcCommand != "" || *ttcImage != "" || *ttcArm != "" || *ttcTests != "" {
+		if *wildClaw == "" || *wildBackend != "ttc" || *ttcCommand == "" || *ttcImage == "" ||
+			(*ttcArm != "checkpoint" && *ttcArm != "control") || *ttcTests == "" {
+			return errors.New("TTC calendar replay requires -wildclaw-calendar, -wildclaw-backend ttc, -ttc-command, -ttc-image, -ttc-arm and -ttc-tests")
+		}
+		var otherFlag bool
+		flag.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "wildclaw-calendar", "wildclaw-backend", "ttc-command", "ttc-image", "ttc-arm", "ttc-tests":
+			default:
+				otherFlag = true
+			}
+		})
+		if otherFlag || flag.NArg() != 0 {
+			return errors.New("TTC calendar replay accepts only its source and TTC options")
+		}
+		return runTTCCalendar(ctx, *wildClaw, *ttcCommand, *ttcImage, *ttcArm, *ttcTests, os.Stdout)
+	}
 	if *wildClaw != "" {
 		var otherFlag bool
 		flag.Visit(func(f *flag.Flag) { otherFlag = otherFlag || f.Name != "wildclaw-calendar" })
 		if otherFlag || flag.NArg() != 0 {
-			return errors.New("-wildclaw-calendar is a standalone source-plan inspection; native VM execution is unavailable")
+			return errors.New("-wildclaw-calendar is a standalone source-plan inspection without a selected backend")
 		}
 		data, err := os.ReadFile(*wildClaw)
 		if err != nil {
