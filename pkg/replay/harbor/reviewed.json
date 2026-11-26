@@ -1,5 +1,29 @@
 [
   {
+    "task": "mvcc-lsm-compaction",
+    "workdir": "/app",
+    "image": "localhost/zb-tb41-mvcc-wave1@sha256:013ca18c0f3e77eb3400b384e416574ad0031447f9b014d21ec64501506cd15b",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan"
+    ],
+    "effects": [
+      "Inspect and edit local C++ sources and validate synthetic storage snapshots with the supplied local tests."
+    ],
+    "trials": [
+      {
+        "trial": "142e80d4-a690-4aa9-8722-7b02a585a936",
+        "trajectory_sha256": "691a76e8f280185c4627faeadc5acae4896ec0529308447f5013b1307052b3d5",
+        "rollout_sha256": "31d3d952ceebb3ce009a3892f8dfd9f5806586dc23723559a950eac4a1d31261"
+      }
+    ]
+  },
+  {
     "task": "nextjs-performance",
     "workdir": "/app",
     "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",

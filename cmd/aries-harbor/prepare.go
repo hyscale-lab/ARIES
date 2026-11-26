@@ -47,6 +47,15 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"mvcc-lsm-compaction": {
+		output: "src/flush_builder.cc",
+		initialCheck: `export LC_ALL=C
+test "$(sha256sum Makefile crash_report.txt include/mvcc_lsm/* src/* tests/* | sha256sum)" = '72c9ad7ceab66dc04c0f923ed2d4933931994a1e1e6e12934663fc7b216ebfdf  -'
+command -v git patch make g++ rg python3
+test ! -e .git
+mkdir -p /tmp/codex-home
+` + noShellPatch,
+	},
 	"embedding-drift-monitor": {
 		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
 		output: "drift_monitor/monitor.py",
@@ -457,6 +466,25 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += hfFinalCheck(r.Trial)
 	}
 	switch r.Trial {
+	case "142e80d4-a690-4aa9-8722-7b02a585a936":
+		cmd += `
+sha256sum -c <<'MVCC_ARTIFACTS'
+f23385d475bb28bf6e5b3c977171625d74f6aadedb1b487c69aca1317dd7051e  Makefile
+8d9fba1ff100806f0a13e48de94c147dedd9ea4e901434ae0002efa1503e297f  crash_report.txt
+d1f15cb061010cfaaf707e66508617ae88a4de3add058ddf6a829a1934a323e8  include/mvcc_lsm/flush_builder.h
+00d67ee4b1d9f4a9dc1e63218d15ad0dc2afd359a887aa3abb73003e2136a469  include/mvcc_lsm/lsm_db.h
+dcbef0aca85044157211e21f2759ddddedead7c9b9a23f14ad10bd5d5473f242  include/mvcc_lsm/snapshot_context.h
+8e0cf474081f67d46e8a33443d28aef02ea0b7a21496caa332c74d499880e5b9  include/mvcc_lsm/types.h
+c40a6fe3019b233e7e4a9cad6ac6f8d9ad7c5f8322bea293e0338b8e357c6829  include/mvcc_lsm/version.h
+802bfb6e22195022e1c298756e499ebe3b7371eb825c97938c47c227101da7d6  include/mvcc_lsm/version_store.h
+406912a36c953ba1592dfe909281c000ef57769bf4e757e9fcd8160d682ec966  src/flush_builder.cc
+e3d4838768ae1857394224a28edb4958001d57654de61e66004ab27e200ef584  src/lsm_db.cc
+33e13235e226beb8b1819b09eb1fa63196f39fb2bfbd05a9fa8c9d51d3de6987  src/snapshot_context.cc
+56ad9e10cf0e7c8e3f9e52d0a62b9a754467d653acbb0c2d0071939283f5ee38  src/version_store.cc
+130ef732980ad98df82247d0ad2a0c8be872f97d4dc15ae4d3a10a180301c24e  tests/regression_test.cc
+0750a0c2d746c713a26b1792df231e6685d9f928770d78a1231f46b0e7eb3a76  tests/stress_repro.cc
+MVCC_ARTIFACTS
+`
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:
