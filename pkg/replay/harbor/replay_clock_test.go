@@ -53,6 +53,9 @@ func TestPeriodicCapturesInToolAndWait(t *testing.T) {
 	}
 	var captures []Receipt
 	c := newReplayClock(begin)
+	if c.interval != 10*time.Second {
+		t.Fatalf("periodic capture interval = %s, want 10s", c.interval)
+	}
 	c.interval = 40 * time.Millisecond
 	h := Hooks{
 		clock: c,

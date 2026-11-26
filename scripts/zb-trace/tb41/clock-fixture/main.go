@@ -53,6 +53,7 @@ func main() {
 }
 
 func run(ctx context.Context, options vhive.Options, image string, traced bool, log *json.Encoder) (retErr error) {
+	const modeledWait = 12 * time.Second
 	m, err := vhive.New(options)
 	if err != nil {
 		return err
@@ -73,7 +74,7 @@ func run(ctx context.Context, options vhive.Options, image string, traced bool, 
 	}
 	if err := log.Encode(map[string]any{
 		"event": "fixture", "image": image, "vcpus": 2, "memory_mib": 4096, "storage_mib": 10240,
-		"source_tool_ns": int64(14 * time.Second), "modeled_wait_ns": int64(7 * time.Second),
+		"source_tool_ns": int64(20 * time.Second), "modeled_wait_ns": int64(modeledWait),
 		"has_evaluator": false, "traced": traced,
 	}); err != nil {
 		return err
@@ -131,13 +132,13 @@ func run(ctx context.Context, options vhive.Options, image string, traced bool, 
 		return err
 	}
 	calls := []replay.Call{
-		{Sequence: 1, Operation: "Exec", Script: "sleep 8; cat /tmp/clock-fixture-ready", ResponseStdout: []byte("preserved")},
+		{Sequence: 1, Operation: "Exec", Script: "sleep 13; cat /tmp/clock-fixture-ready", ResponseStdout: []byte("preserved")},
 		{Sequence: 2, Operation: "Exec", Script: "grep -qx preserved /tmp/clock-fixture-ready && printf complete", ResponseStdout: []byte("complete")},
 	}
 	recording := &harbor.Recording{Plan: replay.Plan{Calls: calls}, Events: []harbor.Event{
 		{Kind: "exec_command", Step: 1, CallID: "long", Sequence: 1},
 		{Kind: "function_call_output", Step: 1, CallID: "long", Sequence: 1},
-		{Kind: "exec_command", Step: 2, CallID: "readback", Sequence: 2, Wait: 7 * time.Second},
+		{Kind: "exec_command", Step: 2, CallID: "readback", Sequence: 2, Wait: modeledWait},
 		{Kind: "function_call_output", Step: 2, CallID: "readback", Sequence: 2},
 	}}
 	hooks := harbor.Hooks{

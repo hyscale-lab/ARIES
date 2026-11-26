@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const tracePeriod = 5 * time.Second
+const tracePeriod = 10 * time.Second
 
 // Freeze uses CLOCK_MONOTONIC nanoseconds, from pause acknowledgement to resume request.
 type Freeze struct {

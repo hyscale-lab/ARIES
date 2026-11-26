@@ -4,6 +4,7 @@ import json
 import sys
 
 NS = 1_000_000_000
+PERIOD = 10 * NS
 
 
 def union(spans, start, end):
@@ -39,7 +40,7 @@ def verify(path, traced):
     tool1_reply = reply[0]["monotonic_ns"]
     assert get("readiness_passed") < get("snapshot_complete") < get("restore_complete") < tool1_start < tool1_reply < tool2_start < end < get("removed")
     wait = one("wait_end")
-    assert wait["requested_ns"] == meta["modeled_wait_ns"] == 7 * NS
+    assert wait["requested_ns"] == meta["modeled_wait_ns"] == 12 * NS
     assert dispatch[1]["target_runnable_ns"] == wait["target_runnable_ns"]
     captures = events("trace_capture")
     freezes = [(r["pause_ack_monotonic_ns"], r["resume_request_monotonic_ns"]) for r in captures if "pause_ack_monotonic_ns" in r]
@@ -51,7 +52,7 @@ def verify(path, traced):
         if capture["triggers"] == ["timer"]:
             a, b = previous["monotonic_ns"], capture["monotonic_ns"]
             interval = b - a - union(freezes, a, b)
-            assert 5 * NS <= interval < 5.25 * NS
+            assert PERIOD <= interval < PERIOD + 0.25 * NS
             timer_intervals.append(interval / NS)
     if traced:
         assert len(freezes) == len(captures) == len(events("fixture_capture"))
@@ -75,12 +76,12 @@ def verify(path, traced):
     wait_end = wait["monotonic_ns"]
     frozen_wait = union(freezes, tool1_reply, wait_end)
     wait_wall = wait_end - tool1_reply
-    assert abs(wait_wall - frozen_wait - 7 * NS) < 0.25 * NS
+    assert abs(wait_wall - frozen_wait - wait["requested_ns"]) < 0.25 * NS
     drift = wait["actual_runnable_ns"] - wait["target_runnable_ns"]
     assert 0 <= drift < 0.25 * NS
     tool_wall = tool1_reply - tool1_start
     tool_runnable = tool_wall - union(freezes, tool1_start, tool1_reply)
-    assert 5 * NS < tool_runnable < meta["source_tool_ns"]
+    assert PERIOD < tool_runnable < meta["source_tool_ns"]
     freeze_ns = union(freezes, start, end)
     blocked_ns = union(blocked, start, end)
     combined = union(freezes + blocked, start, end)
