@@ -113,6 +113,9 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	if r.Task == nextjsTask {
 		return nextjsSourceSetup(r.Trial)
 	}
+	if r.Task == paymentsTask {
+		return paymentsSourceSetup(r.Trial), true
+	}
 	task, ok := taskSetups[r.Task]
 	if r.Trial == "3102c53f-5ea4-45e6-b7bf-2ee5c8698518" {
 		// This recording invokes the original argv[0] patch alias by its full path.
@@ -457,9 +460,10 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
 	}
-	switch r.Trial {
-	case paymentsFirstTrial:
+	if r.Task == paymentsTask {
 		cmd += paymentsFinalCheck
+	}
+	switch r.Trial {
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:

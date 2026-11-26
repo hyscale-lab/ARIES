@@ -1,7 +1,10 @@
 package main
 
+import "strings"
+
 const paymentsTask = "payments-pipeline-fix"
 const paymentsFirstTrial = "4d316e1a-590b-41e6-8a2d-a55a895af680"
+const paymentsWheelTrial = "73d8a7b2-71f4-4245-938e-1cb6a8bbc545"
 
 var paymentsSetup = taskSetup{
 	output: "/app/src/worker/worker.py",
@@ -18,9 +21,7 @@ test ! -e src/worker/state.py
 test ! -S /tmp/supervisor.sock
 test "$(python --version)" = 'Python 3.12.14'
 python -c 'from importlib.metadata import version; assert [version(n) for n in ("confluent-kafka", "httpx")] == ["2.6.0", "0.27.2"]'
-mkdir -m 0700 -p /tmp/codex-home /root/.codex/tmp/arg0/codex-arg0BJn4iX
-ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex /root/.codex/tmp/arg0/codex-arg0BJn4iX/apply_patch
-test -x /root/.codex/tmp/arg0/codex-arg0BJn4iX/apply_patch
+mkdir -m 0700 -p /tmp/codex-home
 printf '%s\n' '172.18.0.2 kafka' '172.18.0.3 customer' >> /etc/hosts
 nohup /app/entrypoint.sh >/tmp/payments-entrypoint.log 2>&1 </dev/null &
 for _ in $(seq 1 90); do
@@ -32,6 +33,34 @@ done
 grep -F 'rebuilt 16000 balances and 1216000 processed transactions' /tmp/worker-00.err
 grep -F 'tailing transactions as group transaction-workers' /tmp/worker-00.err
 test -S /tmp/supervisor.sock`,
+}
+
+const paymentsPatchAlias = `
+mkdir -m 0700 -p /root/.codex/tmp/arg0/CAPTURED_ALIAS
+ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex /root/.codex/tmp/arg0/CAPTURED_ALIAS/apply_patch
+test -x /root/.codex/tmp/arg0/CAPTURED_ALIAS/apply_patch
+`
+
+const paymentsWheelCheck = `
+test "$(python -m pip config get global.no-index)" = true
+python -c 'from importlib.util import find_spec; assert find_spec("orjson") is None and find_spec("zstandard") is None'
+sha256sum -c <<'ARIESPAYMENTSWHEELS'
+b48f59114fe318f33bbaee8ebeda696d8ccc94c9e90bc27dbe72153094e26f41  /opt/payments-wheels/orjson-3.10.15-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+72c68dda124a1a138340fb62fa21b9bf4848437d9ca60bd35db36f2d3345f373  /opt/payments-wheels/zstandard-0.23.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+ARIESPAYMENTSWHEELS
+`
+
+func paymentsSourceSetup(trial string) taskSetup {
+	task := paymentsSetup
+	switch trial {
+	case paymentsFirstTrial:
+		task.initialCheck += strings.ReplaceAll(paymentsPatchAlias, "CAPTURED_ALIAS", "codex-arg0BJn4iX")
+	case paymentsWheelTrial:
+		task.initialCheck += paymentsWheelCheck + strings.ReplaceAll(paymentsPatchAlias, "CAPTURED_ALIAS", "codex-arg0GbnyWR")
+	default:
+		task.initialCheck += paymentsWheelCheck
+	}
+	return task
 }
 
 const paymentsNetworkProbe = `import json, socket, subprocess, urllib.request

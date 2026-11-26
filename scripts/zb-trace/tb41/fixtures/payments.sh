@@ -6,7 +6,11 @@ runtime=$(realpath "$2")
 unit=$3
 arm=$4
 out=$(realpath -m "$5")
-trial=4d316e1a-590b-41e6-8a2d-a55a895af680
+trial=${6:-4d316e1a-590b-41e6-8a2d-a55a895af680}
+case "$trial" in
+    4d316e1a-590b-41e6-8a2d-a55a895af680|4df3e44e-0549-4a45-ac27-619c8b3d12f9|73d8a7b2-71f4-4245-938e-1cb6a8bbc545) ;;
+    *) exit 2 ;;
+esac
 bridge=zbpayments198
 sidecars="$out.sidecars"
 mkdir -m 0700 "$sidecars"
