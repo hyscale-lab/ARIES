@@ -38,6 +38,24 @@ grep -hFx 'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' /etc/apt/s
 ` + sourceHarnessDirectory,
 }
 
+const nextjsWave1BrowserArchives = `
+# The recorded first launch found GLib, then failed to load libnspr4.so.
+apt-get -o APT::Update::Error-Mode=any update -qq
+DEBIAN_FRONTEND=noninteractive apt-get -qq -y --no-install-recommends install libglib2.0-0
+test "$(dpkg-query -W -f='${Version}' libglib2.0-0)" = '2.74.6-2+deb12u9'
+test -e /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0
+if ldconfig -p | grep -q 'libnspr4\.so'; then exit 1; fi
+dpkg_state=$(sha256sum /var/lib/dpkg/status)
+` + nextjsChromiumArchiveCache + `
+test "$dpkg_state" = "$(sha256sum /var/lib/dpkg/status)"
+apt-cache policy libnspr4 libnss3 libcups2 libc-bin
+sha256sum /var/lib/apt/lists/*InRelease
+(cd /var/cache/aries-apt/archives && LC_ALL=C sha256sum -- *.deb) > /tmp/aries-nextjs-chromium-archives.sha256
+printf 'Chromium archive count: '
+wc -l < /tmp/aries-nextjs-chromium-archives.sha256
+sha256sum /tmp/aries-nextjs-chromium-archives.sha256
+`
+
 // Both processes use the original task ports in the guest's shared namespace.
 const nextjsHealthCheck = `
 const assert = require('node:assert/strict');

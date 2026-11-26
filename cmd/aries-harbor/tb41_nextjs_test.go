@@ -9,7 +9,7 @@ import (
 
 func TestNextjsSetupBindsReviewedTrials(t *testing.T) {
 	setup, ok := sourceSetup(&harbor.Recording{Task: nextjsTask, Trial: nextjsTrial})
-	if !ok || setup != nextjsSetup {
+	if !ok || setup.initialCheck != nextjsSetup.initialCheck+nextjsWave1BrowserArchives {
 		t.Fatal("reviewed Next.js source did not receive its fixture checks")
 	}
 	setup, ok = sourceSetup(&harbor.Recording{Task: nextjsTask, Trial: nextjsWave2Trial})

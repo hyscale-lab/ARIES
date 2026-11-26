@@ -7,7 +7,9 @@ const nextjsWave2Trial = "09288c37-6d48-4073-a05a-1d5770fecef0"
 func nextjsSourceSetup(trial string) (taskSetup, bool) {
 	switch trial {
 	case nextjsTrial:
-		return nextjsSetup, true
+		setup := nextjsSetup
+		setup.initialCheck += nextjsWave1BrowserArchives
+		return setup, true
 	case nextjsWave2Trial:
 		setup := nextjsDatedSetup("2026-08-31T08:03:11.700Z", "20260831T080311Z")
 		// This source writes a Python patch helper and invokes it via env.
