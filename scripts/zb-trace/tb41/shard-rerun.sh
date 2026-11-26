@@ -16,9 +16,10 @@ case "$arm" in
     default|omp-two) ;;
     *) exit 2 ;;
 esac
-out="$stage/runs/pretrain-shard-corruption-$source-repair-$node-$arm"
+out="$stack/runs/pretrain-shard-corruption-$source-repair-$node-$arm"
 [[ ! -e "$out" && ! -e "$out.driver" ]]
-mkdir -p "$stage/runs"
+mkdir -p "$stack/runs"
+[[ ${#out} -le 93 ]]
 flags=(-codex-tools "$stage/fixtures/codex-harbor-tools.tar.gz" -os-tools "$stage/fixtures/circuit-patch-debs.tar.gz")
 if [[ "$source" == 14bdc7ee ]]; then
     flags+=(-shard-scipy-wheel "$stage/fixtures/shard-wave5-scipy.tar.gz")
