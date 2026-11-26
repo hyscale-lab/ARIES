@@ -1,6 +1,13 @@
-#!/usr/bin/env bash
-set -euo pipefail
-trace=$(dirname "$(realpath "$0")")
-python3 -B "$trace/placement.py" "${ZB_TB41_UNIT##*/}" "$ZB_TB41_RUNTIME" "$ZB_TB41_PEER_UNIT" \
-    --restored-api "${1#unix://}" >"$(dirname "$ZB_CGROUP_EVENTS")/placement-live.json"
-exec "$ZB_TB41_PLACEMENT_SAMPLER" "$@"
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+from placement import inspect
+
+env = os.environ
+receipt = inspect(Path(env['ZB_TB41_UNIT']).name, Path(env['ZB_TB41_RUNTIME']), env['ZB_TB41_PEER_UNIT'],
+                  restored_api=Path(sys.argv[1].removeprefix('unix://')))
+Path(env['ZB_CGROUP_EVENTS']).with_name('placement-live.json').write_text(json.dumps(receipt) + '\n')
+os.execv(sys.executable, [sys.executable, '-u', env['ZB_TB41_PLACEMENT_SAMPLER'], sys.argv[1]])
