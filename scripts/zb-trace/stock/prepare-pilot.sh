@@ -50,7 +50,11 @@ pdf-digest|conflicting-handling)
     [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
-paper-to-poster|arxiv-tables|social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
+sam3-inference|sam3-debug)
+    [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
+    cpus=10 memory=8192 workdir=/tmp_workspace
+    ;;
+scp-crawl|wiki-biography|paper-to-poster|arxiv-tables|social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
@@ -94,7 +98,7 @@ if task=='roy':
     env.extend(['VIRTUAL_ENV=/opt/venv','DEBIAN_FRONTEND=noninteractive'])
 if task in {'pdf-digest','conflicting-handling'}:
     env.extend(['PIP_NO_INDEX=1','PIP_FIND_LINKS=/tmp/document-wheels'])
-if task.startswith('social-') or task in {'paper-to-poster','arxiv-tables','tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling','schedule-edit','trash-fixture','chapter-summary'}:
+if task.startswith(('social-','sam3-')) or task in {'scp-crawl','wiki-biography','paper-to-poster','arxiv-tables','tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling','schedule-edit','trash-fixture','chapter-summary'}:
     # Match the source Docker default capability set in the nested workload container.
     caps=['CAP_'+name for name in 'CHOWN DAC_OVERRIDE FOWNER FSETID KILL SETGID SETUID SETPCAP NET_BIND_SERVICE NET_RAW SYS_CHROOT MKNOD AUDIT_WRITE SETFCAP'.split()]
     c['process']['capabilities'].update(bounding=caps,effective=caps,permitted=caps)
@@ -113,15 +117,21 @@ assert 'network' in {ns['type'] for ns in c['linux']['namespaces']}
 (p/'config.json').write_text(json.dumps(c))
 PY
 "$AENV_CLI" upload "$sandbox" "$run/config.json" /workload/config.json
-if [[ "$task" == paper-to-poster ]]; then
+if [[ "$task" == sam3-inference || "$task" == sam3-debug ]]; then
+    "$(dirname "$0")/sam-fixture.sh" "$task" upload "$sandbox"
+elif [[ "$task" == paper-to-poster ]]; then
     paper=/local/zb-study3-stock/local-sol/paper-to-poster
     "$AENV_CLI" upload "$sandbox" "$paper/environment.tar" /tmp/paper.tar
     "$AENV_CLI" upload "$sandbox" "$paper/wheels.tar" /tmp/paper-wheels.tar
     "$AENV_CLI" upload "$sandbox" "$(dirname "$0")/paper-image.mjs" /workload/rootfs/tmp/paper-image.mjs
     guest sh -ec 'cd /workload/rootfs/tmp_workspace; tar xf /tmp/paper.tar; mkdir /workload/rootfs/tmp/paper-wheels; tar xf /tmp/paper-wheels.tar -C /workload/rootfs/tmp/paper-wheels; rm /tmp/paper.tar /tmp/paper-wheels.tar'
-elif [[ "$task" == arxiv-tables ]]; then
+elif [[ "$task" == arxiv-tables || "$task" == wiki-biography || "$task" == scp-crawl ]]; then
     "$AENV_CLI" upload "$sandbox" /local/zb-study3-stock/local-sol/npm.tar /tmp/arxiv-npm.tar
-    "$AENV_CLI" upload "$sandbox" /local/zb-study3-stock/local-sol/arxiv-tables/warmup.sh /workload/rootfs/tmp/arxiv-warmup.sh
+    "$AENV_CLI" upload "$sandbox" "/local/zb-study3-stock/local-sol/$task/warmup.sh" /workload/rootfs/tmp/arxiv-warmup.sh
+    if [[ "$task" == wiki-biography ]]; then
+        "$AENV_CLI" upload "$sandbox" /local/zb-study3-stock/local-sol/wiki-biography/skills.tar /tmp/biography-skills.tar
+        guest sh -ec 'mkdir -p /workload/rootfs/root/skills; tar xf /tmp/biography-skills.tar -C /workload/rootfs/root/skills; rm /tmp/biography-skills.tar; test -f /workload/rootfs/root/skills/agent-browser/SKILL.md'
+    fi
     guest sh -ec 'mkdir /workload/rootfs/tmp/arxiv-npm; tar xf /tmp/arxiv-npm.tar -C /workload/rootfs/tmp/arxiv-npm; rm /tmp/arxiv-npm.tar'
 elif [[ "$task" == social-[2-6] ]]; then
     "$(dirname "$0")/social-fixture.sh" "$task" upload "$sandbox"
@@ -171,14 +181,22 @@ elif [[ "$task" == roy ]]; then
     guest runc exec zb-workload sh -ec 'cd /app; export LC_ALL=C; test "$(sha256sum data/*.mol data/TB3_Conf_Properties.csv | sha256sum)" = "236aeefd45cca191035b28b385bc8226eca7b4c2bf8fb1d8966bfd7b8f288bb4  -"; test -d /results; test ! -e /results/TB3_Conf_Answers.csv; test ! -e fit_roy.py; ! command -v apply_patch; test "$(command -v python)" = /opt/venv/bin/python; python -c "import sys,importlib.util as u,importlib.metadata as m; assert sys.version_info[:2]==(3,11) and u.find_spec(\"sklearn\") is None; assert [m.version(k) for k in (\"pandas\",\"numpy\",\"scipy\",\"rdkit\")]==[\"3.0.3\",\"2.4.6\",\"1.17.1\",\"2026.3.2\"]"'
 elif [[ "$task" == paper-to-poster ]]; then
     guest runc exec zb-workload sh -ec 'cd /tmp/paper-wheels; echo "f0bece302c4c3745a9067f9be75f4f60ff3eb510f4c7dde03a8713877a7eee07  SHA256SUMS" | sha256sum -c -; sha256sum -c SHA256SUMS; cd /tmp_workspace; echo "abaca18dd17b55f6bad05529b6cd3ac058015e59962c8e6270d0e3b3ca4b6ea3  paper.pdf" | sha256sum -c -; test ! -e results; git rev-parse --is-inside-work-tree || git init -q; PIP_NO_INDEX=1 PIP_FIND_LINKS=/tmp/paper-wheels bash .wildclaw/run-warmup.sh; rm -r /tmp/paper-wheels'
-    guest runc exec -d --env HOME=/tmp/zb-paper-agent --env OPENCLAW_STATE_DIR=/tmp/zb-paper-agent/state --env NODE_NO_WARNINGS=1 zb-workload node /tmp/paper-image.mjs serve
-    guest runc exec zb-workload sh -ec 'for i in $(seq 60); do test ! -S /tmp/zb-paper-image.sock || exit 0; sleep 1; done; exit 1'
-elif [[ "$task" == arxiv-tables ]]; then
+elif [[ "$task" == sam3-inference || "$task" == sam3-debug ]]; then
+    if [[ "$task" == sam3-debug ]]; then
+        source "$(dirname "$0")/hof-network.sh"
+        hof_hosts=(github.com)
+        hof_network_guest "$sandbox" "$run"
+    fi
+    "$(dirname "$0")/sam-fixture.sh" "$task" ready "$sandbox" >"$run/$task-ready.txt"
+elif [[ "$task" == arxiv-tables || "$task" == wiki-biography || "$task" == scp-crawl ]]; then
     source "$(dirname "$0")/hof-network.sh"
-    hof_hosts=(arxiv.org)
+    hof_hosts=(arxiv.org); cutoff=2026-07-17T14:15:00Z
+    if [[ "$task" == scp-crawl ]]; then hof_hosts=(scp-wiki.wikidot.com scp-wiki.wdfiles.com); cutoff=2026-07-17T14:33:19Z; fi
+    if [[ "$task" == wiki-biography ]]; then hof_hosts=(zh.wikipedia.org zh.m.wikipedia.org); cutoff=2026-07-17T14:25:12Z; fi
     hof_network_guest "$sandbox" "$run"
-    guest runc exec --env npm_config_cache=/tmp/arxiv-npm --env npm_config_offline=true --env npm_config_before=2026-07-17T14:15:00Z zb-workload bash /tmp/arxiv-warmup.sh
-    guest runc exec zb-workload sh -ec 'set -e; test -f /tmp/wildclaw-harbor-warmup.done; agent-browser --version; curl --fail --silent --head --max-time 20 https://arxiv.org/e-print/2501.07888 >/dev/null; rm -r /tmp/arxiv-npm; test ! -e /tmp_workspace/results' >"$run/arxiv-ready.txt"
+    guest runc exec --env npm_config_cache=/tmp/arxiv-npm --env npm_config_offline=true --env npm_config_before="$cutoff" zb-workload bash /tmp/arxiv-warmup.sh
+    guest runc exec zb-workload sh -ec 'set -e; test -f /tmp/wildclaw-harbor-warmup.done; agent-browser --version; rm -r /tmp/arxiv-npm; test ! -e /tmp_workspace/results' >"$run/$task-ready.txt"
+    if [[ "$task" == arxiv-tables ]]; then guest runc exec zb-workload curl --fail --silent --head --max-time 20 https://arxiv.org/e-print/2501.07888 >/dev/null; fi
 elif [[ "$task" == social-[2-6] ]]; then
     "$(dirname "$0")/social-fixture.sh" "$task" ready "$sandbox" >"$run/social-ready.txt"
 elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
@@ -200,6 +218,10 @@ else
     guest runc exec zb-workload sh -ec 'test -r /tmp_workspace/images.tar; command -v python3; readlink -f /bin/sh'
     guest runc exec zb-workload sha256sum /tmp_workspace/images.tar >"$run/fixture.sha256"
     printf '%s  /tmp_workspace/images.tar\n' f9ebc183b76d8f2ec58e9c0160a2f07e86fa6460d5febd786a2bf735f3368946 | cmp "$run/fixture.sha256" -
+fi
+if [[ "$task" == paper-to-poster || "$task" == sam3-inference ]]; then
+    guest sh -ec 'runc exec -d --env HOME=/tmp/zb-paper-agent --env OPENCLAW_STATE_DIR=/tmp/zb-paper-agent/state --env NODE_NO_WARNINGS=1 zb-workload node /tmp/paper-image.mjs serve </dev/null >/tmp/zb-paper-node.log 2>&1'
+    guest runc exec zb-workload sh -ec 'for i in $(seq 60); do test ! -S /tmp/zb-paper-image.sock || exit 0; sleep 1; done; exit 1'
 fi
 date -u +%FT%T.%NZ >"$run/ready"
 guest runc exec zb-workload cat /proc/sys/kernel/random/boot_id >"$run/boot-id"

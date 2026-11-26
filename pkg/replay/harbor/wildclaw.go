@@ -15,7 +15,11 @@ const (
 // Only these digest-reviewed local file operations may use the generic document hooks.
 func localFileSource(sha string) bool {
 	switch sha {
-	case "687aa2a8b04cdb4937c23afca77428cd6a194bb141af772453d988a06794e136",
+	case "6811509f8ac7460ddcd9be97b3a68166384941e8795837a0b3365560a24cfb61",
+		"6fdb46f630e5f42e9b7dd8225f8c59785e6bc9e8d8881b3b3744a57d8cfbaada",
+		"f9c8fb5e9bb4b9dc90005a65e86952af6a7adbc78a616c81f1c1cfaead2a47db",
+		"299e58cc16a532659b379102be2543c43f6dd24f397b94f460b04dc4d42dc25c",
+		"687aa2a8b04cdb4937c23afca77428cd6a194bb141af772453d988a06794e136",
 		"aa69da99ce7d25f0e9e591183a395ad1538c121e5a7d23cf3b8d1bc781c13502",
 		"0f72cc52fae9f4eeb833fcad744dc7af0e8f9f8717038cf54dc59849732aed15",
 		"4d94b36f689fd172277244f8542f630bb91e33a6235c95f1a337c9a6f5359ff0",

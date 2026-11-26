@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -133,5 +134,14 @@ func TestMappedFileDictionaryRetainsAliasesAndUnknowns(t *testing.T) {
 	b, err := json.Marshal(index.files())
 	if err != nil || string(b) != `[{"device":7,"inode":99,"paths":[]},{"device":8,"inode":100,"paths":["/a","/a (deleted)"]}]` {
 		t.Fatalf("identity map %s %v", b, err)
+	}
+}
+
+func TestSnapshotSixteenGiBWithMMIOHole(t *testing.T) {
+	if err := execute([]string{"snapshot", "--pfn-count", "4456448"}, io.Discard); err != nil {
+		t.Fatalf("16 GiB RAM plus 1 GiB MMIO hole: %v", err)
+	}
+	if err := execute([]string{"snapshot", "--pfn-count", "4456449"}, io.Discard); err == nil {
+		t.Fatal("accepted a PFN beyond the supported span")
 	}
 }

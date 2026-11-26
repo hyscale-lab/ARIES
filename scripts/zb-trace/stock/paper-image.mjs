@@ -19,8 +19,11 @@ if (process.argv[2] === 'serve') {
     client.on('end',async ()=>{
       try {
         const args=JSON.parse(body);
-        if (Object.keys(args).sort().join()!=='images,prompt' || !Array.isArray(args.images) ||
-            !args.images.every(p=>/^\/tmp_workspace\/page_renders\/page_\d+\.png$/.test(p))) throw Error('Unexpected image arguments');
+        const keys = Object.keys(args).sort().join();
+        const paper = keys === 'images,prompt' && Array.isArray(args.images) && args.images.length === 3 &&
+          args.images.every(p=>/^\/tmp_workspace\/page_renders\/page_\d+\.png$/.test(p));
+        const sam = keys === 'image,prompt' && args.image === '/tmp_workspace/sam3/assets/images/test_image.jpg';
+        if (!paper && !sam) throw Error('Unexpected image arguments');
         const result=await tool.execute('paper-image',args);
         client.end(JSON.stringify(result));
       } catch(error) {

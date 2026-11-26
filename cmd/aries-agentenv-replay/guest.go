@@ -53,6 +53,12 @@ func (g guest) process(c replay.Call) (processConfig, error) {
 		p = processConfig{binary, []string{"--codex-run-as-apply-patch", string(c.Body)}, c.Workdir}
 	case "ViewImage":
 		p = processConfig{"/usr/local/bin/aries-harbor-image", []string{c.Path, strconv.Itoa(c.ImageWidth), strconv.Itoa(c.ImageHeight)}, ""}
+	case "OpenClawRead":
+		if !g.openClaw {
+			return p, errors.New("unexpected native file read")
+		}
+		const read = `import {createReadTool} from "/usr/lib/node_modules/openclaw/node_modules/@mariozechner/pi-coding-agent/dist/core/tools/read.js"; const result=await createReadTool("/tmp_workspace").execute("read",JSON.parse(process.argv[1])); process.stdout.write(result.content[0].text);`
+		p = processConfig{"node", []string{"--no-warnings", "--input-type=module", "-e", read, string(c.Body)}, ""}
 	case "OpenClawImage":
 		if !g.openClaw {
 			return p, errors.New("unexpected model image operation")

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxPFNs      = 9 << 18 // Cover 8 GiB of x86 guest RAM plus the 1 GiB MMIO hole (18 MiB of flags).
+	maxPFNs      = 17 << 18 // Cover 16 GiB of x86 guest RAM plus the 1 GiB MMIO hole (34 MiB of flags).
 	maxPFNOffset = (1 << 55) - 1
 	maxRuns      = 1 << 18
 	dirBudget    = 256

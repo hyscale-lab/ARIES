@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import time
 from urllib.parse import quote
 from urllib.error import HTTPError
@@ -36,19 +37,27 @@ def fetch(task, target):
             return
         assert entry['type']=='file'
         path.parent.mkdir(parents=True,exist_ok=True)
-        def valid(data):
-            if len(data)!=entry['size']:return False
-            if entry.get('lfs'):return hashlib.sha256(data).hexdigest()==entry['lfs']['oid']
-            header=('blob '+str(len(data))).encode()+b'\0'
-            return hashlib.sha1(header+data).hexdigest()==entry['oid']
-        if path.is_file() and valid(path.read_bytes()):return
+        def valid(candidate):
+            if candidate.stat().st_size != entry['size']:
+                return False
+            lfs = entry.get('lfs')
+            digest = hashlib.sha256() if lfs else hashlib.sha1(('blob '+str(entry['size'])).encode()+b'\0')
+            expected = lfs['oid'] if lfs else entry['oid']
+            with candidate.open('rb') as source:
+                for chunk in iter(lambda: source.read(1 << 20), b''):
+                    digest.update(chunk)
+            return digest.hexdigest() == expected
+        if path.is_file() and valid(path):
+            return
+        tmp=path.with_name(path.name+'.download')
         for attempt in range(7):
             try:
-                with urlopen(f'https://huggingface.co/datasets/{dataset}/resolve/{revision}/'+quote(name,safe='/'),timeout=90) as f:
-                    data=f.read()
-                if not valid(data):raise ValueError('publisher object mismatch: '+name)
-                tmp=path.with_name(path.name+'.download')
-                tmp.write_bytes(data);tmp.replace(path);return
+                with urlopen(f'https://huggingface.co/datasets/{dataset}/resolve/{revision}/'+quote(name,safe='/'),timeout=90) as f, tmp.open('wb') as out:
+                    shutil.copyfileobj(f,out,length=1 << 20)
+                if not valid(tmp):
+                    raise ValueError('publisher object mismatch: '+name)
+                tmp.replace(path)
+                return
             except OSError as exc:
                 if attempt==6:raise
                 delay=2**attempt

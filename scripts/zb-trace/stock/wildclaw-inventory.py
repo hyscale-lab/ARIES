@@ -39,12 +39,19 @@ for src in csv.DictReader(a.manifest.open()):
     assert replies.keys()<=calls.keys()
     tools=Counter(calls.values())
     running=sum(r.get('details',{}).get('status')=='running' for r in replies.values() if isinstance(r.get('details'),dict))
+    search_providers=Counter()
+    for reply in replies.values():
+        if reply.get('toolName')=='web_search':
+            content=reply['content']
+            assert len(content)==1 and content[0]['type']=='text'
+            payload=json.loads(content[0]['text'])
+            search_providers[payload.get('provider','unknown')]+=1
     image_replies=[r for r in replies.values() if r.get('toolName')=='image']
     rejected=sum(isinstance(r.get('details'),dict) and str(r['details'].get('error','')).startswith('Model does not support images:') for r in image_replies)
     image_errors=sum(isinstance(r.get('details'),dict) and r['details'].get('status')=='error' for r in image_replies)
     results.append(dict(**src,calls=len(calls),source_replies=len(replies),unanswered=len(calls)-len(replies),
                         parallel_batches=batches,running_replies=running,tools=json.dumps(dict(sorted(tools.items()))),
                         exec_literal_http_url=has_url,exec_network_client_spelling=external_clients,exec_model_provider_spelling=model_in_exec,
-                        image_source_model_input_rejections=rejected,image_source_other_status_errors=image_errors-rejected,image_source_without_error_status=len(image_replies)-image_errors))
+                        search_reply_providers=json.dumps(dict(sorted(search_providers.items()))),image_source_model_input_rejections=rejected,image_source_other_status_errors=image_errors-rejected,image_source_without_error_status=len(image_replies)-image_errors))
 with a.output.open('w') as f:
     w=csv.DictWriter(f,fieldnames=results[0],lineterminator='\n');w.writeheader();w.writerows(results)

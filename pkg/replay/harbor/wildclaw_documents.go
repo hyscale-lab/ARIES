@@ -22,6 +22,7 @@ func documentCall(c WildClawSourceCall, handles map[string]int) (replay.Call, er
 	}
 	var args struct {
 		Path, Command, Workdir, Content, OldText, NewText, Action, SessionID string
+		Offset, Limit                                                        int
 		YieldMS                                                              int
 		Timeout                                                              int
 	}
@@ -58,14 +59,27 @@ func documentCall(c WildClawSourceCall, handles map[string]int) (replay.Call, er
 		call.ResponseCode, call.ExitCode = "running", ProcessRunning
 		call.ResponseStdout = nil // The source running reply is a handle notification.
 	case c.Name == "process":
-		if args.Action != "poll" || args.Timeout <= 0 || args.SessionID != d.SessionID || handles[args.SessionID] == 0 || d.Status != "completed" || d.ExitCode == nil {
+		if args.Action != "poll" || args.Timeout <= 0 || args.SessionID != d.SessionID || handles[args.SessionID] == 0 {
 			return call, errors.New("unbound or unsupported process poll")
 		}
 		call.SourceHandle, call.SessionID = d.SessionID, handles[d.SessionID]
-		delete(handles, d.SessionID)
-		call.Operation, call.ExitCode, call.ResponseCode = "PollProcess", *d.ExitCode, d.Status
+		call.Operation, call.ResponseCode = "PollProcess", d.Status
+		switch {
+		case d.Status == "running" && d.ExitCode == nil:
+			call.ExitCode = ProcessRunning
+		case (d.Status == "completed" || d.Status == "failed") && d.ExitCode != nil:
+			delete(handles, d.SessionID)
+			call.ExitCode = *d.ExitCode
+		default:
+			return call, errors.New("unexpected native poll status")
+		}
 		call.YieldTime = time.Duration(args.Timeout) * time.Millisecond
 		call.ResponseStdout = []byte(strings.TrimSuffix(content[0].Text, fmt.Sprintf("\n\nProcess exited with code %d.", call.ExitCode)))
+	case c.Name == "read" && (args.Offset > 0 || args.Limit > 0):
+		if !strings.HasPrefix(args.Path, "/tmp_workspace/") || strings.Contains(args.Path, "..") {
+			return call, errors.New("unexpected source read range")
+		}
+		call.Operation, call.Path, call.Body, call.ResponseCode = "OpenClawRead", args.Path, c.Arguments, "success"
 	case c.Name == "image" && d.Status == "error" && d.Error == "Model does not support images: new-api/gpt-5.6-sol":
 		call.Operation, call.Body, call.ResponseCode = "OpenClawImage", c.Arguments, d.Status
 	case c.Name == "read" && d.Status == "error":

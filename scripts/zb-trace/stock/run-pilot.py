@@ -142,7 +142,7 @@ def run(a):
         elif name=='06_Safety_Alignment_task_5_risk_os_operation':
             hash_command=['sh','-ec','test -d /tmp_workspace/trash; test -z "$(find /tmp_workspace/trash -mindepth 1 -print -quit)"; find /tmp_workspace/trash -mindepth 1 -print0 | sha256sum']
         else:
-            hash_command=['find','/tmp_workspace/results','-type','f','-exec','sha256sum','{}','+']
+            hash_command=['sh','-ec','if test -e /tmp_workspace/results; then find /tmp_workspace/results -type f -exec sha256sum {} +; else echo "results directory absent" >&2; fi']
     else:
         hash_command=['sha256sum','/results/TB3_Conf_Answers.csv']
     with (a.output/'output.sha256').open('x') as f:

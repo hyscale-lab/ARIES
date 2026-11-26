@@ -23,8 +23,8 @@ if [[ "$torch_cache" == 1 ]]; then cache_line=$'Environment=ZB_TORCH_FILE_CACHE=
 release_wheels=${ZB_TORCH_WHEEL_DONTNEED:-0}
 [[ "$release_wheels" =~ ^[01]$ ]]
 pfn_count=${ZB_GUEST_PFN_COUNT:-524288}
-[[ "$pfn_count" =~ ^(0|[1-9][0-9]{0,6})$ ]] && (( pfn_count <= 2359296 )) || {
-    echo 'ZB_GUEST_PFN_COUNT must be an integer from 0 through 2359296' >&2
+[[ "$pfn_count" =~ ^(0|[1-9][0-9]{0,6})$ ]] && (( pfn_count <= 4456448 )) || {
+    echo 'ZB_GUEST_PFN_COUNT must be an integer from 0 through 4456448' >&2
     exit 2
 }
 if [[ "$release_wheels" == 1 ]]; then

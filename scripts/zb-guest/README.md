@@ -34,7 +34,7 @@ per-region tried-region details. Availability of a sysfs directory or
 parameter does not establish feature activation or savings.
 
 A PFN request walks guest `/proc/kpageflags` in 32 KiB batches without reading
-the corresponding guest memory bytes. The input range is capped at 2,097,152
+the corresponding guest memory bytes. The input range is capped at 4,456,448
 PFNs and the result at 262,144 runs. Each run contains equal raw flags and
 covers a half-open guest PFN interval. The response gives requested and
 observed endpoints and a completion state. End of file, insufficient

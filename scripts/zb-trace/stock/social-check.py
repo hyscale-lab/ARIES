@@ -38,9 +38,11 @@ else:
     assert isinstance(assignments['report'],ast.JoinedStr)
     content=''.join(n.value if isinstance(n,ast.Constant) else replacements[ast.unparse(n.value)] for n in assignments['report'].values)
 expected=hashlib.sha256(content.encode()).hexdigest()
-actual,path=(run/'output.sha256').read_text().split()
-assert path=='/tmp_workspace/results/results.md'
+output=(run/'output.sha256').read_text().splitlines()
+actual={path:h for h,path in (line.split(maxsplit=1) for line in output)}
+assert set(actual)<={'/tmp_workspace/results/results.md'}
+
 print(json.dumps(dict(source_sha256=hashlib.sha256(trace.read_bytes()).hexdigest(),source_calls=len(calls),
     first_status_matches=len(calls)-len(diff),status_divergences=diff,expected_output_sha256=expected,
-    all_output_bytes_match_source=actual==expected,output_sha256={path:actual},
+    all_output_bytes_match_source=actual=={'/tmp_workspace/results/results.md':expected},output_sha256=actual,
     reply_comparisons={k:r.get('output_comparison') for k,r in live.items()}),indent=2))

@@ -10,6 +10,12 @@ trace="$base/01_Productivity_Flow_task_8_real_image_category.jsonl"
 [[ "$2" =~ ^[a-zA-Z0-9-]+$ ]]
 task=${3:-image-category}
 case "$task" in
+    sam3-inference|sam3-debug)
+        cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache"
+        if [[ "$task" == sam3-inference ]]; then service="si-$1-$2"; trace="$base/02_Code_Intelligence_task_1_sam3_inference.jsonl"; source_sha=6fdb46f630e5f42e9b7dd8225f8c59785e6bc9e8d8881b3b3744a57d8cfbaada
+        else service="sd-$1-$2"; trace="$base/02_Code_Intelligence_task_2_sam3_debug.jsonl"; source_sha=f9c8fb5e9bb4b9dc90005a65e86952af6a7adbc78a616c81f1c1cfaead2a47db; fi;;
+    scp-crawl) service="wc-$1-$2"; source_sha=6811509f8ac7460ddcd9be97b3a68166384941e8795837a0b3365560a24cfb61; trace="$base/01_Productivity_Flow_task_9_scp_crawl.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
+    wiki-biography) service="wb-$1-$2"; source_sha=299e58cc16a532659b379102be2543c43f6dd24f397b94f460b04dc4d42dc25c; trace="$base/01_Productivity_Flow_task_5_wikipedia_biography.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
     paper-to-poster) service="pp-$1-$2"; source_sha=687aa2a8b04cdb4937c23afca77428cd6a194bb141af772453d988a06794e136; trace="$base/05_Creative_Synthesis_task_7_paper_to_poster.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
     arxiv-tables) service="tx-$1-$2"; source_sha=aa69da99ce7d25f0e9e591183a395ad1538c121e5a7d23cf3b8d1bc781c13502; trace="$base/01_Productivity_Flow_task_2_table_tex_download.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
     image-category) service="image-$1-$2"; source_sha=2543f544fef10d6ee0da62095eb37bdfc9ba9f4d5998db798e7a54e85c0918ab; cache="$base/image-cache";;
@@ -93,9 +99,12 @@ for _ in {1..60}; do
     sleep 1
 done
 pid=$(cat "$work/server.pid")
-if [[ "$task" == arxiv-tables ]]; then
+if [[ "$task" == arxiv-tables || "$task" == wiki-biography || "$task" == sam3-debug || "$task" == scp-crawl ]]; then
     source "$here/hof-network.sh"
     hof_hosts=(arxiv.org)
+    if [[ "$task" == wiki-biography ]]; then hof_hosts=(zh.wikipedia.org zh.m.wikipedia.org); fi
+    if [[ "$task" == scp-crawl ]]; then hof_hosts=(scp-wiki.wikidot.com scp-wiki.wdfiles.com); fi
+    if [[ "$task" == sam3-debug ]]; then hof_hosts=(github.com); fi
     hof_start_endpoints "$work" "$pid"
 fi
 regctl() { in_stock env REGCTL_CONFIG="$base/registry/regctl.json" "$base/server-bundle/deps/regctl/v0.11.5/regctl" "$@"; }
@@ -132,6 +141,12 @@ if [[ "$task" == link-pix ]]; then
     if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
     aenv exec "$sandbox" runc exec zb-workload python3 -c 'from PIL import Image; import hashlib; im=Image.open("/tmp_workspace/results/result.png"); assert im.size==(600,600) and im.mode=="RGB"; print(hashlib.sha256(im.tobytes()).hexdigest())' >"$run/traced/pixel-sha256"
     python3 "$here/link-pix-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == sam3-inference || "$task" == sam3-debug ]]; then
+    python3 "$here/sam-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == scp-crawl ]]; then
+    python3 "$here/crawl-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == wiki-biography ]]; then
+    python3 "$here/wiki-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == paper-to-poster ]]; then
     python3 "$here/paper-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == arxiv-tables ]]; then
