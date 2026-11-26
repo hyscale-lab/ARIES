@@ -149,7 +149,7 @@ func TestWildClawSolEngineCoverage(t *testing.T) {
 			}
 		}
 	}
-	if observedCalls != 1109 || observedReplies != 1108 || unanswered != 1 || livePlans != 13 {
+	if observedCalls != 1109 || observedReplies != 1108 || unanswered != 1 || livePlans != 15 {
 		t.Fatalf("observed %d requests, %d replies, %d unanswered, %d live plans", observedCalls, observedReplies, unanswered, livePlans)
 	}
 }

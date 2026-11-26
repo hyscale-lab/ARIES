@@ -10,6 +10,8 @@ trace="$base/01_Productivity_Flow_task_8_real_image_category.jsonl"
 [[ "$2" =~ ^[a-zA-Z0-9-]+$ ]]
 task=${3:-image-category}
 case "$task" in
+    paper-to-poster) service="pp-$1-$2"; source_sha=687aa2a8b04cdb4937c23afca77428cd6a194bb141af772453d988a06794e136; trace="$base/05_Creative_Synthesis_task_7_paper_to_poster.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
+    arxiv-tables) service="tx-$1-$2"; source_sha=aa69da99ce7d25f0e9e591183a395ad1538c121e5a7d23cf3b8d1bc781c13502; trace="$base/01_Productivity_Flow_task_2_table_tex_download.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
     image-category) service="image-$1-$2"; source_sha=2543f544fef10d6ee0da62095eb37bdfc9ba9f4d5998db798e7a54e85c0918ab; cache="$base/image-cache";;
     link-pix) service="puz-$1-$2"; source_sha=0f37ca65135cf0513ada9eef9fe1cc62dc8751cdc0f7fa872ad06d6e68e27709
         trace="$base/02_Code_Intelligence_task_9_link_a_pix_color_easy_zh.jsonl"; cache="$base/live/home/image-cache";;
@@ -52,6 +54,7 @@ sed -e "s/page_reporting_order=6/page_reporting_order=$order/" \
 printf '%s  %s\n' "$source_sha" "$trace" | sha256sum -c -
 unshare --mount --net --propagation private /bin/bash "$here/smoke.sh" "$service" serve "$run/server.toml" >"$run/service.log" 2>&1 &
 launcher=$!
+hof_proxies=()
 pid=
 in_stock() { nsenter -t "$pid" -m -n -- "$@"; }
 aenv() { in_stock env XDG_CONFIG_HOME="$work/xdg" "$base/cli-bundle/aenv" "$@"; }
@@ -77,6 +80,7 @@ cleanup() {
     else
         kill -TERM "$launcher" 2>/dev/null || true
     fi
+    for child in "${hof_proxies[@]}"; do kill -TERM "$child" 2>/dev/null || true; done
     wait "$launcher" || true
     exit "$status"
 }
@@ -89,6 +93,11 @@ for _ in {1..60}; do
     sleep 1
 done
 pid=$(cat "$work/server.pid")
+if [[ "$task" == arxiv-tables ]]; then
+    source "$here/hof-network.sh"
+    hof_hosts=(arxiv.org)
+    hof_start_endpoints "$work" "$pid"
+fi
 regctl() { in_stock env REGCTL_CONFIG="$base/registry/regctl.json" "$base/server-bundle/deps/regctl/v0.11.5/regctl" "$@"; }
 regctl image digest 127.0.0.1:18762/library/wildclaw:v13 >"$run/image-digest"
 cmp "$run/image-digest" <(printf '%s\n' "${image##*@}")
@@ -123,6 +132,10 @@ if [[ "$task" == link-pix ]]; then
     if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
     aenv exec "$sandbox" runc exec zb-workload python3 -c 'from PIL import Image; import hashlib; im=Image.open("/tmp_workspace/results/result.png"); assert im.size==(600,600) and im.mode=="RGB"; print(hashlib.sha256(im.tobytes()).hexdigest())' >"$run/traced/pixel-sha256"
     python3 "$here/link-pix-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == paper-to-poster ]]; then
+    python3 "$here/paper-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == arxiv-tables ]]; then
+    python3 "$here/table-check.py" "$trace" "$run/traced" "$base/local-sol/arxiv-tables/fixture.json" >"$run/traced/validation.json"
 elif [[ "$task" == social-[2-6] ]]; then
     python3 "$here/social-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapter-summary ]]; then

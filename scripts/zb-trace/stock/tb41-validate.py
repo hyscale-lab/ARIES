@@ -76,6 +76,12 @@ def validate(run, reference):
             and validation["actual_sha256"] == actual_sha
         )
         output_mode = validation["mode"]
+    elif config["task"] == "intrastat-meldung":
+        checks = (run / "final-task-state.txt").read_text().splitlines()
+        historical = next(d["checks"] for d in baseline if d["event"] == "final_task_state").splitlines()
+        assert checks[0] == actual_output and checks[-2:] == historical[-2:]
+        assert len([c for c in checks if c.startswith("live archive digest ")]) == 4
+        output_mode = "four_live_archive_digests_and_stable_reconciliation_fields"
     elif config["task"] == "music-harmony":
         assert actual_output.split(maxsplit=1)[1] == final.split(maxsplit=1)[1] == "/app/harmony.mxl"
         assert all(r["output_comparison"]=="matched_ignoring_trailing_newlines" and r["exit_code"]==0 for r in replies[-2:])
@@ -177,6 +183,51 @@ def validate(run, reference):
             == poll["source_output_sha256"]
         )
         checks = {"passed_lines": 5, "recovery_30000_seconds": float(result.group(1))}
+    if config["task"] == "payments-pipeline-fix":
+        final_text = (run / "final-task-state.txt").read_text()
+        reference_text = next(d["checks"] for d in baseline if d["event"] == "final_task_state")
+        file_pattern = r"^([0-9a-f]{64})  (\S+)$"
+        files = re.findall(file_pattern, final_text, re.MULTILINE)
+        assert len(files) == 6 and files == re.findall(file_pattern, reference_text, re.MULTILINE)
+        prep = run / "prepare"
+        for phase in ("before-snapshot", "after-restore"):
+            health = json.loads((prep / f"payments-{phase}-health.json").read_text())
+            assert health["customer"] == "ok" and "transaction-worker_00   RUNNING" in health["worker_status"]
+            assert health["kafka_watermarks"] == [[0, n] for n in (301720, 309928, 307192, 297160)]
+            for role in ("workload", "kafka", "customer"):
+                state = json.loads((prep / "payments" / f"{role}-{phase}-state.json").read_text())
+                assert state["id"] == f"zb-{role}" and state["status"] == "running"
+        ending = next(d for d in live if d["event"] == "session_end_processes")
+        original_ending = next(d for d in baseline if d["event"] == "session_end_processes")
+        assert ending["recorded_ending_handles"] == original_ending["recorded_ending_handles"]
+        assert set(ending["source_process_states"]) == set(original_ending["source_process_states"])
+        checks = {
+            "source_files_matched": len(files),
+            "ending_handle_states": ending["source_process_states"],
+            "original_ending_handle_states": original_ending["source_process_states"],
+            "integration_logs": {},
+        }
+        for name, body in re.findall(r"/tmp/worker-integration-(results|final)\.log\n(.*?)(?=/tmp/worker-integration-|\Z)", final_text, re.S):
+            latency = re.findall(r"^PASS; max notification latency ([\d.]+)", body, re.M)
+            checks["integration_logs"][name] = {
+                "pass": bool(latency),
+                "max_notification_latency_s": float(latency[-1]) if latency else None,
+                "failures": [line for line in body.splitlines() if line.startswith(("Traceback", "AssertionError"))],
+            }
+        assert set(checks["integration_logs"]) == {"results", "final"}
+    if config["task"] == "medical-claims-processing":
+        final_checks = (run / "final-task-state.txt").read_text().splitlines()
+        reference_checks = next(d["checks"] for d in baseline if d["event"] == "final_task_state").splitlines()
+        assert final_checks == reference_checks
+        checks = json.loads(final_checks[-1])
+        for phase in ("before-snapshot", "after-restore"):
+            health = json.loads((run / "prepare" / (phase + "-health.json")).read_text())
+            assert health["workspace_cases"] == 21 and health["workspace_decisions"] == 0
+            assert health["chromium_workspace_page"] and health["playwright_sse_http"] == 200
+            assert health["guest_interfaces"] == ["lo"] and health["uid"] == 65534
+            for role in ("workspace", "playwright-mcp"):
+                state = json.loads((run / "prepare" / role / (phase + ".json")).read_text())
+                assert state["status"] == "running" and state["id"] == "zb-" + role
     return {
         "task": config["task"],
         "trial_id": config["trial_id"],

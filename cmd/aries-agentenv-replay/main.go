@@ -152,7 +152,7 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 		RelaxedMeasuredStatus: true,
 		FinishObservedProcess: sessions.PollObservedProcess,
 		Exec: func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
-			if c.Operation == "ReadFile" || c.Operation == "WriteFile" || c.Operation == "EditFile" || c.Operation == "ApplyPatch" || c.Operation == "ViewImage" {
+			if c.Operation == "OpenClawImage" || c.Operation == "ReadFile" || c.Operation == "WriteFile" || c.Operation == "EditFile" || c.Operation == "ApplyPatch" || c.Operation == "ViewImage" {
 				var stdout, stderr bytes.Buffer
 				ctx, timings := core.WithCommandTimings(ctx)
 				result, err := g.stream(ctx, c, &stdout, &stderr)
@@ -168,6 +168,19 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 	})
 	if err != nil {
 		return err
+	}
+	if len(r.EndingProcessSessions) > 0 {
+		at, err := harbor.Clock()
+		if err != nil {
+			return err
+		}
+		if err := enc.Encode(map[string]any{
+			"event": "session_end_processes", "monotonic_ns": at,
+			"source_process_states":   sessions.EndingProcessStates(r.EndingProcessSessions),
+			"recorded_ending_handles": r.EndingProcessSessions,
+		}); err != nil {
+			return err
+		}
 	}
 	return lifecycle.finish(ctx, periodic)
 }
@@ -217,7 +230,7 @@ func command(ctx context.Context) error {
 	}
 	g.openClaw = r.OpenClawTrace != nil
 	switch r.Task {
-	case "03_Social_Interaction_task_2_chat_action_extraction", "03_Social_Interaction_task_3_chat_multi_step_reasoning", "03_Social_Interaction_task_4_chat_thread_consolidation", "03_Social_Interaction_task_5_chat_escalation_routing", "03_Social_Interaction_task_6_chat_cross_dept_update_zh", "06_Safety_Alignment_task_4_authority", "06_Safety_Alignment_task_5_risk_os_operation", "06_Safety_Alignment_task_6_prompt_injection", "01_Productivity_Flow_task_8_real_image_category", "02_Code_Intelligence_task_9_link_a_pix_color_easy_zh", "01_Productivity_Flow_task_10_pdf_digest", "04_Search_Retrieval_task_2_conflicting_handling":
+	case "05_Creative_Synthesis_task_7_paper_to_poster", "01_Productivity_Flow_task_2_table_tex_download", "03_Social_Interaction_task_2_chat_action_extraction", "03_Social_Interaction_task_3_chat_multi_step_reasoning", "03_Social_Interaction_task_4_chat_thread_consolidation", "03_Social_Interaction_task_5_chat_escalation_routing", "03_Social_Interaction_task_6_chat_cross_dept_update_zh", "06_Safety_Alignment_task_4_authority", "06_Safety_Alignment_task_5_risk_os_operation", "06_Safety_Alignment_task_6_prompt_injection", "01_Productivity_Flow_task_8_real_image_category", "02_Code_Intelligence_task_9_link_a_pix_color_easy_zh", "01_Productivity_Flow_task_10_pdf_digest", "04_Search_Retrieval_task_2_conflicting_handling":
 		g.shell = "sh" // The recorded shell rejects pipefail and identifies itself as sh.
 	}
 	g.roy = r.Task == "roy-polymorph-cn"

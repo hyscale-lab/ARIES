@@ -15,7 +15,7 @@ def read(path):
             yield from map(json.loads, f)
 
 
-def counters(run, start):
+def counters(run, start, events):
     for host in read(run / "host.jsonl"):
         row = {"stream":"host","t_ns":host["begin_ns"]-start}
         for name, item in [("vmm",host),("recording_vmm",host.get("recording_vmm",{}))]:
@@ -25,9 +25,7 @@ def counters(run, start):
         yield row
     for guest in read(run / "guest.jsonl"):
         t = guest.get("host_receive_ns", guest.get("scheduled_ns"))
-        if t is None:
-            continue
-        row = {"stream":"guest","t_ns":t-start,"missed_ticks":guest.get("missed_ticks"),"values":{}}
+        row = {"stream":"guest","t_ns":None if t is None else t-start,"guest_begin_ns":guest.get("guest_begin_ns"),"missed_ticks":guest.get("missed_ticks"),"values":{}}
         for k,data in guest.get("source",{}).items():
             if k in ("memory.current","memory.stat","memory.events","cpu.stat","/proc/meminfo","/proc/vmstat"):
                 if k=="memory.current":
@@ -40,7 +38,7 @@ def counters(run, start):
                 assert re.fullmatch(r"[A-Za-z0-9_= .,:\-\s]+",data)
                 row["values"][k]=data.splitlines()
         yield row
-    for ev in read(run / "events.jsonl") or ():
+    for ev in events:
         if "monotonic_ns" in ev:
             row={"stream":"event","t_ns":ev["monotonic_ns"]-start,"event":ev["event"]}
             row.update({k:ev[k] for k in ("sequence","exit_code","expected_exit_code") if isinstance(ev.get(k),int)})
@@ -61,5 +59,5 @@ if __name__=="__main__":
         path=args.target/r["recording"]/"counters.jsonl.gz"
         path.parent.mkdir(parents=True,exist_ok=True)
         with path.open("wb") as raw,gzip.GzipFile(filename="",fileobj=raw,mode="wb",mtime=0) as out:
-            for row in counters(run,start):
+            for row in counters(run,start,events):
                 out.write((json.dumps(row,separators=(",",":"))+"\n").encode())

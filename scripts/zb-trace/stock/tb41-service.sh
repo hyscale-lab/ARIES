@@ -47,8 +47,9 @@ for _ in $(seq 60); do
 done
 pid=$(cat "$label/server.pid")
 ns=(nsenter -t "$pid" -n -m --)
-if [[ "$task" == hof-topology-interpenetration ]]; then
+if [[ "$task" == hof-topology-interpenetration || "$task" == nextjs-performance ]]; then
     source "$b/scripts/zb-trace/stock/hof-network.sh"
+    if [[ "$task" == nextjs-performance ]]; then hof_hosts=("${nextjs_hosts[@]}"); fi
     hof_start_endpoints "$label" "$pid"
 fi
 reg="$b/server-bundle/deps/regctl/v0.11.5/regctl"

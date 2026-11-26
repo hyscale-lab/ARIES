@@ -25,6 +25,8 @@ if [[ "$(jq -er .task "$meta")" == hof-topology-interpenetration ]]; then
     : "${TB41_PACKAGE_ARCHIVE:?}"
     guest mkdir -p /workload/rootfs/opt/zb-hof
     upload_archive "$TB41_PACKAGE_ARCHIVE" "$packages" /workload/rootfs/opt/zb-hof
+elif [[ "$(jq -er .task "$meta")" == intrastat-meldung ]]; then
+    upload_archive "${TB41_PACKAGE_ARCHIVE:?}" "$packages" /workload/rootfs/tmp
 elif [[ -n "$packages" ]]; then
     : "${TB41_PACKAGE_ARCHIVE:?}"
     guest mkdir /workload/rootfs/tmp/aries-guest-offline-packages

@@ -11,7 +11,10 @@ import sys
 from pack import PAGE, pages
 
 def rows(path):
-    with path.open() as f:
+    if not path.is_file():
+        path=Path(str(path)+'.gz')
+    opener=gzip.open if path.suffix=='.gz' else open
+    with opener(path, 'rt') as f:
         return list(map(json.loads,f))
 
 def load_bytes(path):

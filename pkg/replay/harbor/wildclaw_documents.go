@@ -66,6 +66,8 @@ func documentCall(c WildClawSourceCall, handles map[string]int) (replay.Call, er
 		call.Operation, call.ExitCode, call.ResponseCode = "PollProcess", *d.ExitCode, d.Status
 		call.YieldTime = time.Duration(args.Timeout) * time.Millisecond
 		call.ResponseStdout = []byte(strings.TrimSuffix(content[0].Text, fmt.Sprintf("\n\nProcess exited with code %d.", call.ExitCode)))
+	case c.Name == "image" && d.Status == "error" && d.Error == "Model does not support images: new-api/gpt-5.6-sol":
+		call.Operation, call.Body, call.ResponseCode = "OpenClawImage", c.Arguments, d.Status
 	case c.Name == "read" && d.Status == "error":
 		if args.Path == "" || d.Error != "ENOENT: no such file or directory, access '"+args.Path+"'" {
 			return call, errors.New("unreviewed file read error")

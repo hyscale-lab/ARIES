@@ -2,6 +2,8 @@
 # Functions called only inside a fresh HOF service or during HOF guest preparation.
 hof_hosts=(api.github.com github.com raw.githubusercontent.com release-assets.githubusercontent.com snapshot.ubuntu.com)
 
+nextjs_hosts=(registry.npmjs.org snapshot.debian.org cdn.playwright.dev storage.googleapis.com playwright.download.prss.microsoft.com)
+
 hof_start_endpoints() {
     local label=$1 pid=$2 host address target
     local number=10 endpoint_pid

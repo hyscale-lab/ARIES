@@ -53,6 +53,11 @@ func (g guest) process(c replay.Call) (processConfig, error) {
 		p = processConfig{binary, []string{"--codex-run-as-apply-patch", string(c.Body)}, c.Workdir}
 	case "ViewImage":
 		p = processConfig{"/usr/local/bin/aries-harbor-image", []string{c.Path, strconv.Itoa(c.ImageWidth), strconv.Itoa(c.ImageHeight)}, ""}
+	case "OpenClawImage":
+		if !g.openClaw {
+			return p, errors.New("unexpected model image operation")
+		}
+		p = processConfig{"node", []string{"/tmp/paper-image.mjs", string(c.Body)}, ""}
 	case "WriteFile", "EditFile":
 		if !g.openClaw {
 			return p, errors.New("unexpected OpenClaw document operation")

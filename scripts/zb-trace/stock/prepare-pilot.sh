@@ -26,6 +26,15 @@ tb41)
         freight_helper="$(dirname "$0")/scripts/zb-trace/stock/freight-companion.sh"
         feed_image=$("$freight_helper" image "$run")
         mounts+=(--image-mount "/event-feed/rootfs=$feed_image")
+    elif [[ "$(jq -er .task "$meta")" == payments-pipeline-fix ]]; then
+        payments_helper="$(dirname "$0")/scripts/zb-trace/stock/payments-companions.sh"
+    elif jq -e '.task == "medical-claims-processing" or .task == "intrastat-meldung" or .task == "nextjs-performance"' "$meta" >/dev/null; then
+        claims_helper="$(dirname "$0")/scripts/zb-trace/stock/claims-companions.sh"
+        mapfile -t companion_roles < <(jq -er '.companions[].Role' "$meta")
+        for role in "${companion_roles[@]}"; do
+            companion_image=$("$claims_helper" image "$run" "$role")
+            mounts+=(--image-mount "/$role/rootfs=$companion_image")
+        done
     fi
     ;;
 roy)
@@ -41,7 +50,7 @@ pdf-digest|conflicting-handling)
     [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
-social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
+paper-to-poster|arxiv-tables|social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
@@ -85,14 +94,17 @@ if task=='roy':
     env.extend(['VIRTUAL_ENV=/opt/venv','DEBIAN_FRONTEND=noninteractive'])
 if task in {'pdf-digest','conflicting-handling'}:
     env.extend(['PIP_NO_INDEX=1','PIP_FIND_LINKS=/tmp/document-wheels'])
-if task.startswith('social-') or task in {'tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling','schedule-edit','trash-fixture','chapter-summary'}:
+if task.startswith('social-') or task in {'paper-to-poster','arxiv-tables','tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling','schedule-edit','trash-fixture','chapter-summary'}:
     # Match the source Docker default capability set in the nested workload container.
     caps=['CAP_'+name for name in 'CHOWN DAC_OVERRIDE FOWNER FSETID KILL SETGID SETUID SETPCAP NET_BIND_SERVICE NET_RAW SYS_CHROOT MKNOD AUDIT_WRITE SETFCAP'.split()]
     c['process']['capabilities'].update(bounding=caps,effective=caps,permitted=caps)
 if task=='tb41':
     env=json.loads((Path(os.environ['TB41_FIXTURE_DIR'])/'image-env.json').read_text())
     assert isinstance(env,list) and all(isinstance(item,str) and '=' in item for item in env)
-    if json.loads((Path(os.environ['TB41_FIXTURE_DIR'])/'metadata.json').read_text())['task']=='freight-dispatch-shift':
+    task_name=json.loads((Path(os.environ['TB41_FIXTURE_DIR'])/'metadata.json').read_text())['task']
+    if task_name=='payments-pipeline-fix':
+        env.extend(['KAFKA_BROKERS=kafka:9092', 'KAFKA_TOPIC=transactions', 'KAFKA_CONSUMER_GROUP=transaction-workers', 'CUSTOMER_BASE=http://customer:9000'])
+    if task_name=='freight-dispatch-shift':
         env.append('DISPATCH_EVENT_API_URL=http://event-feed:8080')
 c['process']['env']=env
 c['root']['readonly']=False
@@ -101,7 +113,17 @@ assert 'network' in {ns['type'] for ns in c['linux']['namespaces']}
 (p/'config.json').write_text(json.dumps(c))
 PY
 "$AENV_CLI" upload "$sandbox" "$run/config.json" /workload/config.json
-if [[ "$task" == social-[2-6] ]]; then
+if [[ "$task" == paper-to-poster ]]; then
+    paper=/local/zb-study3-stock/local-sol/paper-to-poster
+    "$AENV_CLI" upload "$sandbox" "$paper/environment.tar" /tmp/paper.tar
+    "$AENV_CLI" upload "$sandbox" "$paper/wheels.tar" /tmp/paper-wheels.tar
+    "$AENV_CLI" upload "$sandbox" "$(dirname "$0")/paper-image.mjs" /workload/rootfs/tmp/paper-image.mjs
+    guest sh -ec 'cd /workload/rootfs/tmp_workspace; tar xf /tmp/paper.tar; mkdir /workload/rootfs/tmp/paper-wheels; tar xf /tmp/paper-wheels.tar -C /workload/rootfs/tmp/paper-wheels; rm /tmp/paper.tar /tmp/paper-wheels.tar'
+elif [[ "$task" == arxiv-tables ]]; then
+    "$AENV_CLI" upload "$sandbox" /local/zb-study3-stock/local-sol/npm.tar /tmp/arxiv-npm.tar
+    "$AENV_CLI" upload "$sandbox" /local/zb-study3-stock/local-sol/arxiv-tables/warmup.sh /workload/rootfs/tmp/arxiv-warmup.sh
+    guest sh -ec 'mkdir /workload/rootfs/tmp/arxiv-npm; tar xf /tmp/arxiv-npm.tar -C /workload/rootfs/tmp/arxiv-npm; rm /tmp/arxiv-npm.tar'
+elif [[ "$task" == social-[2-6] ]]; then
     "$(dirname "$0")/social-fixture.sh" "$task" upload "$sandbox"
 elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
     "$(dirname "$0")/document-fixture.sh" "$task" upload "$sandbox"
@@ -132,16 +154,31 @@ elif [[ "$task" == image-category ]]; then
 fi
 guest sh -ec 'runc run -d --bundle /workload zb-workload </dev/null >/tmp/zb-workload-start.log 2>&1'
 guest runc state zb-workload >"$run/workload-state.json"
+if [[ -n "${payments_helper:-}" ]]; then "$payments_helper" start "$run" "$sandbox"; fi
+if [[ -n "${claims_helper:-}" ]]; then "$claims_helper" start "$run" "$sandbox"; fi
 if [[ -n "${freight_helper:-}" ]]; then "$freight_helper" start "$run" "$sandbox"; fi
-if [[ "$task" == tb41 && "$(jq -er .task "$meta")" == hof-topology-interpenetration ]]; then
+if [[ "$task" == tb41 ]] && jq -e '.task == "hof-topology-interpenetration" or .task == "nextjs-performance"' "$meta" >/dev/null; then
     source "$(dirname "$0")/scripts/zb-trace/stock/hof-network.sh"
+    if [[ "$(jq -er .task "$meta")" == nextjs-performance ]]; then hof_hosts=("${nextjs_hosts[@]}"); fi
     hof_network_guest "$sandbox" "$run"
 fi
 guest sh -ec 'cat /proc/cmdline; cat /sys/module/page_reporting/parameters/page_reporting_order; cat /sys/module/damon_reclaim/parameters/enabled; cat /proc/sys/kernel/random/boot_id' >"$run/guest-setup.txt"
 if [[ "$task" == tb41 ]]; then
     "$(dirname "$0")/tb41-ready.sh" "$sandbox" "$TB41_FIXTURE_DIR"
+    if [[ -n "${payments_helper:-}" ]]; then "$payments_helper" health "$run" "$sandbox" before-snapshot; fi
+    if [[ -n "${claims_helper:-}" ]]; then "$claims_helper" health "$run" "$sandbox" before-snapshot; fi
 elif [[ "$task" == roy ]]; then
     guest runc exec zb-workload sh -ec 'cd /app; export LC_ALL=C; test "$(sha256sum data/*.mol data/TB3_Conf_Properties.csv | sha256sum)" = "236aeefd45cca191035b28b385bc8226eca7b4c2bf8fb1d8966bfd7b8f288bb4  -"; test -d /results; test ! -e /results/TB3_Conf_Answers.csv; test ! -e fit_roy.py; ! command -v apply_patch; test "$(command -v python)" = /opt/venv/bin/python; python -c "import sys,importlib.util as u,importlib.metadata as m; assert sys.version_info[:2]==(3,11) and u.find_spec(\"sklearn\") is None; assert [m.version(k) for k in (\"pandas\",\"numpy\",\"scipy\",\"rdkit\")]==[\"3.0.3\",\"2.4.6\",\"1.17.1\",\"2026.3.2\"]"'
+elif [[ "$task" == paper-to-poster ]]; then
+    guest runc exec zb-workload sh -ec 'cd /tmp/paper-wheels; echo "f0bece302c4c3745a9067f9be75f4f60ff3eb510f4c7dde03a8713877a7eee07  SHA256SUMS" | sha256sum -c -; sha256sum -c SHA256SUMS; cd /tmp_workspace; echo "abaca18dd17b55f6bad05529b6cd3ac058015e59962c8e6270d0e3b3ca4b6ea3  paper.pdf" | sha256sum -c -; test ! -e results; git rev-parse --is-inside-work-tree || git init -q; PIP_NO_INDEX=1 PIP_FIND_LINKS=/tmp/paper-wheels bash .wildclaw/run-warmup.sh; rm -r /tmp/paper-wheels'
+    guest runc exec -d --env HOME=/tmp/zb-paper-agent --env OPENCLAW_STATE_DIR=/tmp/zb-paper-agent/state --env NODE_NO_WARNINGS=1 zb-workload node /tmp/paper-image.mjs serve
+    guest runc exec zb-workload sh -ec 'for i in $(seq 60); do test ! -S /tmp/zb-paper-image.sock || exit 0; sleep 1; done; exit 1'
+elif [[ "$task" == arxiv-tables ]]; then
+    source "$(dirname "$0")/hof-network.sh"
+    hof_hosts=(arxiv.org)
+    hof_network_guest "$sandbox" "$run"
+    guest runc exec --env npm_config_cache=/tmp/arxiv-npm --env npm_config_offline=true --env npm_config_before=2026-07-17T14:15:00Z zb-workload bash /tmp/arxiv-warmup.sh
+    guest runc exec zb-workload sh -ec 'set -e; test -f /tmp/wildclaw-harbor-warmup.done; agent-browser --version; curl --fail --silent --head --max-time 20 https://arxiv.org/e-print/2501.07888 >/dev/null; rm -r /tmp/arxiv-npm; test ! -e /tmp_workspace/results' >"$run/arxiv-ready.txt"
 elif [[ "$task" == social-[2-6] ]]; then
     "$(dirname "$0")/social-fixture.sh" "$task" ready "$sandbox" >"$run/social-ready.txt"
 elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
@@ -184,3 +221,5 @@ echo "$sandbox" >"$run/restored-id"
 date -u +%FT%T.%NZ >"$run/restore-end"
 guest runc state zb-workload >"$run/restored-workload-state.json"
 guest runc exec zb-workload cat /proc/sys/kernel/random/boot_id | cmp "$run/boot-id" -
+if [[ -n "${claims_helper:-}" ]]; then "$claims_helper" health "$run" "$sandbox" after-restore; fi
+if [[ -n "${payments_helper:-}" ]]; then "$payments_helper" health "$run" "$sandbox" after-restore; fi
