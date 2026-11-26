@@ -1,12 +1,80 @@
 package main
 
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
+)
+
 const pretrainShardTask = "pretrain-shard-corruption"
 const pretrainShardLiveTrial = "9c75c09e-2faa-413e-857f-9179c82b62b1"
 const pretrainShardSciPyTrial = "14bdc7ee-84ce-4083-8e4c-c093b1551fca"
 const pretrainShardSciPyArchive = "6e888283ab4d7a0fc68b201eaa4ccbad2f82869434af26e41678d2dce2e06cfa"
 const pretrainShardWheelDirectory = "/opt/aries-shard-wheels"
 
-const pretrainShardLiveNetwork = `import json, socket
+const pretrainShardHistoryNetwork = "zb-shard-history-200"
+const pretrainShardHistoryCAPath = "/opt/aries-shard-history.crt"
+
+func stageShardHistoryCA(ctx context.Context, m *vhive.Manager, id, path string, log *json.Encoder) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	cert, rest := pem.Decode(data)
+	if cert == nil || cert.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return errors.New("shard history TLS fixture requires one public PEM certificate")
+	}
+	parsed, err := x509.ParseCertificate(cert.Bytes)
+	if err != nil {
+		return err
+	}
+	for _, host := range []string{"raw.githubusercontent.com", "s3.amazonaws.com", "www.gutenberg.org"} {
+		if err := parsed.VerifyHostname(host); err != nil {
+			return err
+		}
+	}
+	out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python",
+		Args: []string{"-c", pretrainShardHistoryHealth, base64.StdEncoding.EncodeToString(data)}})
+	if err != nil {
+		return err
+	}
+	return log.Encode(map[string]any{"event": "shard_historical_fixture_ready",
+		"certificate_sha256": fmt.Sprintf("%x", sha256.Sum256(data)), "readback": json.RawMessage(out)})
+}
+
+const pretrainShardHistoryHealth = `import base64, json, os, socket, ssl, sys, urllib.request
+from pathlib import Path
+certificate = os.environ['CURL_CA_BUNDLE']
+with Path(certificate).open('xb') as out:
+    out.write(base64.b64decode(sys.argv[1], validate=True))
+hosts = ('raw.githubusercontent.com', 's3.amazonaws.com', 'www.gutenberg.org')
+context = ssl.create_default_context(cafile=certificate)
+for host in hosts:
+    assert socket.gethostbyname(host) == '10.251.200.1'
+    with urllib.request.urlopen(f'https://{host}/healthz', context=context, timeout=5) as reply:
+        assert reply.status == 200 and reply.read() == b'shard-history'
+print(json.dumps({'isolated_address': '10.251.200.1', 'tls_hosts': hosts}))`
+
+// The original logs omit Torch's explicit single-thread default warning.
+func pretrainShardTimingTrial(trial string) bool {
+	switch trial {
+	case "1ef39d1f-e661-4825-96ff-b2ba499a9e47", pretrainShardLiveTrial, "1d577700-1aa3-4bf8-a92e-d0bb6dea1925", pretrainShardSciPyTrial:
+		return true
+	}
+	return false
+}
+
+const pretrainShardLiveNetwork = `import json, os, socket
 
 hosts = ('raw.githubusercontent.com', 's3.amazonaws.com', 'www.gutenberg.org')
 addresses = {host: sorted({a[4][0] for a in socket.getaddrinfo(host, 443, socket.AF_INET)}) for host in hosts}
@@ -16,7 +84,7 @@ except socket.gaierror:
     pass
 else:
     raise RuntimeError('unexpected DNS access outside the reviewed endpoints')
-print(json.dumps({'contemporary_dependency_diagnostic': True, 'allowed_addresses': addresses}))`
+print(json.dumps({'contemporary_dependency_diagnostic': 'CURL_CA_BUNDLE' not in os.environ, 'allowed_addresses': addresses}))`
 
 const pretrainShardLiveReadback = `python - <<'PYDOWNLOADS'
 import hashlib, json
