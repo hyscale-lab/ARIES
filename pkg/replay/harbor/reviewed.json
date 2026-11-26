@@ -1,5 +1,29 @@
 [
   {
+    "task": "freight-dispatch-shift",
+    "workdir": "/workspace",
+    "image": "docker.io/harborframework/terminal-bench@sha256:f9ffe49f11bcc6e77e33fd1bacd0a60027547526d716575c71e52517ac96daf8",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan"
+    ],
+    "effects": [
+      "Read the supplied dispatch packet, construct a local scheduler and exercise the recorded self-contained loopback tests."
+    ],
+    "trials": [
+      {
+        "trial": "3dc97e08-94f1-44a9-baa2-81629ba79eab",
+        "trajectory_sha256": "75c107cf57838084a878b35f85dc63a9728628393a9bf024389988b9a40a8f78",
+        "rollout_sha256": "bb9fadbaa58d27e2303f0ebea49e732fef643e3db7a7ef5fef35db84a1b439b3"
+      }
+    ]
+  },
+  {
     "task": "nextjs-performance",
     "workdir": "/app",
     "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",

@@ -237,6 +237,9 @@ func command(ctx context.Context) error {
 	if r.Task == nextjsTask {
 		requiredCompanion = "localhost/zb-nextjs-warehouse@sha256:decefdfc46bbed17ebdc58a58d0b220ae52d4c71b363ce42b58ecde17d309ba8"
 	}
+	if r.Task == "freight-dispatch-shift" {
+		requiredCompanion = "docker.io/harborframework/terminal-bench@sha256:f5975c403f3d3edc43e926ac49a63ea8561f9731ea63366180424380ad952782"
+	}
 	if o.CompanionImage != requiredCompanion {
 		return fmt.Errorf("companion image differs from the source fixture for trial %s", r.Trial)
 	}
@@ -319,6 +322,10 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
 	}
 	req.PrivateHostsFile = r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
+	if r.Task == "freight-dispatch-shift" {
+		req.PrivateHostsFile = true
+		req.Env = []string{"DISPATCH_EVENT_API_URL=http://event-feed:8080"}
+	}
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
