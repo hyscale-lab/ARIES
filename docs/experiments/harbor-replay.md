@@ -62,7 +62,8 @@ creates a separate 20 GiB devmapper runtime from the quiet v5 stack. Stage the
 [image pins](../../scripts/zb-trace/tb41/fixtures/claims-wave1-images.tsv) as
 `images.tsv` and the source pair as `source/{trajectory,rollout}` in
 `/local/zb-tb41-medical-wave1`. Stage the built `aries-harbor`, `zb-trace`
-scripts with `tb41/native-deep-scan`, and the campaign bitmap VMM at
+scripts with `tb41/native-deep-scan` and the built `tb41/bin/{cg-exec,cg-stats}`
+helpers, and the campaign bitmap VMM at
 `bitmap/firecracker`. Then run the
 [driver](../../scripts/zb-trace/tb41/fixtures/claims-wave1-amd183.sh) under the
 same placement locks and collect the redacted trace.
