@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Stock POSIX checkpoint lifecycle. stdout is a private pipe to the replay process."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor, wait
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import select
-import sys
 import time
 import tomllib
 import urllib.request
 from uuid import UUID
 
+from checkpoint_classes import collect, composition
 from host_sample import bind, process_status
-from pack import PAGE, pages
 
 now = time.monotonic_ns
 
@@ -169,17 +169,34 @@ class Pilot:
                     raise ValueError('source process changed before checkpoint')
                 self.roles['recording'] = dict(generation=self.work['generation'], socket=None, allow_zero=False)
                 atomic(self.bindings, self.roles)
+                census = collect(a, source_socket, self.work['generation'], pid, ticks)
                 start = now()
-                snapshot = uid(self.api('POST', '/sandboxes/' + a.sandbox + '/snapshots', {})['snapshotID'])
+                # The trial resume overlaps the publication API. Bind it while the API is outstanding.
+                recorder = None
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    publish = pool.submit(self.api, 'POST', '/sandboxes/' + a.sandbox + '/snapshots', {})
+                    while not recorder:
+                        recorder = recorder_socket(list(rows_after(self.log, start_offset)), a.sandbox)
+                        if recorder:
+                            self.roles['recording']['socket'] = recorder
+                            atomic(self.bindings, self.roles)
+                        if publish.done():
+                            break
+                        wait([publish], timeout=.05)
+                    snapshot = uid(publish.result()['snapshotID'])
+                published = now()
                 self.event('published', source_sandbox_id=a.sandbox, parent_snapshot_id=a.snapshot, snapshot_id=snapshot,
                            source_pid=pid, source_start_ticks=ticks, begin_ns=start)
                 child = self.record(snapshot)
                 if child['source']['Sandbox']['source_sandbox_id'] != a.sandbox:
                     raise ValueError('snapshot did not come from the bound sandbox')
-                recorder = recorder_socket(list(rows_after(self.log, start_offset)), a.sandbox)
-                if recorder:
-                    self.roles['recording']['socket'] = recorder
-                    atomic(self.bindings, self.roles)
+                delta = differential(self.store, before, parent, child)
+                paths_file = a.output/'checkpoint-cache-paths.json'
+                paths = json.loads(paths_file.read_bytes()) if paths_file.exists() else []
+                paths.append(str(self.store/'snapshots'/snapshot))
+                paths.extend(str(self.store/'managed-layers'/(digest.replace(':', '_')+'.overlaybd.commit'))
+                             for digest in delta['new_managed_layers'])
+                atomic(paths_file, paths)
                 self.api('DELETE', '/sandboxes/' + a.sandbox)
                 if not select.select([pidfd], [], [], 15)[0]:
                     raise ValueError('source VMM still alive after delete')
@@ -197,6 +214,11 @@ class Pilot:
             desc = child['committed'].get('memory_startup')
             if desc:
                 break
+            if not recorder:
+                recorder = recorder_socket(list(rows_after(self.log, start_offset)), a.sandbox)
+                if recorder:
+                    self.roles['recording']['socket'] = recorder
+                    atomic(self.bindings, self.roles)
             if time.monotonic() >= deadline:
                 raise TimeoutError('published snapshot has no committed startup descriptor')
             time.sleep(.05)
@@ -225,7 +247,8 @@ class Pilot:
         self.event('pack_built', source_sandbox_id=a.sandbox, parent_snapshot_id=a.snapshot,
                    snapshot_id=snapshot, manifest=artifact, descriptor=desc, budget_bytes=budget,
                    build_timestamp=built[0]['timestamp'], source_generation=self.work['generation'],
-                   recorder_socket=recorder, **differential(self.store, before, parent, child))
+                   census=census, publish_begin_ns=start, publish_end_ns=published,
+                   recorder_socket=recorder, **delta)
         return dict(snapshot=snapshot)
 
     def restore(self):
@@ -248,13 +271,23 @@ class Pilot:
         return dict(snapshot=a.snapshot, sandbox=sandbox, token=detail['envdAccessToken'])
 
     def audit(self):
+        if not self.events.exists():
+            self.event('audit_no_checkpoints', sandbox_id=self.a.sandbox)
+            return {}
         events = [json.loads(line) for line in self.events.read_text().splitlines()]
         builds = {e['snapshot_id']: e for e in events if e['event'] == 'pack_built'}
         restores = [e for e in events if e['event'] == 'restore_created']
         for i, e in enumerate(restores):
             b = builds[e['snapshot_id']]
             blob = (self.a.output/b['manifest']).read_bytes()
-            planned = sum(PAGE for _ in pages(blob, b['budget_bytes']))
+            obs = b['census']
+            result = composition(self.a.output, blob, b['budget_bytes'], obs)
+            if 'census_end_ns' in obs:
+                # Native guest pause lies within the publication API call. The source runs during the census.
+                result.update(census_end_to_publish_begin_ns=b['publish_begin_ns']-obs['census_end_ns'],
+                              census_end_to_publish_end_ns=b['publish_end_ns']-obs['census_end_ns'])
+            self.event('pack_composition', snapshot_id=e['snapshot_id'], source_step=b['step'], **result)
+            planned = result['planned_payload_bytes']
             end = restores[i+1]['log_start'] if i+1 < len(restores) else None
             deadline = time.monotonic() + 30
             while True:
@@ -279,6 +312,8 @@ if __name__ == '__main__':
     p.add_argument('sandbox', type=uid)
     p.add_argument('snapshot', type=uid)
     p.add_argument('step', type=int)
+    p.add_argument('--pack-census', action='store_true')
+    p.add_argument('--kvm-slot-log', type=Path)
     a = p.parse_args()
     pilot = Pilot(a)
     action = {'checkpoint': pilot.checkpoint, 'restore': pilot.restore, 'inspection': pilot.restore, 'audit': pilot.audit}

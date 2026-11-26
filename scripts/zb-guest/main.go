@@ -34,8 +34,10 @@ func execute(args []string, out io.Writer) error {
 	var socket, dir string
 	var hostSocket bool
 	var workloadPID int
+	var once bool
 	switch command {
 	case "counters":
+		fs.BoolVar(&once, "once", false, "emit one counter sample and exit")
 		fs.IntVar(&workloadPID, "workload-pid", 0, "workload container init PID in the guest")
 	case "snapshot", "serve":
 		fs.Uint64Var(&pfnStart, "pfn-start", 0, "first guest PFN to inspect")
@@ -60,7 +62,7 @@ func execute(args []string, out io.Writer) error {
 	encoder := json.NewEncoder(out)
 	switch command {
 	case "counters":
-		return counters(workloadPID, encoder)
+		return counters(workloadPID, once, encoder)
 	case "snapshot":
 		return encoder.Encode(snapshot(pfnStart, pfnCount))
 	case "serve":

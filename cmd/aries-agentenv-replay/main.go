@@ -21,7 +21,28 @@ import (
 	"github.com/hyscale-lab/aries/pkg/replay/harbor"
 )
 
-const royTrial = "dd384846-6e88-4795-a56a-994771cfe15c"
+var selectedTrials = map[string]string{
+	"roy-polymorph-cn":              "dd384846-6e88-4795-a56a-994771cfe15c",
+	"wal-recovery-ordering":         "23163f44-25fb-47c7-8a9c-5aabc8e918f6",
+	"mvcc-lsm-compaction":           "142e80d4-a690-4aa9-8722-7b02a585a936",
+	"session-window-debug":          "7bb66704-bb91-48e2-833d-22d22fd88e91",
+	"cargo-flight-dispatch":         "bc842776-b412-4c72-8cc4-508c45838176",
+	"freecad-platform-drawing":      "9fd6a8b8-3075-4054-9caa-3aa13f6bd407",
+	"freecad-spring-clip":           "06c8cac1-50a8-4b51-933f-f221f143d7a2",
+	"music-harmony":                 "6493d436-a17e-431c-bfe5-988e501f006e",
+	"freight-dispatch-shift":        "fa1d8385-d7d0-4701-b73e-024703e6b34a",
+	"embedding-drift-monitor":       "73cab1cd-2500-40eb-bbac-f5b6d8b98519",
+	"biped-contact-dynamics":        "902f08e2-bedd-41c1-b5df-a321f0a01cf4",
+	"hof-topology-interpenetration": "c22b32e9-ecfd-4900-a5b9-5947a63f5eea",
+	"vpp-loss-divergence":           "710dacb6-13db-456a-8ee9-47acbbd40c01",
+	"medical-claims-processing":     "1192d7de-0841-46ad-9681-e2182e41779f",
+	"coq-block-bound":               "37939ee5-f1b5-43fe-b00a-4e04c6eda6e3",
+	"intrastat-meldung":             "b2e0b98c-215e-48ab-aece-c16b1420b59a",
+	"pretrain-shard-corruption":     "1d577700-1aa3-4bf8-a92e-d0bb6dea1925",
+	"nextjs-performance":            "117ff592-3774-4ad2-bcc4-7d0e6292c096",
+	"sound-change-cascade":          "2b3984d8-7648-4dfb-bd50-2a99957679c9",
+	"payments-pipeline-fix":         "4df3e44e-0549-4a45-ac27-619c8b3d12f9",
+}
 
 func recording(atif, rollout, calendar string) (*harbor.Recording, error) {
 	if calendar != "" && atif == "" && rollout == "" {
@@ -43,8 +64,8 @@ func recording(atif, rollout, calendar string) (*harbor.Recording, error) {
 		return nil, err
 	}
 	source, err := harbor.Load(a, r)
-	if err == nil && (source.Task != "roy-polymorph-cn" || source.Trial != royTrial) {
-		return nil, errors.New("expected the selected Roy recording " + royTrial)
+	if err == nil && selectedTrials[source.Task] != source.Trial {
+		return nil, fmt.Errorf("source %s/%s outside study selection", source.Task, source.Trial)
 	}
 	return source, err
 }
@@ -150,8 +171,8 @@ func command(ctx context.Context) error {
 	flag.StringVar(&g.sandbox, "sandbox", "", "already restored sandbox ID")
 	flag.StringVar(&g.container, "container", "", "prepared workload container inside the sandbox (empty for direct image)")
 	flag.StringVar(&g.runtime, "runtime", "", "guest container runtime: docker (default for -container), or runc")
-	atif := flag.String("atif", "", "selected Roy ATIF trajectory")
-	rollout := flag.String("rollout", "", "selected Roy Codex rollout")
+	atif := flag.String("atif", "", "selected TB 4.1 ATIF trajectory")
+	rollout := flag.String("rollout", "", "selected TB 4.1 Codex rollout")
 	calendar := flag.String("calendar", "", "reviewed Sol Calendar JSONL")
 	flag.Parse()
 	u, err := url.Parse(g.url)
@@ -187,6 +208,7 @@ func command(ctx context.Context) error {
 		return err
 	}
 	g.calendar = r.OpenClawTrace != nil
+	g.roy = r.Task == "roy-polymorph-cn"
 	return replayGuest(ctx, g, r, os.Stdout)
 }
 

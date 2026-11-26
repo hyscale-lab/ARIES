@@ -19,6 +19,8 @@ var (
 	checkpointHelper = flag.String("checkpoint-helper", "", "stock/checkpoint.py on the worker")
 	stockServiceDir  = flag.String("stock-service-dir", "", "private stock service directory")
 	checkpointDir    = flag.String("checkpoint-dir", "", "pilot output containing bindings.json")
+	packCensus       = flag.Bool("pack-census", false, "collect guest PFN census even without deep tracing")
+	kvmSlotLog       = flag.String("kvm-slot-log", "", "optional worker KVM slot registration log for pack attribution")
 	initialSnapshot  = flag.String("initial-snapshot", "", "published snapshot used for the initial restore")
 )
 
@@ -30,6 +32,9 @@ type stockLifecycle struct {
 
 func newLifecycle(g *guest) (*stockLifecycle, error) {
 	if *checkpointHelper == "" && *stockServiceDir == "" && *checkpointDir == "" && *initialSnapshot == "" {
+		if *packCensus || *kvmSlotLog != "" {
+			return nil, errors.New("pack census and KVM slot log require checkpoint replay")
+		}
 		return nil, nil
 	}
 	if *checkpointHelper == "" || *stockServiceDir == "" || *checkpointDir == "" || *initialSnapshot == "" {
@@ -45,6 +50,12 @@ func (l *stockLifecycle) invoke(ctx context.Context, phase string, step int, sus
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "python3", *checkpointHelper, phase, *stockServiceDir, *checkpointDir,
 		l.g.url, l.g.sandbox, l.snapshot, strconv.Itoa(step))
+	if *packCensus || *boundarySocket != "" || *kvmSlotLog != "" {
+		cmd.Args = append(cmd.Args, "--pack-census")
+	}
+	if *kvmSlotLog != "" {
+		cmd.Args = append(cmd.Args, "--kvm-slot-log", *kvmSlotLog)
+	}
 	cmd.Stderr = os.Stderr
 	output, err := cmd.StdoutPipe()
 	if err != nil {

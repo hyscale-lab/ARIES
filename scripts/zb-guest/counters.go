@@ -11,7 +11,7 @@ import (
 
 // Counter reads run outside the measured cgroup. The container init PID proves
 // the observed cgroup is the workload's, including after snapshot restore.
-func counters(pid int, out *json.Encoder) error {
+func counters(pid int, once bool, out *json.Encoder) error {
 	if pid <= 1 {
 		return fmt.Errorf("expected workload init PID > 1")
 	}
@@ -57,6 +57,9 @@ func counters(pid int, out *json.Encoder) error {
 		missed := time.Since(next) / period
 		if err := out.Encode(map[string]any{"guest_begin_ns": begin, "guest_end_ns": end, "guest_cgroup": name, "workload_pid": pid, "source": data, "unavailable": unavailable, "missed_ticks": missed}); err != nil {
 			return err
+		}
+		if once {
+			return nil
 		}
 		next = next.Add((missed + 1) * period)
 	}

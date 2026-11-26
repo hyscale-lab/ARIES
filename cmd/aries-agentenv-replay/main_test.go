@@ -129,3 +129,13 @@ func TestToolTimeCountsFirstReplyUnion(t *testing.T) {
 		t.Fatal("accepted missing reply")
 	}
 }
+
+func TestSelectedCodexShellEnvironment(t *testing.T) {
+	call := replay.Call{Operation: "Exec", Login: true, Script: "env"}
+	for _, roy := range []bool{false, true} {
+		p, err := (guest{roy: roy}).process(call)
+		if err != nil || p.Args[0] != "-lc" || strings.Contains(p.Args[1], "/opt/venv/bin") != roy {
+			t.Fatalf("roy=%t: process=%+v err=%v", roy, p, err)
+		}
+	}
+}

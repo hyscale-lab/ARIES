@@ -58,6 +58,7 @@ func main() {
 }
 
 func command(ctx context.Context) error {
+	stockFixture := flag.Bool("stock-fixture", false, "export the reviewed TB 4.1 stock preparation metadata")
 	atif := flag.String("trajectory", "", "original Harbor agent/trajectory.json")
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	wildSource := flag.String("wildclaw", "", "WildClawBench OpenClaw session JSONL")
@@ -163,6 +164,9 @@ func command(ctx context.Context) error {
 	r, err := harbor.Load(t, b)
 	if err != nil {
 		return err
+	}
+	if *stockFixture {
+		return exportStockFixture(r, os.Stdout)
 	}
 	if *image == "" {
 		return json.NewEncoder(os.Stdout).Encode(r)

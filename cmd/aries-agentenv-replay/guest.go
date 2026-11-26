@@ -19,7 +19,7 @@ import (
 
 type guest struct {
 	url, sandbox, token, container, runtime string
-	calendar                                bool
+	calendar, roy                           bool
 	client                                  *http.Client
 }
 
@@ -35,17 +35,17 @@ func (g guest) process(c replay.Call) (processConfig, error) {
 	case "Exec", "StartProcess":
 		flag := "-c"
 		script := c.Script
-		if !g.calendar {
-			if c.Login {
-				flag = "-lc"
-			}
+		if !g.calendar && c.Login {
+			flag = "-lc"
+		}
+		if g.roy {
 			// Match the reviewed Roy image's shell environment in aries-harbor.
 			script = `export PATH=/opt/venv/bin:/root/.local/bin:"$PATH"; ` + script
 		}
 		p = processConfig{"/bin/bash", []string{flag, script}, c.Workdir}
 	case "ReadFile":
 		if !g.calendar {
-			return p, fmt.Errorf("unexpected Roy file read for %s", c.ToolCallID)
+			return p, fmt.Errorf("unexpected Codex file read for %s", c.ToolCallID)
 		}
 		p = processConfig{"/bin/cat", []string{"--", c.Path}, ""}
 	default:

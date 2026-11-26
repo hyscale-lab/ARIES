@@ -130,6 +130,15 @@ class HostSampleTest(unittest.TestCase):
         self.assertEqual(row["snapshot_cache"]["files"][0]["path"], str(path))
         self.assertGreater(row["snapshot_cache"]["observed_cached_bytes"], 0)
         self.assertIsNone(snapshot_cache([])["observed_cached_bytes"])
+        layer = self.root / "new.commit"
+        layer.write_bytes(b"x" * 4096)
+        manifest = self.root / "checkpoint-cache-paths.json"
+        manifest.write_text(json.dumps([str(layer), str(layer)]))
+        result = snapshot_cache([], manifest)
+        self.assertEqual(result["status"], "observed")
+        self.assertEqual([f["path"] for f in result["files"]], [str(layer)])
+        manifest.write_text("broken")
+        self.assertEqual(snapshot_cache([snapshot], manifest)["status"], "partial")
 
 
 if __name__ == "__main__":

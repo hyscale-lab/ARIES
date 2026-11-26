@@ -186,13 +186,25 @@ class VMM:
             return self.unavailable(str(exc))
 
 
-def snapshot_cache(roots):
+def snapshot_cache(roots, checkpoint_paths=None):
     files = {}
     issues = []
+    if checkpoint_paths is not None:
+        try:
+            extra = json.loads(checkpoint_paths.read_bytes())
+            if not isinstance(extra, list) or not all(isinstance(p, str) and Path(p).is_absolute() for p in extra):
+                raise ValueError("invalid checkpoint cache path list")
+            roots = [*roots, *map(Path, extra)]
+        except FileNotFoundError:
+            pass  # First child snapshot has not been published.
+        except (ValueError, OSError) as exc:
+            issues.append(str(exc))
     for root in roots:
-        for directory, _, names in os.walk(root, onerror=lambda exc: issues.append(str(exc))):
+        entries = ([(root.parent, (), [root.name])] if root.name.endswith(".commit") else
+                   os.walk(root, onerror=lambda exc: issues.append(str(exc))))
+        for directory, _, names in entries:
             for name in sorted(names):
-                if not (name in ("vm_state.bin", "rootfs.ext4") or name.endswith(".commit")):
+                if not (name in ("vm_state.bin", "rootfs.ext4", "firecracker-manifest.json", "memory-startup.pack") or name.endswith(".commit")):
                     continue
                 path = Path(directory) / name
                 try:
@@ -242,7 +254,7 @@ def sample(sandbox_id, bindings_path, roots, count, output):
                             vmm.generation = max(vmm.generation, confirmed[role].generation)
                         row.update(vmm.unavailable("binding changed during exit observation"))
             cache_begin_ns = time.monotonic_ns()
-            cache = snapshot_cache(roots)
+            cache = snapshot_cache(roots, bindings_path.with_name("checkpoint-cache-paths.json"))
             cache_end_ns = time.monotonic_ns()
             print(json.dumps(dict(schema=1, sandbox_id=sandbox_id, scheduled_ns=deadline,
                                   wall_ns=wall_ns, missed_intervals_before=missed, ticks_per_second=TICK_HZ,
