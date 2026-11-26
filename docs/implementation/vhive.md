@@ -118,6 +118,10 @@ hostname. The medical claims browser uses `localhost` so TigerVNC's
 `hostname -f` check resolves in the private VM. The workspace and browser
 retain their published entrypoints and run without a guest NIC.
 
+Trusted Manager callers can set `NativeRestoreTimeoutSeconds` for native
+artifacts that take longer to copy and verify. An unset value keeps the
+deadline carried by the original VM request.
+
 The [amd183 medical-claims mount fixture](../../scripts/zb-trace/tb41/fixtures/claims-shm-amd183.sh)
 checks Playwright's 1 GiB setting alongside a default companion. It runs headless
 Chromium on a generated document with only loopback available. The probe uses a

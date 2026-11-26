@@ -414,7 +414,11 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 		return err
 	}
 	if s.NativeDirectory != "" {
-		return m.restoreCheckpointVM(ctx, id, s, nativeRestoreRequest(id, s))
+		request := nativeRestoreRequest(id, s)
+		if m.options.NativeRestoreTimeoutSeconds > 0 {
+			request.TimeoutSeconds = m.options.NativeRestoreTimeoutSeconds
+		}
+		return m.restoreCheckpointVM(ctx, id, s, request)
 	}
 	request := pb.Clone(s.Request).(*proto.CreateVMRequest)
 	request.LoadSnapshot = true
