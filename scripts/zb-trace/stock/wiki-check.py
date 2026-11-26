@@ -1,6 +1,7 @@
 """Check source names and intermediate text on a live public-web replay."""
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -22,7 +23,17 @@ for k,r in replies.items():
 names=source[calls[-1]]['content'][0]['text'].strip().splitlines()
 hashes={Path(path).name:h for h,path in (line.split(maxsplit=1) for line in (run/'output.sha256').read_text().splitlines())}
 assert len(names)==9
+def lengths(text):
+    return {name:int(size) for name,size in re.findall(r"^(\S+\.md) (\d+) \[",text,re.MULTILINE)}
+expected_lengths=lengths(source[calls[-2]]['content'][0]['text'])
+observed_lengths=lengths(replies[calls[-2]].get('stdout',''))
+assert expected_lengths.keys()==set(names)
+# Only the final call edits this one file after the per-file length check.
+unchanged=set(names)-{'刘协.md'}
+differences={n:dict(source=expected_lengths[n],live=observed_lengths[n]) for n in sorted(unchanged & observed_lengths.keys())
+             if expected_lengths[n]!=observed_lengths[n]}
+disproved=set(names)!=set(hashes) or bool(differences)
 print(json.dumps(dict(source_sha256=digest,source_calls=len(calls),first_status_matches=len(calls)-len(diff),status_divergences=diff,
-    names_match=sorted(names)==sorted(hashes),source_file_count=len(names),output_sha256=hashes,all_output_bytes_match_source=None if sorted(names)==sorted(hashes) else False,
-    artifact_check='Historical reply lists nine names and text lengths. It supplies no full-file digest.',
+    names_match=sorted(names)==sorted(hashes),source_file_count=len(names),output_sha256=hashes,known_final_length_differences=differences,all_output_bytes_match_source=False if disproved else None,
+    artifact_check='Historical reply lists nine names and text lengths. Eight files remained unedited after the character-count check. It supplies no full-file digest.',
     reply_comparisons={k:r.get('output_comparison') for k,r in replies.items()}),indent=2))

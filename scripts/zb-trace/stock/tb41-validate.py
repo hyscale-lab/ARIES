@@ -2,16 +2,71 @@
 """Reconcile stock live replies against the source identities bound in Study 2."""
 
 import argparse
+import base64
+import gzip
 import hashlib
 import json
 import re
+import struct
 from collections import Counter
 from pathlib import Path
 
 
 def rows(path):
-    with path.open() as stream:
+    opener = path.open if path.exists() else lambda: gzip.open(str(path)+".gz", "rt")
+    with opener() as stream:
         return [json.loads(line) for line in stream]
+
+
+def uncompressed_size(path):
+    if path.exists():
+        return path.stat().st_size
+    with gzip.open(str(path)+".gz", "rb") as data:
+        return sum(len(chunk) for chunk in iter(lambda: data.read(1024*1024), b""))
+
+
+def nextjs_checks(run, live, baseline, replies):
+    historical = next(d["checks"] for d in baseline if d["event"] == "final_task_state")
+    current = (run / "final-task-state.txt").read_text()
+    files = {}
+    for expected, actual in zip(historical.splitlines(), current.splitlines(), strict=True):
+        match = re.fullmatch(r"[0-9a-f]{64}  (/tmp/warehouse-check/(?:inventory\.png|audit-events\.jsonl))", expected)
+        if match:
+            digest, name = actual.split("  ")
+            assert name == match[1] and re.fullmatch(r"[0-9a-f]{64}", digest)
+            files[name] = {"study2_sha256": expected[:64], "live_sha256": digest}
+        else:
+            assert actual == expected, expected
+    assert len(files) == 2
+    for phase in ("before-snapshot", "after-restore"):
+        health = json.loads((run / "prepare" / f"{phase}-health.json").read_text())
+        assert health["warehouse_health"] == {"4100": 200, "4101": 200}
+    [view] = [d for d in replies if d["operation"] == "ViewImage"]
+    [source_view] = [d for d in baseline if d["event"] == "tool_reply" and d["operation"] == "ViewImage"]
+    assert view["exit_code"] == view["expected_exit_code"] == 0
+    assert view["source_output_sha256"] == source_view["source_output_sha256"]
+    assert hashlib.sha256(view["stdout"].encode()).hexdigest() == view["stdout_sha256"]
+    [item] = json.loads(view["stdout"])
+    prefix, encoded = item["image_url"].split(",", 1)
+    assert (item["type"], item["detail"], prefix) == ("input_image", "high", "data:image/png;base64")
+    png = base64.b64decode(encoded, validate=True)
+    assert png[:16] == b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" and struct.unpack(">II", png[16:24]) == (1280, 720)
+    # The selected rollout contains one 1280 x 720 inventory attachment at sequence 40.
+    divergences = [d for d in live if d["event"] == "image_attachment_divergence"]
+    matched = view["stdout_sha256"] == view["source_output_sha256"]
+    assert len(divergences) == (0 if matched else 1)
+    if divergences:
+        [event] = divergences
+        assert event["status_basis"] == "matching_dimensions_and_media_type_different_attachment_bytes"
+        assert all(event[k] == view[k] for k in ("source_call_id", "sequence", "stdout_sha256", "source_output_sha256"))
+    final = next(d for d in replies if d["sequence"] == 54)
+    assert final["step_id"] == 63 and final["exit_code"] == final["expected_exit_code"] == 0
+    passed = ["All browser checks passed", "Cold chunk loading and mobile layout checks passed"]
+    assert all(message in final["stdout"].splitlines() for message in passed)
+    return {"final_files": files, "view_sequence": view["sequence"], "view_exit": view["exit_code"],
+            "source_wire_sha256": view["source_output_sha256"], "live_wire_sha256": view["stdout_sha256"],
+            "live_png_sha256": hashlib.sha256(png).hexdigest(), "png_dimensions": [1280, 720],
+            "attachment_bytes_matched": matched, "final_browser_checks": passed}
 
 
 def validate(run, reference):
@@ -134,10 +189,10 @@ def validate(run, reference):
     for b in captures:
         assert b["status"] == "ok"
         path = run / "deep/stock-deep" / f"generation-{b['generation']}"
-        assert (path / b["pte_file"]).stat().st_size == sum(
+        assert uncompressed_size(path / b["pte_file"]) == sum(
             b["pte_code_counts"].values()
         )
-        assert (path / b["dirty_file"]).stat().st_size > 0
+        assert uncompressed_size(path / b["dirty_file"]) > 0
     host, guest = rows(run / "host.jsonl"), rows(run / "guest.jsonl")
     assert len(host) > 1 and len(guest) > 1
     live_host = [d for d in host if d["status"] == "live"]
@@ -215,6 +270,8 @@ def validate(run, reference):
                 "failures": [line for line in body.splitlines() if line.startswith(("Traceback", "AssertionError"))],
             }
         assert set(checks["integration_logs"]) == {"results", "final"}
+    if config["task"] == "nextjs-performance":
+        checks = nextjs_checks(run, live, baseline, replies)
     if config["task"] == "medical-claims-processing":
         final_checks = (run / "final-task-state.txt").read_text().splitlines()
         reference_checks = next(d["checks"] for d in baseline if d["event"] == "final_task_state").splitlines()
