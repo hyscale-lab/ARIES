@@ -326,7 +326,7 @@ ARIESPATH`}})
 	}
 	node := "node"
 	toolCheck := "command -v node codex rg python3"
-	if r.Trial == nextjsTrial {
+	if r.Task == nextjsTask && r.Trial != nextjsWave2Trial && r.Trial != nextjsWave3Trial {
 		toolCheck = "command -v node codex rg\n/opt/aries-python/bin/python3 --version"
 	}
 	if r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
@@ -458,6 +458,12 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:
 		cmd += nextjsWave2FinalCheck
+	case nextjsWave3Trial:
+		cmd += nextjsWave3FinalCheck + nextjsLaterFinalCheck
+	case nextjsWave4Trial:
+		cmd += nextjsWave4FinalCheck + nextjsLaterFinalCheck
+	case nextjsWave5Trial:
+		cmd += nextjsWave5FinalCheck + nextjsLaterFinalCheck
 	}
 	if r.Task == "sanitize-git-repo" {
 		cmd += "\nfind . -type f -not -path './.git/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"

@@ -17,7 +17,7 @@ func TestNextjsSetupBindsReviewedTrials(t *testing.T) {
 		!strings.Contains(setup.initialCheck, "/usr/local/bin/python3") {
 		t.Fatal("wave two Next.js source did not receive the dated Python fixture")
 	}
-	if _, ok := sourceSetup(&harbor.Recording{Task: nextjsTask, Trial: "117ff592-3774-4ad2-bcc4-7d0e6292c096"}); ok {
+	if _, ok := sourceSetup(&harbor.Recording{Task: nextjsTask, Trial: "00000000-0000-0000-0000-000000000000"}); ok {
 		t.Fatal("another Next.js recording received a ready-state profile")
 	}
 }

@@ -351,6 +351,10 @@ func equalJSON(a, b []byte) bool {
 }
 
 var interceptedPatchDirs = map[string]string{
+	"call_xBwrVyeC9cAFq7JPbTWEzfn2": "/app",
+	"call_9NDBlJmYPJuRyh4FmxW63hwQ": "/app",
+	"call_I508KaehdTRMQyViU5jl9KZ0": "/app",
+	"call_XJy4ZphLiGhrtkJvcwQ0whoi": "/app",
 	"call_T4guAViYNCoy6x8AhUcRk0Ol": "/app",
 	"call_uWoDRNhz1zCkvG2SRnl3BfZz": "/app",
 	"call_8GEGWXdrXh3Lzsl1YO3USPPE": "/app",

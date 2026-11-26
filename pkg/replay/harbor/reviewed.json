@@ -13,6 +13,7 @@
       "exec_command",
       "update_plan",
       "web_search_call",
+      "view_image",
       "write_stdin"
     ],
     "effects": [
@@ -28,6 +29,21 @@
         "trial": "09288c37-6d48-4073-a05a-1d5770fecef0",
         "trajectory_sha256": "bebb5600b85988b0aac4a730e6d044973d55416d829e43c6090dd32c77cfa4ec",
         "rollout_sha256": "abc2c5ae084cb9b52fd28be5edcaedbb06fdb47afb900328399d35c781ffe604"
+      },
+      {
+        "trial": "117ff592-3774-4ad2-bcc4-7d0e6292c096",
+        "trajectory_sha256": "9424bbc2abb880fae9a29ce97c70bbbe6f72cfa08655b36a1039295eb406fc5d",
+        "rollout_sha256": "b3dd977f4765c8f0408b25e4b2591f4cd0729f93926d52af8623e26fca1dae6b"
+      },
+      {
+        "trial": "3f615cbd-3dbc-4280-aa56-d4b46b1f5c61",
+        "trajectory_sha256": "28698a2f57257970e71824c3afc6aef747000d4c5504462e72651be521426316",
+        "rollout_sha256": "ce0ee1569eed57d604f02decff240b6f521095c334eebdc0aaade79308067995"
+      },
+      {
+        "trial": "8ecdcc26-f088-47c7-808a-620b04722c99",
+        "trajectory_sha256": "11aae5f470418cab88d2335f41242fc0b20232b65199cef70a7f8d66b4dae1a6",
+        "rollout_sha256": "9dfc6a6de5ad97502a06e555238668b519e4a73cdc03b5b9c2b6af1290ce3e33"
       }
     ]
   },

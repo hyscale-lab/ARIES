@@ -5,22 +5,45 @@ import "strings"
 const nextjsWave2Trial = "09288c37-6d48-4073-a05a-1d5770fecef0"
 
 func nextjsSourceSetup(trial string) (taskSetup, bool) {
-	setup := nextjsSetup
 	switch trial {
 	case nextjsTrial:
-		return setup, true
+		return nextjsSetup, true
 	case nextjsWave2Trial:
+		setup := nextjsDatedSetup("2026-08-31T08:03:11.700Z", "20260831T080311Z")
 		// This source writes a Python patch helper and invokes it via env.
-		setup.initialCheck = nextjsWave2Date + strings.NewReplacer(
-			// npm prints its Date setting at whole-second precision.
-			"2026-08-31T10:08:34.000Z", "2026-08-31T08:03:11.000Z",
-			"2026-08-31T10:08:34Z", "2026-08-31T08:03:11.700Z",
-			"20260831T100834Z", "20260831T080311Z",
-		).Replace(setup.initialCheck) + nextjsWave2Python
+		setup.initialCheck += nextjsWave2Python
 		return setup, true
+	case nextjsWave3Trial:
+		setup := nextjsDatedSetup("2026-08-31T08:31:40.614Z", "20260831T083140Z")
+		setup.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
+		setup.packagesField = "debian_patch_archive_sha256"
+		setup.output = "PERFORMANCE.md"
+		setup.initialCheck += nextjsWave3Tools
+		return setup, true
+	case nextjsWave4Trial:
+		setup := nextjsDatedSetup("2026-08-31T09:10:10.480Z", "20260831T091010Z")
+		setup.initialCheck += nextjsWave4PatchAlias
+		return setup, true
+	case nextjsWave5Trial:
+		return nextjsDatedSetup("2026-08-31T07:12:18.292Z", "20260831T071218Z"), true
 	default:
 		return taskSetup{}, false
 	}
+}
+
+func nextjsDatedSetup(npmCutoff, aptSnapshot string) taskSetup {
+	setup := nextjsSetup
+	dateCheck := strings.NewReplacer(
+		"2026-08-31T08:03:11.700Z", npmCutoff,
+		"20260831T080311Z", aptSnapshot,
+	).Replace(nextjsWave2Date)
+	// npm prints its Date setting at whole-second precision.
+	setup.initialCheck = dateCheck + strings.NewReplacer(
+		"2026-08-31T10:08:34.000Z", npmCutoff[:19]+".000Z",
+		"2026-08-31T10:08:34Z", npmCutoff,
+		"20260831T100834Z", aptSnapshot,
+	).Replace(setup.initialCheck)
+	return setup
 }
 
 const nextjsWave2Date = `test ! -e /etc/profile.d/zz-aries-nextjs-npm.sh
