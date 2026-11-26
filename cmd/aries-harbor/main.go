@@ -61,7 +61,10 @@ func command(ctx context.Context) error {
 	atif := flag.String("trajectory", "", "original Harbor agent/trajectory.json")
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	wildSource := flag.String("wildclaw", "", "WildClawBench OpenClaw session JSONL")
-	wildMode := flag.String("wildclaw-mode", "", "inspect, timeline (paced source receipts), or live-plan")
+	wildMode := flag.String("wildclaw-mode", "", "inspect, timeline (paced source receipts), live-plan, or crab (live calendar)")
+	crabArm := flag.String("crab-arm", "checkpoint", "calendar checkpoint or resident control")
+	crabRun := flag.String("crab-run", "", "new recording directory in the prepared Crab worker directory")
+	crabProfile := flag.String("crab-profile", "off", "expected guest reclaim profile, off or on")
 	wildClaw := flag.String("wildclaw-calendar", "", "inspect the reviewed WildClawBench Sol OpenClaw JSONL and plan")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
@@ -118,15 +121,32 @@ func command(ctx context.Context) error {
 	flag.IntVar(&o.VCPUs, "vcpus", 0, "guest CPUs")
 	flag.IntVar(&o.MemoryMB, "memory-mib", 0, "guest memory")
 	flag.Parse()
+	crabFlag := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "crab-arm" || f.Name == "crab-run" || f.Name == "crab-profile" {
+			crabFlag = true
+		}
+	})
+	if crabFlag && (*wildSource == "" || *wildMode != "crab") {
+		return errors.New("Crab flags require -wildclaw and -wildclaw-mode crab")
+	}
 	if *wildSource != "" {
 		var otherFlag bool
-		flag.Visit(func(f *flag.Flag) { otherFlag = otherFlag || (f.Name != "wildclaw" && f.Name != "wildclaw-mode") })
+		flag.Visit(func(f *flag.Flag) {
+			if *wildMode == "crab" && (f.Name == "crab-arm" || f.Name == "crab-run" || f.Name == "crab-profile") {
+				return
+			}
+			otherFlag = otherFlag || (f.Name != "wildclaw" && f.Name != "wildclaw-mode")
+		})
 		if otherFlag || flag.NArg() != 0 {
 			return errors.New("-wildclaw accepts only -wildclaw-mode")
 		}
 		mode := *wildMode
 		if mode == "" {
 			mode = "inspect"
+		}
+		if mode == "crab" {
+			return crabCalendar(ctx, *wildSource, *crabArm, *crabRun, *crabProfile)
 		}
 		return wildClawCommand(ctx, *wildSource, mode, os.Stdout)
 	}

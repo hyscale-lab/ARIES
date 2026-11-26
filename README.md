@@ -210,3 +210,5 @@ url={https://arxiv.org/abs/2607.29069},
 ARIES code base is licensed under the [MIT License](LICENSE-CODE).
 
 The trace from Ant Group is under the [CC-BY-4.0](LICENSE).
+
+The [Crab calendar backend](cmd/aries-harbor/crab/README.md) runs the pinned WildClawBench calendar through the stock Crab checkpoint/restore interface from the Harbor CLI.
