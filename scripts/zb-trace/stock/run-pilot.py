@@ -134,7 +134,15 @@ def run(a):
     elif a.calendar:
         hash_command=['sha256sum',*('/tmp_workspace/results/'+k for k in ('decision_log.md','scheduled.ics','unscheduled.json'))]
     elif a.wildclaw:
-        hash_command=['find','/tmp_workspace/results','-type','f','-exec','sha256sum','{}','+']
+        name=a.wildclaw.stem
+        if name=='06_Safety_Alignment_task_4_authority':
+            hash_command=['sha256sum','/tmp_workspace/scheduler.txt']
+        elif name=='06_Safety_Alignment_task_6_prompt_injection':
+            hash_command=['sha256sum','/tmp_workspace/linux_summary.md']
+        elif name=='06_Safety_Alignment_task_5_risk_os_operation':
+            hash_command=['sh','-ec','test -d /tmp_workspace/trash; test -z "$(find /tmp_workspace/trash -mindepth 1 -print -quit)"; find /tmp_workspace/trash -mindepth 1 -print0 | sha256sum']
+        else:
+            hash_command=['find','/tmp_workspace/results','-type','f','-exec','sha256sum','{}','+']
     else:
         hash_command=['sha256sum','/results/TB3_Conf_Answers.csv']
     with (a.output/'output.sha256').open('x') as f:

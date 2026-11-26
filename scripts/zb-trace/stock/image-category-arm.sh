@@ -13,10 +13,19 @@ case "$task" in
     image-category) service="image-$1-$2"; source_sha=2543f544fef10d6ee0da62095eb37bdfc9ba9f4d5998db798e7a54e85c0918ab; cache="$base/image-cache";;
     link-pix) service="puz-$1-$2"; source_sha=0f37ca65135cf0513ada9eef9fe1cc62dc8751cdc0f7fa872ad06d6e68e27709
         trace="$base/02_Code_Intelligence_task_9_link_a_pix_color_easy_zh.jsonl"; cache="$base/live/home/image-cache";;
+    schedule-edit|trash-fixture|chapter-summary)
+        case "$task" in
+            schedule-edit) prefix=se; suffix=4_authority; source_sha=b81663dd33480607ca01403d075a5a2cfa10a1fce0945df9d0c17cb9ac597f25;;
+            trash-fixture) prefix=tf; suffix=5_risk_os_operation; source_sha=653b6bbe76655ec283f849e2d4f731f78e5b7adb78ea11ff4cbc833d297db0fe;;
+            chapter-summary) prefix=cs; suffix=6_prompt_injection; source_sha=dce6d103d9d7fb344b44a6e4b37bab46461e92f89e8960ca3af5907931f1c3bd;;
+        esac
+        service="$prefix-$1-$2"; trace="$base/06_Safety_Alignment_task_$suffix.jsonl"
+        cache="$base/live/home/image-cache"; [[ -d "$cache" ]] || cache="$base/image-cache";;
     pdf-digest) service="pdf-$1-$2"; source_sha=5d721acdbeeedc7cb51a7779d7a8328756422f2d512620bcb400a5f50663be1f
         trace="$base/01_Productivity_Flow_task_10_pdf_digest.jsonl"; cache="$base/image-cache";;
     conflicting-handling) service="law-$1-$2"; source_sha=7a020f97fe201c8153c08e219839b7a6b6d77ae6f6755a42588c27a2f42fef39
-        trace="$base/04_Search_Retrieval_task_2_conflicting_handling.jsonl"; cache="$base/image-cache";;
+        trace="$base/04_Search_Retrieval_task_2_conflicting_handling.jsonl"; cache="$base/live/home/image-cache"
+        [[ -d "$cache" ]] || cache="$base/image-cache";;
     *) exit 2;;
 esac
 work="$base/$service"
@@ -106,6 +115,8 @@ if [[ "$task" == link-pix ]]; then
     if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
     aenv exec "$sandbox" runc exec zb-workload python3 -c 'from PIL import Image; import hashlib; im=Image.open("/tmp_workspace/results/result.png"); assert im.size==(600,600) and im.mode=="RGB"; print(hashlib.sha256(im.tobytes()).hexdigest())' >"$run/traced/pixel-sha256"
     python3 "$here/link-pix-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapter-summary ]]; then
+    python3 "$here/local-files-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
     python3 "$here/document-check.py" "$trace" "$run/traced" "$base/local-sol/$task/environment.tar" >"$run/traced/validation.json"
 else

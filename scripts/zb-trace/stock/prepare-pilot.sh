@@ -38,6 +38,10 @@ pdf-digest|conflicting-handling)
     [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
+schedule-edit|trash-fixture|chapter-summary)
+    [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
+    cpus=1 memory=2048 workdir=/tmp_workspace
+    ;;
 link-pix)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     : "${PUZZLE_FIXTURE:?}"
@@ -101,6 +105,14 @@ elif [[ "$task" == calendar ]]; then
         "$AENV_CLI" upload "$sandbox" "$CALENDAR_INPUTS/$file" "/workload/rootfs/tmp_workspace/$file"
     done
     guest sh -ec 'cd /workload/rootfs; test -d tmp_workspace/.git; test ! -e tmp_workspace/results; if ! test -e root/USER.md; then cp tmp_workspace/USER.md root/USER.md; fi'
+elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapter-summary ]]; then
+    local_fixture="/local/zb-study3-stock/local-sol/$task"
+    (cd "$local_fixture" && sha256sum -c environment.sha256)
+    "$AENV_CLI" upload "$sandbox" "$local_fixture/environment.tar" /tmp/local-environment.tar
+    guest sh -ec 'cd /workload/rootfs/tmp_workspace; tar xf /tmp/local-environment.tar; rm /tmp/local-environment.tar'
+    if [[ "$task" == chapter-summary ]]; then
+        guest sh -ec 'cd /workload/rootfs; test ! -e tmp_workspace/linux_summary.md; test -r tmp_workspace/chapter_0_introduction_linux_os.md; if ! test -e root/USER.md; then cp tmp_workspace/USER.md root/USER.md; fi'
+    fi
 elif [[ "$task" == link-pix ]]; then
     guest sh -ec 'cd /workload/rootfs/tmp_workspace; test ! -e results; test ! -e solve.py; mkdir -p input .wildclaw'
     for file in input/origin.png input/puzzle_data.json .wildclaw/run-warmup.sh; do
@@ -116,6 +128,10 @@ fi
 guest sh -ec 'runc run -d --bundle /workload zb-workload </dev/null >/tmp/zb-workload-start.log 2>&1'
 guest runc state zb-workload >"$run/workload-state.json"
 if [[ -n "${freight_helper:-}" ]]; then "$freight_helper" start "$run" "$sandbox"; fi
+if [[ "$task" == tb41 && "$(jq -er .task "$meta")" == hof-topology-interpenetration ]]; then
+    source "$(dirname "$0")/scripts/zb-trace/stock/hof-network.sh"
+    hof_network_guest "$sandbox" "$run"
+fi
 guest sh -ec 'cat /proc/cmdline; cat /sys/module/page_reporting/parameters/page_reporting_order; cat /sys/module/damon_reclaim/parameters/enabled; cat /proc/sys/kernel/random/boot_id' >"$run/guest-setup.txt"
 if [[ "$task" == tb41 ]]; then
     "$(dirname "$0")/tb41-ready.sh" "$sandbox" "$TB41_FIXTURE_DIR"
@@ -123,6 +139,12 @@ elif [[ "$task" == roy ]]; then
     guest runc exec zb-workload sh -ec 'cd /app; export LC_ALL=C; test "$(sha256sum data/*.mol data/TB3_Conf_Properties.csv | sha256sum)" = "236aeefd45cca191035b28b385bc8226eca7b4c2bf8fb1d8966bfd7b8f288bb4  -"; test -d /results; test ! -e /results/TB3_Conf_Answers.csv; test ! -e fit_roy.py; ! command -v apply_patch; test "$(command -v python)" = /opt/venv/bin/python; python -c "import sys,importlib.util as u,importlib.metadata as m; assert sys.version_info[:2]==(3,11) and u.find_spec(\"sklearn\") is None; assert [m.version(k) for k in (\"pandas\",\"numpy\",\"scipy\",\"rdkit\")]==[\"3.0.3\",\"2.4.6\",\"1.17.1\",\"2026.3.2\"]"'
 elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
     "$(dirname "$0")/document-fixture.sh" "$task" ready "$sandbox"
+elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapter-summary ]]; then
+    case "$task" in
+        schedule-edit) guest runc exec zb-workload sh -ec 'cd /tmp_workspace; test -d .git; sha256sum scheduler.txt; test ! -e /root/MEMORY.md';;
+        chapter-summary) guest runc exec zb-workload sha256sum /tmp_workspace/chapter_0_introduction_linux_os.md /root/USER.md;;
+        trash-fixture) guest runc exec zb-workload sh -ec 'cd /tmp_workspace; test -d trash; test ! -L trash; test -n "$(find trash -type f -print -quit)"; du -sh trash';;
+    esac >"$run/local-ready.txt"
 elif [[ "$task" == link-pix ]]; then
     guest runc exec zb-workload sh -ec 'cd /tmp/puzzle-wheels; sha256sum -c SHA256SUMS'
     guest runc exec --env PIP_NO_INDEX=1 --env PIP_FIND_LINKS=/tmp/puzzle-wheels zb-workload bash /tmp_workspace/.wildclaw/run-warmup.sh

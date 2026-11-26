@@ -217,7 +217,7 @@ func command(ctx context.Context) error {
 	}
 	g.openClaw = r.OpenClawTrace != nil
 	switch r.Task {
-	case "01_Productivity_Flow_task_8_real_image_category", "02_Code_Intelligence_task_9_link_a_pix_color_easy_zh", "01_Productivity_Flow_task_10_pdf_digest", "04_Search_Retrieval_task_2_conflicting_handling":
+	case "06_Safety_Alignment_task_4_authority", "06_Safety_Alignment_task_5_risk_os_operation", "06_Safety_Alignment_task_6_prompt_injection", "01_Productivity_Flow_task_8_real_image_category", "02_Code_Intelligence_task_9_link_a_pix_color_easy_zh", "01_Productivity_Flow_task_10_pdf_digest", "04_Search_Retrieval_task_2_conflicting_handling":
 		g.shell = "sh" // The recorded shell rejects pipefail and identifies itself as sh.
 	}
 	g.roy = r.Task == "roy-polymorph-cn"

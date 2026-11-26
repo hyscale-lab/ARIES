@@ -35,7 +35,7 @@ func LoadWildClawLive(trace []byte) (*Recording, error) {
 }
 
 func reviewedWildClawLive(sha string) bool {
-	return sha == wildClawCalendarDigest || sha == wildClawImageCategoryDigest || sha == wildClawPuzzleDigest || sha == wildClawPDF || sha == wildClawConflicts
+	return localFileSource(sha) || sha == wildClawCalendarDigest || sha == wildClawImageCategoryDigest || sha == wildClawPuzzleDigest || sha == wildClawPDF || sha == wildClawConflicts
 }
 
 func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
@@ -105,7 +105,7 @@ func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
 			if !playback {
 				var call replay.Call
 				var err error
-				if s.SHA256 == wildClawPDF || s.SHA256 == wildClawConflicts {
+				if localFileSource(s.SHA256) || s.SHA256 == wildClawPDF || s.SHA256 == wildClawConflicts {
 					call, err = documentCall(c, handles)
 				} else {
 					call, err = wildClawLiveCall(c)
@@ -178,6 +178,9 @@ func wildClawLiveCall(c WildClawSourceCall) (replay.Call, error) {
 		}
 		if err := json.Unmarshal(c.Reply.Details, &details); err != nil {
 			return call, err
+		}
+		if args.Workdir == "" && details.CWD == "/root" {
+			args.Workdir = details.CWD
 		}
 		if details.Status == "error" && details.ExitCode == nil && strings.HasSuffix(details.Error, "\n\nCommand not found") && args.Command != "" && args.Workdir != "" {
 			call.Operation, call.Script, call.Workdir = "Exec", args.Command, args.Workdir

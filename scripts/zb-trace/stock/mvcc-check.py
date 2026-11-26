@@ -28,8 +28,11 @@ def check(trajectory, events):
             actual.update(''.join(p.get(channel, '') for p in parts).splitlines())
         assert actual == expected, (sequence, expected - actual, actual - expected)
         assert parts[-1]['exit_code'] == reply['expected_exit_code']
+        assert not any(r['event'] == 'checkpoint_start' and
+                       reply['monotonic_ns'] < r['monotonic_ns'] < parts[-1]['monotonic_ns'] for r in rows)
         checks.append(dict(sequence=sequence, source_call_id=call, matched_output_lines=actual.total(),
                            first_exit_code=reply['exit_code'], terminal_exit_code=parts[-1]['exit_code'],
+                           first_reply_to_terminal_wall_ns=parts[-1]['monotonic_ns'] - reply['monotonic_ns'],
                            sorted_lines_sha256=hashlib.sha256(json.dumps(sorted(actual.elements())).encode()).hexdigest()))
     return checks
 

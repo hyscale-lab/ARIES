@@ -12,6 +12,17 @@ const (
 	wildClawDatasetRevision     = "f2cafb4e53d0f5ae8edd2097c3b60276ecf2d04f"
 )
 
+// Only these digest-reviewed local file operations may use the generic document hooks.
+func localFileSource(sha string) bool {
+	switch sha {
+	case "b81663dd33480607ca01403d075a5a2cfa10a1fce0945df9d0c17cb9ac597f25",
+		"653b6bbe76655ec283f849e2d4f731f78e5b7adb78ea11ff4cbc833d297db0fe",
+		"dce6d103d9d7fb344b44a6e4b37bab46461e92f89e8960ca3af5907931f1c3bd":
+		return true
+	}
+	return false
+}
+
 // OpenClawTrace identifies the native session and the observed portion of its timeline.
 type OpenClawTrace struct {
 	Version         int       `json:"version"`

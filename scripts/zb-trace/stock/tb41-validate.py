@@ -76,6 +76,10 @@ def validate(run, reference):
             and validation["actual_sha256"] == actual_sha
         )
         output_mode = validation["mode"]
+    elif config["task"] == "music-harmony":
+        assert actual_output.split(maxsplit=1)[1] == final.split(maxsplit=1)[1] == "/app/harmony.mxl"
+        assert all(r["output_comparison"]=="matched_ignoring_trailing_newlines" and r["exit_code"]==0 for r in replies[-2:])
+        output_mode = "original_composition_and_reopened_score_checks"
     else:
         assert actual_output == final
     captures = rows(run / "deep/stock-deep/boundaries.jsonl")

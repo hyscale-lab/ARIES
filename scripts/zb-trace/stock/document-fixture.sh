@@ -23,7 +23,7 @@ case "$task" in
   conflicting-handling)
     guest runc exec zb-workload sh -ec 'cd /tmp_workspace; find .wildclaw 04_Search_Retrieval_task_2_conflicting_handling -type f | sed "s,^,./," | LC_ALL=C sort | xargs sha256sum | sha256sum | grep -q "^a19729dcd2480bbde806e299a7da81177215e9ec3f1b299b986ef3df8c2bb13b "; test ! -e /root/memory/2026-07-17.md; test ! -e /root/memory/2026-07-16.md; if ! test -d /root/.git; then git -C /root init --quiet; fi; for f in AGENTS.md BOOTSTRAP.md HEARTBEAT.md IDENTITY.md SOUL.md TOOLS.md USER.md; do if test -f "$f" && ! test -e "/root/$f"; then cp "$f" "/root/$f"; fi; done'
     guest runc exec --env npm_config_cache=/tmp/npm-registry --env npm_config_registry=https://registry.npmjs.org --env npm_config_offline=true --env npm_config_before=2026-07-17T16:08:34Z zb-workload bash /tmp_workspace/.wildclaw/run-warmup.sh
-    guest runc exec zb-workload sh -ec 'test -f /tmp/wildclaw-harbor-warmup.done; agent-browser --version | grep -F "0.32.1"; rm -r /tmp/npm-registry'
+    guest runc exec zb-workload sh -ec 'test -f /tmp/wildclaw-harbor-warmup.done; agent-browser --version | grep -F "0.27.0"; rm -r /tmp/npm-registry'
     ;;
   *) exit 2;;
 esac

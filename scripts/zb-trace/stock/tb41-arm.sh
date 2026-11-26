@@ -59,5 +59,9 @@ case "$task" in
 freecad-platform-drawing|freecad-spring-clip)
     python3 -B "$base/scripts/zb-trace/stock/cad-check.py" "$TB41_FIXTURE_DIR" "$base/$2-run" "$AENV_CLI" "$sandbox" "$4"
     ;;
+music-harmony)
+    "$AENV_CLI" exec "$sandbox" runc exec zb-workload base64 -w0 /app/harmony.mxl | base64 -d >"$2-run/harmony.mxl"
+    echo "$actual  $2-run/harmony.mxl" | sha256sum -c -
+    ;;
 *) test "$actual" = "$4" ;;
 esac
