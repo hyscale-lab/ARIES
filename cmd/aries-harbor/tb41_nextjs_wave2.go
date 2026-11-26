@@ -12,7 +12,8 @@ func nextjsSourceSetup(trial string) (taskSetup, bool) {
 	case nextjsWave2Trial:
 		// This source writes a Python patch helper and invokes it via env.
 		setup.initialCheck = nextjsWave2Date + strings.NewReplacer(
-			"2026-08-31T10:08:34.000Z", "2026-08-31T08:03:11.700Z",
+			// npm prints its Date setting at whole-second precision.
+			"2026-08-31T10:08:34.000Z", "2026-08-31T08:03:11.000Z",
 			"2026-08-31T10:08:34Z", "2026-08-31T08:03:11.700Z",
 			"20260831T100834Z", "20260831T080311Z",
 		).Replace(setup.initialCheck) + nextjsWave2Python
