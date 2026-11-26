@@ -12,7 +12,6 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from idle import start_identity
-from idle_hook import Firecracker
 
 
 def check(ok, reason):
@@ -31,6 +30,18 @@ def effective_cpus(pid):
     return result
 
 
+def socket_owner(path):
+    # Reading peer credentials avoids queuing an API request behind a snapshot.
+    parent = os.open(path.parent, os.O_DIRECTORY)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(2)
+            client.connect(f'/proc/self/fd/{parent}/{path.name}')
+            return struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
+    finally:
+        os.close(parent)
+
+
 def service(unit):
     check(re.fullmatch(r'fcmod-zepbound-[a-z0-9-]+', unit), 'invalid service name')
     pid = int(subprocess.check_output(['systemctl', 'show', '-p', 'MainPID', '--value', unit]))
@@ -46,11 +57,7 @@ def service(unit):
     check(plugins['io.containerd.server.v1.grpc']['address'] == api_address and
           Path(api_address).is_socket() and plugins['io.containerd.snapshotter.v1.devmapper']['pool_name'] == unit,
           f'{unit} socket or thin pool differs')
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(2)
-        client.connect(api_address)
-        owner, _, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-        check(owner == pid, f'{unit} containerd socket peer differs from its systemd MainPID')
+    check(socket_owner(Path(api_address)) == pid, f'{unit} containerd socket peer differs from its systemd MainPID')
     profile = json.loads((rt / 'runtime.json').read_bytes())
     check(profile['guest_reclamation_profile'] == 'agentenv' and profile['smt_enabled'] is False and
           Path(profile['shim_base_dir']).samefile(rt / 'shim'), f'{unit} profile or shim differs')
@@ -97,18 +104,21 @@ def inspect(unit, runtime, peer, require_pair=False, restored_api=None):
         sockets = list(cfg['runtime'].glob('shim/aries#*/firecracker.sock'))
         check(len(sockets) <= 1, f'multiple guest sockets in {cfg["unit"]}')
         for path in sockets:
-            api = Firecracker(str(path))
-            info = api.request('GET', '/')
-            check(path.parent.name == 'aries#' + info['id'], 'guest socket and VM identity differ')
+            pid = socket_owner(path)
+            start = start_identity(pid)
+            proc = Path('/proc') / str(pid)
+            argv = proc.joinpath('cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
+            vm_id = path.parent.name.removeprefix('aries#')
+            check('--id' in argv and argv[argv.index('--id') + 1] == vm_id and
+                  proc.joinpath('comm').read_text().strip() == 'firecracker', 'guest socket and VM identity differ')
             if restored_api and cfg['unit'] == unit and path.samefile(restored_api):
                 matched_api = True
-            pid, start = api.identity
             tids = list((Path('/proc') / str(pid) / 'task').iterdir())
             check(effective_cpus(pid) <= cfg['cpus'], 'VMM moved outside service partition')
             check(tids and all(os.sched_getaffinity(int(t.name)) <= cfg['cpus'] for t in tids),
                   f'{cfg["unit"]} VMM thread escaped its assigned CPUs')
             check(start_identity(pid) == start, 'VMM changed during placement check')
-            owners[pid, start] = dict(unit=cfg['unit'], vm_id=info['id'], pid=pid, start_ticks=start)
+            owners[pid, start] = dict(unit=cfg['unit'], vm_id=vm_id, pid=pid, start_ticks=start)
     verify_vm_inventory(live, owners)
     if restored_api:
         check(matched_api, 'sampler socket does not identify the restored local VMM')
