@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+trace=$(dirname "$(realpath "$0")")
+python3 -B "$trace/placement.py" "${ZB_TB41_UNIT##*/}" "$ZB_TB41_RUNTIME" "$ZB_TB41_PEER_UNIT" \
+    --restored-api "${1#unix://}" >"$(dirname "$ZB_CGROUP_EVENTS")/placement-live.json"
+exec "$ZB_TB41_PLACEMENT_SAMPLER" "$@"

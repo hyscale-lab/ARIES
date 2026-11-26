@@ -14,6 +14,17 @@ ctr=("$runtime/bin/firecracker-ctr" -a "$socket" -n aries)
 mkdir -m700 "$out"
 exec 9>"$runtime/.tb41.lock"
 flock -n 9
+exec 8>/run/lock/aries-tb41-placement.lock
+peer=${ZB_TB41_PEER_UNIT:-}
+sampler=${ZB_TB41_SAMPLER:-$trace/sample.py}
+if [[ -n "$peer" ]]; then
+    flock -sn 8
+    export ZB_TB41_PLACEMENT_SAMPLER="$sampler"
+    sampler="$trace/placement-sampler"
+    python3 -B "$trace/placement.py" "$unit" "$runtime" "$peer" >"$out/placement.json"
+else
+    flock -n 8
+fi
 wait_for_service() {
     for _ in {1..100}; do
         "${ctr[@]}" version >/dev/null 2>&1 && return 0
@@ -27,7 +38,7 @@ for ns in $namespaces; do
     tasks=$("$runtime/bin/firecracker-ctr" -a "$socket" -n "$ns" tasks ls -q)
     [[ -z "$tasks" ]]
 done
-if pgrep -x firecracker >/dev/null || pgrep -x qemu-system-x86 >/dev/null; then
+if [[ -z "$peer" ]] && { pgrep -x firecracker >/dev/null || pgrep -x qemu-system-x86 >/dev/null; }; then
     echo "another VM is active on the assigned solo worker" >&2
     exit 1
 fi
@@ -90,4 +101,4 @@ source = json.load(open(sys.argv[1]))
 print(source["image"], source["vcpus"], source["memory_mib"], source["storage_mib"])
 PYREAD
 )
-"$stage/aries-harbor" -native-checkpoint -socket "$socket" -namespace aries -checkpoint-dir "$runtime/checkpoints" -shim-dir "$runtime/shim" -io-dir "/run/$unit/aries-io" -trajectory "$source_dir/trajectory" -rollout "$source_dir/rollout" -image "$image" -vcpus "$cpus" -memory-mib "$mem" -storage-mib "$disk" -sampler "${ZB_TB41_SAMPLER:-$trace/sample.py}" -log "$out/events.jsonl" -samples "$out/samples.jsonl" "${args[@]}" "$@"
+"$stage/aries-harbor" -native-checkpoint -socket "$socket" -namespace aries -checkpoint-dir "$runtime/checkpoints" -shim-dir "$runtime/shim" -io-dir "/run/$unit/aries-io" -trajectory "$source_dir/trajectory" -rollout "$source_dir/rollout" -image "$image" -vcpus "$cpus" -memory-mib "$mem" -storage-mib "$disk" -sampler "$sampler" -log "$out/events.jsonl" -samples "$out/samples.jsonl" "${args[@]}" "$@"
