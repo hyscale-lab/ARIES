@@ -77,15 +77,16 @@ func tb41SourceSetup(trial string, task taskSetup) taskSetup {
 	case "08255123-7f37-4ac3-ad5a-ec7e9a4e3d39":
 		task.packagesSHA = "3534cff3001530a11062e5fe27e2576b3ac19102d2cd449b26ea96f05a44d663"
 		task.packagesField = "cad_libgl_python_patch_archive_sha256"
-		task.initialCheck += cadPythonReady + cadQtReady + `
-test "$(command -v patch)" = /usr/bin/patch
-test "$(dpkg-query -W -f='${Version}' patch)" = 2.7.6-7
-patch --version | head -1`
+		task.initialCheck += cadPythonReady + cadQtReady + cadPatchReady
 	case "ce6044db-e5ea-430d-91e0-7272a0695992":
 		task.packagesSHA = "0147cfc122120b0891434f43c9a81db9655cf7f4914d7704789116e54c953ba9"
 		task.packagesField = "cad_libgl_python_archive_sha256"
 		task.initialCheck += cadPythonReady + cadQtReady
-	case "a4d84523-40cc-4174-95ba-3b8db9883aee", "06c8cac1-50a8-4b51-933f-f221f143d7a2", "a9e95de2-9628-4159-9e65-d04c4e03c787":
+	case "a9e95de2-9628-4159-9e65-d04c4e03c787":
+		task.packagesSHA = "072838b30a5952f567a4e68daba091db48872a9908a091de8286f6a8439a1871"
+		task.packagesField = "cad_libgl_patch_archive_sha256"
+		task.initialCheck += cadQtReady + cadPatchReady
+	case "a4d84523-40cc-4174-95ba-3b8db9883aee", "06c8cac1-50a8-4b51-933f-f221f143d7a2":
 		task.packagesSHA = "b99b22d5b808b667b8dad5cf03a47d99100844fd17cdd737ada9264704f99990"
 		task.packagesField = "cad_libgl_archive_sha256"
 		task.initialCheck += cadQtReady
@@ -133,6 +134,11 @@ readlink "$alias_dir/apply_patch"`
 
 const cadReady = `/opt/conda/bin/python -c 'import FreeCAD,sys; assert FreeCAD.Version()[:3]==["0","21","2"] and sys.version_info[:2]==(3,11)'
 ` + noShellPatch
+
+const cadPatchReady = `
+test "$(command -v patch)" = /usr/bin/patch
+test "$(dpkg-query -W -f='${Version}' patch)" = 2.7.6-7
+patch --version | head -1`
 
 const cadPythonReady = `
 /usr/bin/python3 -c 'import importlib.util,sys; assert sys.version_info[:2]==(3,11) and importlib.util.find_spec("PIL") is None; print(sys.version)'`
