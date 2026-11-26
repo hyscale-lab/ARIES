@@ -19,6 +19,9 @@ while IFS=$'\t' read -r task original source python codex os image_helper; do
     if [[ "$original" == 14bdc7ee-84ce-4083-8e4c-c093b1551fca ]]; then
         flags+=(-shard-scipy-wheel "$stage/fixtures/shard-wave5-scipy.tar.gz")
     fi
+    if [[ "$original" == 9c75c09e-2faa-413e-857f-9179c82b62b1 ]]; then
+        flags+=(-cni-network zbshard3183 -cni-conf-dir "$stage/cni/conf" -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin")
+    fi
     if [[ "$original" == 27c84b6a-af43-4332-9ba4-0f70ab1e160d || "$original" == bb35c2e1-18a6-4dfb-abf7-872812037a8c || "$original" == cd7a4ef6-d690-42c4-aa79-2a75bcf6c9e4 || "$original" == c22b32e9-ecfd-4900-a5b9-5947a63f5eea ]]; then
         flags+=(-cni-network zbhof183 -cni-conf-dir "$stage/cni/conf" -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin")
     fi

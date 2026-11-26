@@ -12,6 +12,8 @@ func rejectedBeforeGuest(trial string, c indexedCall) bool {
 		return true
 	}
 	switch trial {
+	case "9c75c09e-2faa-413e-857f-9179c82b62b1":
+		return c.step == 50 && c.call.ID == "call_PtFqnC7eG9z6HotqjnbBNkqh" && c.call.Name == "exec_command" && digest([]byte(c.output)) == "3423639e4d44a7f12e3c3e7c8d462ad836cc2cd0e18de35d6a4f64a508d809d0"
 	case "1d577700-1aa3-4bf8-a92e-d0bb6dea1925":
 		return c.step == 50 && c.call.ID == "call_LPGIIepOsfK0G4QZuNrndeAz" && c.call.Name == "exec_command" && digest([]byte(c.output)) == "c506ea4a5a36005c09e31aca2e55f1cf48d44d80a08451c0273964fdfce85713"
 	case "3102c53f-5ea4-45e6-b7bf-2ee5c8698518":

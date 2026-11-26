@@ -79,6 +79,16 @@ case "${3:-video}" in
         dns_unit=zb-hof-dns-amd183
         tls_hosts=(api.github.com github.com raw.githubusercontent.com release-assets.githubusercontent.com snapshot.ubuntu.com)
         ;;
+    shard-wave3-amd183)
+        private_dns=true
+        pin_egress=true
+        bridge=zbshard3183
+        subnet=10.251.183.0/28
+        chain=ZB183SHARD3
+        name=zbshard3183
+        dns_unit=zb-shard3-dns-amd183
+        tls_hosts=(raw.githubusercontent.com s3.amazonaws.com www.gutenberg.org)
+        ;;
     compiler-snapshot-amd183)
         private_dns=true
         bridge=zbccsnap183

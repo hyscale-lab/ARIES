@@ -55,10 +55,18 @@ var tb41PatchAliases = map[string]string{
 	"3494bc2e-744c-4565-b6d7-90c7894218f1": "ynSWtA",
 	"742a1a2c-24e5-41dc-83ab-745b7a50a392": "rziLTy",
 	"6d75b013-821a-49ba-b20e-97d3b5c06633": "6zirgA",
+	pretrainShardLiveTrial:                 "zWAhk1",
 }
 
 func tb41SourceSetup(trial string, task taskSetup) taskSetup {
 	switch trial {
+	case pretrainShardLiveTrial:
+		task.initialCheck += `
+install -d -m 0700 /tmp/codex-home
+test -z "$(ls -A /tmp/codex-home)"
+command -v curl
+test ! -e repair_training_data.py
+test ! -e /tmp/pretrain-investigation`
 	case "1d577700-1aa3-4bf8-a92e-d0bb6dea1925":
 		task.initialCheck += `
 install -d -m 0700 /tmp/codex-home

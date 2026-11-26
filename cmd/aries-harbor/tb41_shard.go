@@ -1,9 +1,39 @@
 package main
 
 const pretrainShardTask = "pretrain-shard-corruption"
+const pretrainShardLiveTrial = "9c75c09e-2faa-413e-857f-9179c82b62b1"
 const pretrainShardSciPyTrial = "14bdc7ee-84ce-4083-8e4c-c093b1551fca"
 const pretrainShardSciPyArchive = "6e888283ab4d7a0fc68b201eaa4ccbad2f82869434af26e41678d2dce2e06cfa"
 const pretrainShardWheelDirectory = "/opt/aries-shard-wheels"
+
+const pretrainShardLiveNetwork = `import json, socket
+
+hosts = ('raw.githubusercontent.com', 's3.amazonaws.com', 'www.gutenberg.org')
+addresses = {host: sorted({a[4][0] for a in socket.getaddrinfo(host, 443, socket.AF_INET)}) for host in hosts}
+try:
+    socket.getaddrinfo('example.com', 443, socket.AF_INET)
+except socket.gaierror:
+    pass
+else:
+    raise RuntimeError('unexpected DNS access outside the reviewed endpoints')
+print(json.dumps({'contemporary_dependency_diagnostic': True, 'allowed_addresses': addresses}))`
+
+const pretrainShardLiveReadback = `python - <<'PYDOWNLOADS'
+import hashlib, json
+from pathlib import Path
+
+root = Path('/tmp/pretrain-investigation')
+files = {}
+for name in ('wikitext-2-raw.zip', 'wiki.train.tokens', 'pride.txt', 'tinyshakespeare.txt'):
+    path = root / name
+    files[name] = None
+    if path.is_file():
+        with path.open('rb') as stream:
+            files[name] = {'bytes': path.stat().st_size, 'sha256': hashlib.file_digest(stream, 'sha256').hexdigest()}
+print(json.dumps({'contemporary_downloads': files}, sort_keys=True))
+PYDOWNLOADS
+git diff --exit-code -- run_pretrain.sh train_pretrain.py
+`
 
 // The recording identifies NumPy but installs SciPy quietly. Keep the dated
 // wheel available so the original pip process performs the install and uninstall.

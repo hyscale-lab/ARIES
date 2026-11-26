@@ -291,6 +291,32 @@
     ]
   },
   {
+    "task": "pretrain-shard-corruption",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-pretrain-shard-corruption@sha256:dc5db85656a51d097b005dde7314071f4542585f4d0f324f41205718864410c1",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 4,
+    "memory_mib": 8192,
+    "storage_mib": 4096,
+    "needs_network": true,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Contemporary-dependency diagnostic only. Inspect, restore and validate the benchmark-local numeric shards and train two local CPU ranks. Run the original reads of public S3, GitHub raw and Project Gutenberg endpoints with no response substitutions. Keep the source harness refusal as a host-side event."
+    ],
+    "trials": [
+      {
+        "trial": "9c75c09e-2faa-413e-857f-9179c82b62b1",
+        "trajectory_sha256": "952003d0f067ebee25bf81fc4709973419cd65ef184645cfc1c4ab519b73df9d",
+        "rollout_sha256": "2e5effdd81cba9ea1e1e22a6e9ca66e44c784a0d745e266cf0afa5ed9be22ee2"
+      }
+    ]
+  },
+  {
     "task": "hof-topology-interpenetration",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-hof-topology-interpenetration@sha256:d5db936be8f7a1b25b7d694ba92eba72220e418e259a19884359b4b657bb1276",

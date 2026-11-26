@@ -450,6 +450,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		return err
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
+	if r.Trial == pretrainShardLiveTrial {
+		cmd = "set -eu\n" + pretrainShardLiveReadback + cmd
+	}
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
 	}
@@ -593,6 +596,9 @@ with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/I
 hosts = ["api.github.com","github.com","raw.githubusercontent.com","release-assets.githubusercontent.com","snapshot.ubuntu.com"]
 with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/ubuntu/20260831T073500Z/dists/noble/InRelease",method="HEAD"),timeout=15) as response:
     print(json.dumps({"snapshot_status":response.status,"addresses":{h:sorted({a[4][0] for a in socket.getaddrinfo(h,443)}) for h in hosts}}))`
+	}
+	if recording.Trial == pretrainShardLiveTrial {
+		probe = pretrainShardLiveNetwork
 	}
 	if task == datasetTask {
 		// This recording times both mutable API URLs at step 7. Its own guest
