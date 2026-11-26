@@ -48,7 +48,7 @@ slots=
 changed=
 finish() {
     [[ -z "$collector" ]] || { kill -TERM "$collector" 2>/dev/null || true; wait "$collector" || true; }
-    [[ -z "$slots" ]] || { kill -INT "$slots" 2>/dev/null || true; wait "$slots" || true; }
+    [[ -z "$slots" ]] || { kill -TERM "$slots" 2>/dev/null || true; wait "$slots" || true; }
     if [[ -n "$changed" ]]; then
         cp -p "$out/runtime.before.json" "$runtime/runtime.json.tb41-restore"
         mv "$runtime/runtime.json.tb41-restore" "$runtime/runtime.json"

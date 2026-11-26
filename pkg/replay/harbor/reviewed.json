@@ -181,6 +181,55 @@
     ]
   },
   {
+    "task": "payments-pipeline-fix",
+    "workdir": "/app",
+    "image": "localhost/zb-payments-main@sha256:f303863e82a5ae506c91130851e5cf50dc633c5f41f1bd37e7c83cd49a0aec0e",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 4,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "needs_network": true,
+    "tools": ["exec_command", "write_stdin", "update_plan"],
+    "effects": [
+      "Repair and time startup for the supervised worker using generated transaction history, the isolated Kafka broker, and the benchmark customer and loopback test servers. Preserve original process polls and read back source and startup results."
+    ],
+    "trials": [
+      {
+        "trial": "4d316e1a-590b-41e6-8a2d-a55a895af680",
+        "trajectory_sha256": "2b8ba0ea46eefaa535c74cb8e9f6e25a7381dd34b5e1a4a1dd82403b4fe03fa3",
+        "rollout_sha256": "54e2851f83859061a003b952a3f72656c7dc58e554d31825ae340015e4ab8df2"
+      }
+    ]
+  },
+  {
+    "task": "payments-pipeline-fix",
+    "workdir": "/app",
+    "image": "localhost/zb-payments-main@sha256:bb87c28eb81b97c73fbd339ca367f994cb8d87853df10b0ac2c3a30e6096629e",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 4,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "needs_network": true,
+    "tools": ["exec_command", "write_stdin", "update_plan"],
+    "effects": [
+      "Repair and time startup for the supervised worker using generated history and the isolated Kafka and customer services. Install the two recorded wheel versions from the private wheelhouse through the original package commands."
+    ],
+    "trials": [
+      {
+        "trial": "4df3e44e-0549-4a45-ac27-619c8b3d12f9",
+        "trajectory_sha256": "556aec78b15769d288a3986235d836af4e0fb8c3cb841754647c35e3503260c1",
+        "rollout_sha256": "a9f7b2eb8dc998ff4111b245cd250209302308017096339b023ee0e8541ddd80"
+      },
+      {
+        "trial": "73d8a7b2-71f4-4245-938e-1cb6a8bbc545",
+        "trajectory_sha256": "e3b2f4654af86f55e7f1dcac77a68491baa6d08217154097693028bcc93e9763",
+        "rollout_sha256": "d536cf87aaa809fbc20de6bc8da950b7fa41a7ce0991c60df3c8e73df20c4e07"
+      }
+    ]
+  },
+  {
     "task": "nextjs-performance",
     "workdir": "/app",
     "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",

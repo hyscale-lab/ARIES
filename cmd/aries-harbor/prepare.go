@@ -66,6 +66,7 @@ python3 -c "import urllib.request as u; assert u.urlopen('http://event-feed:8080
 		inputCheck: `test "$(cd /app/packet && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum)" = 'cd80264da9db617a531055ef7c32c48bccdc0828957a15f9c48ad2d3748a2e0b  -'`,
 	},
 	"intrastat-meldung": intrastatSetup,
+	paymentsTask: paymentsSetup,
 	"embedding-drift-monitor": {
 		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
 		output: "drift_monitor/monitor.py",
@@ -131,6 +132,9 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	if r.Task == nextjsTask {
 		return nextjsSourceSetup(r.Trial)
+	}
+	if r.Task == paymentsTask {
+		return paymentsSourceSetup(r.Trial), true
 	}
 	task, ok := taskSetups[r.Task]
 	if alias := intrastatAliases[r.Trial]; alias != "" {
@@ -505,6 +509,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		}[r.Trial]
 		cmd += "\necho '" + digest + "  /workspace/dispatch' | sha256sum -c -"
 	}
+	if r.Task == paymentsTask {
+		cmd += paymentsFinalCheck
+	}
 	switch r.Trial {
 	case "cfff4007-c001-4e29-950d-eb1a1e8a7bb0":
 		cmd += intrastatFirstFinal
@@ -680,6 +687,9 @@ with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/
 	if task == torchTask {
 		python, probe = "/usr/bin/python3", torchNetworkProbe
 	}
+	if task == paymentsTask {
+		probe = paymentsNetworkProbe
+	}
 	command := core.Command{Path: python, Args: []string{"-c", probe}}
 	if recording.Task == nextjsTask {
 		command = core.Command{Path: "/usr/local/bin/node", Args: []string{"-e", nextjsHealthCheck}}
@@ -687,6 +697,9 @@ with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/
 	out, err := checked(ctx, m, id, command)
 	end, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil || !json.Valid([]byte(out)) {
+		if task == paymentsTask {
+			return errors.Join(errors.New("local Payments fixture health readback failed"), err, clockErr)
+		}
 		if recording.Task == nextjsTask {
 			return errors.Join(errors.New("warehouse companion health readback failed"), err, clockErr)
 		}

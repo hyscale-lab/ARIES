@@ -325,10 +325,13 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if videoIPP != "" {
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
 	}
-	req.PrivateHostsFile = r.Task == "intrastat-meldung" || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
+	req.PrivateHostsFile = r.Task == paymentsTask || r.Task == "intrastat-meldung" || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	if r.Task == "freight-dispatch-shift" {
 		req.PrivateHostsFile = true
 		req.Env = []string{"DISPATCH_EVENT_API_URL=http://event-feed:8080"}
+	}
+	if r.Task == paymentsTask {
+		req.Env = []string{"KAFKA_BROKERS=kafka:9092", "KAFKA_TOPIC=transactions", "KAFKA_CONSUMER_GROUP=transaction-workers", "CUSTOMER_BASE=http://customer:9000"}
 	}
 	id, err := m.Create(ctx, req)
 	if id != "" {
