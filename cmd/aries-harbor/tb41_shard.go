@@ -6,6 +6,15 @@ const pretrainShardSciPyTrial = "14bdc7ee-84ce-4083-8e4c-c093b1551fca"
 const pretrainShardSciPyArchive = "6e888283ab4d7a0fc68b201eaa4ccbad2f82869434af26e41678d2dce2e06cfa"
 const pretrainShardWheelDirectory = "/opt/aries-shard-wheels"
 
+// The original logs omit Torch's explicit single-thread default warning.
+func pretrainShardTimingTrial(trial string) bool {
+	switch trial {
+	case "1ef39d1f-e661-4825-96ff-b2ba499a9e47", pretrainShardLiveTrial, "1d577700-1aa3-4bf8-a92e-d0bb6dea1925", pretrainShardSciPyTrial:
+		return true
+	}
+	return false
+}
+
 const pretrainShardLiveNetwork = `import json, socket
 
 hosts = ('raw.githubusercontent.com', 's3.amazonaws.com', 'www.gutenberg.org')

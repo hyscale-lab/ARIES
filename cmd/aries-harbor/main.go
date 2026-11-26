@@ -89,6 +89,7 @@ func command(ctx context.Context) error {
 	curlPackages := flag.String("curl-packages", "", "pinned Bookworm curl archive for the recorded HTTP client")
 	osTools := flag.String("os-tools", "", "pinned task-specific offline package archive")
 	shardSciPy := flag.String("shard-scipy-wheel", "", "pinned local SciPy wheel archive for the fifth pretraining shard source")
+	shardOMP := flag.Bool("diagnostic-shard-omp-two", false, "use two OpenMP threads per rank in a reviewed shard replay diagnostic")
 	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
 	probe := flag.String("guest-probe", "", "optional guest telemetry executable for diagnostic runs")
 	sampler := flag.String("sampler", "", "host sample_vmm.py")
@@ -282,6 +283,9 @@ func command(ctx context.Context) error {
 	if (r.Trial == pretrainShardSciPyTrial) != (*shardSciPy != "") {
 		return errors.New("provide the pinned SciPy wheel archive only for the fifth pretraining shard source")
 	}
+	if *shardOMP && (r.Task != pretrainShardTask || !pretrainShardTimingTrial(r.Trial)) {
+		return errors.New("two OpenMP threads require a reviewed shard timing diagnostic")
+	}
 	if (*sampler == "") != (*samples == "") {
 		return errors.New("provide -sampler and -samples together")
 	}
@@ -303,10 +307,10 @@ func command(ctx context.Context) error {
 	if *periodicSocket != "" && (*observer != "" || *intraStep != 0 || *probe != "") {
 		return errors.New("periodic collector owns all trace boundaries")
 	}
-	return native(ctx, o, r, *image, *periodicSocket, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *shardSciPy, *paymentsVerifier, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *periodicSocket, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *shardSciPy, *paymentsVerifier, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, *shardOMP, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, periodicSocket, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP, shardSciPy, paymentsVerifier string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, periodicSocket, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP, shardSciPy, paymentsVerifier string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, shardOMP, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -333,6 +337,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	req := deployment.Request{Name: name, AllowNetwork: r.NeedsNetwork, Image: image, StorageMB: storage, Workdir: r.Workdir, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
 	if videoIPP != "" {
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
+	}
+	if shardOMP {
+		req.Env = []string{"OMP_NUM_THREADS=2"}
 	}
 	req.PrivateHostsFile = r.Task == claimsTask || r.Task == paymentsTask || r.Task == "intrastat-meldung" || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	if r.Task == "freight-dispatch-shift" {
@@ -508,6 +515,15 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	}
 	if err = lifecycle("restore_complete"); err != nil {
 		return err
+	}
+	if shardOMP {
+		threads, err := checked(ctx, m, id, core.Command{Path: "/usr/bin/printenv", Args: []string{"OMP_NUM_THREADS"}})
+		if err != nil || strings.TrimSpace(threads) != "2" {
+			return errors.Join(err, fmt.Errorf("restored shard OpenMP setting differs: %q", threads))
+		}
+		if err := log.Encode(map[string]any{"event": "shard_omp_diagnostic", "threads_per_rank": 2}); err != nil {
+			return err
+		}
 	}
 	if r.Task == "intrastat-meldung" {
 		if _, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-ec", intrastatHealth}}); err != nil {
