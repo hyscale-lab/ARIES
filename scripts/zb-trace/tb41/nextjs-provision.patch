@@ -1,0 +1,22 @@
+--- provision_baseline.sh
++++ provision_nextjs.sh
+@@ -118 +118 @@
+-  base_image_size = "10737418240"
++  base_image_size = "16106127360"
+@@ -161 +161 @@
+-    python3 -c 'import sys,tomllib; p=tomllib.loads(sys.stdin.read())["plugins"]; assert p["io.containerd.server.v1.grpc"]["address"]==sys.argv[1]; assert p["io.containerd.server.v1.ttrpc"]["address"]==sys.argv[1]+".ttrpc"; assert p["io.containerd.snapshotter.v1.devmapper"]["base_image_size"]=="10737418240"' "$socket"
++    python3 -c 'import sys,tomllib; p=tomllib.loads(sys.stdin.read())["plugins"]; assert p["io.containerd.server.v1.grpc"]["address"]==sys.argv[1]; assert p["io.containerd.server.v1.ttrpc"]["address"]==sys.argv[1]+".ttrpc"; assert p["io.containerd.snapshotter.v1.devmapper"]["base_image_size"]=="16106127360"' "$socket"
+@@ -180 +180,12 @@
+-"${ctr[@]}" images pull --local --platform linux/amd64 --snapshotter devmapper "$image"
++for role in runtime warehouse; do
++    archive="$stack/$role.oci.tgz"
++    tag="localhost/zb-nextjs-$role:be1d1d11"
++    ref="$image"
++    if [[ "$role" == warehouse ]]; then ref="$NEXTJS_COMPANION_IMAGE"; fi
++    [[ "$ref" == "localhost/zb-nextjs-$role@sha256:"* ]]
++    gzip -dc "$archive" | "${ctr[@]}" images import --local --platform linux/amd64 --snapshotter devmapper --digests -
++    "${ctr[@]}" images ls | awk -v tag="$tag" -v digest="${ref##*@}" '$1==tag && $3==digest {good=1} END {exit !good}'
++    if ! "${ctr[@]}" images ls -q | grep -Fxq "$ref"; then
++        "${ctr[@]}" images tag "$tag" "$ref"
++    fi
++done

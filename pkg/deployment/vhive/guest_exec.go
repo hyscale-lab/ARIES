@@ -307,9 +307,9 @@ func runGuestExec(ctx context.Context, cancel context.CancelCauseFunc, client ta
 	return exit.response.ExitStatus, nil
 }
 
-// guestTaskRunning checks the retained guest task instead of the replacement
-// host shim, whose task table is empty after loading a VM snapshot.
-func (m *Manager) guestTaskRunning(ctx context.Context, id string) (bool, error) {
+// guestTasksRunning checks the retained guest tasks through the guest agent.
+func (m *Manager) guestTasksRunning(ctx context.Context, request *proto.CreateVMRequest) (bool, error) {
+	id := request.VMID
 	control, err := m.vmControl()
 	if err != nil {
 		return false, err
@@ -331,9 +331,22 @@ func (m *Manager) guestTaskRunning(ctx context.Context, id string) (bool, error)
 	defer client.Close()
 	stopClose := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stopClose()
-	state, err := taskAPI.NewTaskClient(client).State(ctx, &taskAPI.StateRequest{ID: id})
-	if err != nil {
-		return false, err
+	return guestTasksReady(ctx, taskAPI.NewTaskClient(client), request)
+}
+
+func guestTasksReady(ctx context.Context, guest taskAPI.TaskService, request *proto.CreateVMRequest) (bool, error) {
+	ids := []string{request.VMID}
+	if request.ContainerCount == 2 {
+		ids = append(ids, companionID(request.VMID))
 	}
-	return state.Status == tasktypes.Status_RUNNING, nil
+	for _, taskID := range ids {
+		state, err := guest.State(ctx, &taskAPI.StateRequest{ID: taskID})
+		if err != nil {
+			return false, err
+		}
+		if state.Status != tasktypes.Status_RUNNING {
+			return false, nil
+		}
+	}
+	return true, nil
 }

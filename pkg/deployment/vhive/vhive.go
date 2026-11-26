@@ -23,6 +23,8 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
+	"github.com/containerd/containerd/containers"
+	"github.com/containerd/containerd/identifiers"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/namespaces"
@@ -37,16 +39,19 @@ import (
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/opencontainers/go-digest"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
-	vmAnnotation = "aws.firecracker.vm.id"
-	configLabel  = "aries.vhive.request"
-	stateLabel   = "aries.vhive.vm-state"
-	runtimeName  = "aws.firecracker"
+	vmAnnotation   = "aws.firecracker.vm.id"
+	configLabel    = "aries.vhive.request"
+	stateLabel     = "aries.vhive.vm-state"
+	companionLabel = "aries.vhive.companion-image"
+	ownerLabel     = "aries.vhive.owner"
+	runtimeName    = "aws.firecracker"
 )
 
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
@@ -67,6 +72,8 @@ type Options struct {
 	// NativeCheckpoint selects CheckpointVM and native artifact restore on the
 	// optimized firecracker-containerd runtime.
 	NativeCheckpoint bool
+	// CompanionImage runs the digest-qualified image's command as a second task in the VM.
+	CompanionImage string
 	// NativeReportingOnly requests a zero-target reporting balloon on the
 	// optimized runtime for the matched DAMON-disabled control.
 	NativeReportingOnly bool
@@ -156,6 +163,15 @@ func New(options Options) (*Manager, error) {
 }
 
 func validateOptions(o Options) error {
+	if o.CompanionImage != "" {
+		if !o.NativeCheckpoint || !o.GuestTaskV3 {
+			return errors.New("a vHive companion requires native checkpoints and guest Task v3")
+		}
+		ref, err := imageReference(o.CompanionImage)
+		if _, ok := ref.(reference.Canonical); err != nil || !ok {
+			return errors.New("a vHive companion image requires a digest-qualified reference")
+		}
+	}
 	if o.NativeReportingOnly && !o.NativeCheckpoint {
 		return errors.New("native reporting control requires native checkpoints")
 	}
@@ -224,6 +240,17 @@ func (m *Manager) validateRequest(r deployment.Request) error {
 	if !identifier.MatchString(r.Name) || r.Image == "" {
 		return errors.New("vHive requires a runtime name and image")
 	}
+	if m.options.CompanionImage != "" {
+		if err := identifiers.Validate(companionID(r.Name)); err != nil {
+			return fmt.Errorf("invalid vHive companion identity: %w", err)
+		}
+	}
+	if _, ok := r.Labels[companionLabel]; ok {
+		return errors.New("vHive companion ownership labels are reserved")
+	}
+	if _, ok := r.Labels[ownerLabel]; ok {
+		return errors.New("vHive companion ownership labels are reserved")
+	}
 	if r.Labels["aries.managed"] != "true" || r.Labels["aries.kind"] != "task-container" || r.Labels["aries.run"] == "" || r.Labels["aries.task"] == "" {
 		return errors.New("vHive requires sandbox ownership labels")
 	}
@@ -264,6 +291,9 @@ func (m *Manager) vmRequest(r deployment.Request) *proto.CreateVMRequest {
 		// Explicit StopVM owns teardown, including partial task creation.
 		ExitAfterAllTasksDeleted: false,
 	}
+	if m.options.CompanionImage != "" {
+		request.ContainerCount = 2
+	}
 	if m.options.NativeReportingOnly {
 		request.BalloonDevice = nativeReportingBalloon()
 	}
@@ -284,6 +314,13 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	if err != nil {
 		return "", err
 	}
+	var companionImage containerd.Image
+	if m.options.CompanionImage != "" {
+		companionImage, err = m.image(ctx, m.options.CompanionImage)
+		if err != nil {
+			return "", err
+		}
+	}
 	ctx, release, err := m.client.WithLease(ctx)
 	if err != nil {
 		return "", err
@@ -300,6 +337,9 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	labels := maps.Clone(r.Labels)
 	labels[configLabel] = string(encoded)
 	labels[stateLabel] = "reserved"
+	if companionImage != nil {
+		labels[companionLabel] = companionImage.Name()
+	}
 	container, err := m.client.NewContainer(ctx, r.Name, containerd.WithImage(image), containerd.WithContainerLabels(labels),
 		containerd.WithSnapshotter(m.options.Snapshotter), containerd.WithRuntime(runtimeName, nil))
 	if err != nil {
@@ -307,15 +347,18 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	}
 	// Reserve metadata before any snapshot side effects. A failed native spec
 	// option or lost snapshot response still has an owned cleanup identity.
-	if err = container.Update(ctx, containerd.UpdateContainerOpts(containerd.WithNewSnapshot(r.Name, image))); err != nil {
-		return r.Name, err
-	}
-	opts := append([]oci.SpecOpts{oci.WithImageConfig(image)}, sandboxSpecOptions(r)...)
-	if err = container.Update(ctx, containerd.UpdateContainerOpts(containerd.WithNewSpec(opts...))); err != nil {
+	if err = prepareTask(ctx, container, r.Name, image, sandboxSpecOptions(r)); err != nil {
 		return r.Name, err
 	}
 	if err = m.validateStorage(ctx, r.Name, r.StorageMB); err != nil {
 		return r.Name, err
+	}
+	var companion containerd.Container
+	if companionImage != nil {
+		companion, err = m.prepareCompanion(ctx, r.Name, companionImage, labels)
+		if err != nil {
+			return r.Name, err
+		}
 	}
 	control, err := m.vmControl()
 	if err != nil {
@@ -356,6 +399,15 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	if err = task.Start(ctx); err != nil {
 		return r.Name, fmt.Errorf("start idle guest task: %w", err)
 	}
+	if companion != nil {
+		task, err := companion.NewTask(ctx, cio.NullIO)
+		if err != nil {
+			return r.Name, fmt.Errorf("create guest companion task: %w", err)
+		}
+		if err = task.Start(ctx); err != nil {
+			return r.Name, fmt.Errorf("start guest companion task: %w", err)
+		}
+	}
 	if m.options.IdleMode == "checkpoint" {
 		if err = m.saveCheckpoint(r.Name, &checkpointState{Phase: "running", Request: request}); err != nil {
 			return r.Name, err
@@ -387,6 +439,60 @@ func sandboxSpecOptions(r deployment.Request) []oci.SpecOpts {
 		opts = append(opts, oci.WithCPUCFS(int64(*r.CPU*100000), 100000))
 	}
 	return opts
+}
+
+func companionID(vmID string) string { return vmID + "-companion" }
+
+func companionSpecOptions(vmID string) []oci.SpecOpts {
+	return []oci.SpecOpts{
+		oci.WithAnnotations(map[string]string{vmAnnotation: vmID}),
+		firecrackeroci.WithVMNetwork,
+	}
+}
+
+func (m *Manager) prepareCompanion(ctx context.Context, vmID string, image containerd.Image, labels map[string]string) (containerd.Container, error) {
+	id := companionID(vmID)
+	owner := map[string]string{
+		ownerLabel: vmID, "aries.managed": "true", "aries.kind": "task-container", "aries.component": "companion",
+		"aries.run": labels["aries.run"], "aries.task": labels["aries.task"],
+	}
+	container, err := m.client.NewContainer(ctx, id, containerd.WithImage(image), containerd.WithContainerLabels(owner),
+		containerd.WithSnapshotter(m.options.Snapshotter), containerd.WithRuntime(runtimeName, nil))
+	if err != nil {
+		return nil, fmt.Errorf("reserve guest companion: %w", err)
+	}
+	if err = prepareTask(ctx, container, id, image, companionSpecOptions(vmID)); err != nil {
+		return nil, fmt.Errorf("prepare guest companion: %w", err)
+	}
+	return container, nil
+}
+
+func prepareTask(ctx context.Context, container containerd.Container, id string, image containerd.Image, spec []oci.SpecOpts) error {
+	if err := container.Update(ctx, containerd.UpdateContainerOpts(containerd.WithNewSnapshot(id, image))); err != nil {
+		return err
+	}
+	opts := append([]oci.SpecOpts{oci.WithImageConfig(image)}, spec...)
+	return container.Update(ctx, containerd.UpdateContainerOpts(containerd.WithNewSpec(opts...)))
+}
+
+func (m *Manager) ownedCompanion(ctx context.Context, main containers.Container) (containerd.Container, containers.Container, error) {
+	id := companionID(main.ID)
+	c, err := m.client.LoadContainer(ctx, id)
+	if err != nil {
+		return nil, containers.Container{}, err
+	}
+	info, err := c.Info(ctx)
+	if err != nil {
+		return nil, containers.Container{}, err
+	}
+	if info.ID != id || info.Runtime.Name != runtimeName || info.Snapshotter != m.options.Snapshotter ||
+		(info.SnapshotKey != "" && info.SnapshotKey != id) || info.Image != main.Labels[companionLabel] ||
+		info.Labels[ownerLabel] != main.ID || info.Labels["aries.managed"] != "true" ||
+		info.Labels["aries.kind"] != "task-container" || info.Labels["aries.component"] != "companion" ||
+		info.Labels["aries.run"] != main.Labels["aries.run"] || info.Labels["aries.task"] != main.Labels["aries.task"] {
+		return nil, containers.Container{}, errors.New("vHive companion ownership differs")
+	}
+	return c, info, nil
 }
 
 func (m *Manager) recoverCreate(ctx context.Context, r deployment.Request, cause error) (string, error) {
@@ -532,27 +638,8 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 	if r.Workdir != "" && spec.Process.Cwd != r.Workdir || spec.Process.NoNewPrivileges != r.NoNewPrivileges {
 		return errors.New("vHive workdir or privilege policy differs")
 	}
-	if spec.Root == nil || spec.Root.Path != "rootfs" || spec.Linux == nil || len(spec.Linux.Devices) != 0 {
-		return errors.New("vHive guest root or device policy differs")
-	}
-	for _, ns := range spec.Linux.Namespaces {
-		if ns.Path != "" {
-			return errors.New("vHive guest cannot join an external namespace")
-		}
-	}
-	for _, mount := range spec.Mounts {
-		if r.PrivateHostsFile && mount.Destination == "/etc/hosts" {
-			return errors.New("vHive private hosts file is covered by a mount")
-		}
-		switch mount.Type {
-		case "proc", "tmpfs", "devpts", "mqueue", "sysfs", "cgroup", "cgroup2":
-		case "bind":
-			if !((mount.Source == "/etc/hosts" || mount.Source == "/etc/resolv.conf") && mount.Source == mount.Destination) {
-				return errors.New("vHive guest has an unexpected bind mount")
-			}
-		default:
-			return errors.New("vHive guest has an unexpected filesystem mount")
-		}
+	if err := validateGuestSpec(spec, r.PrivateHostsFile); err != nil {
+		return err
 	}
 	for _, entry := range r.Env {
 		key, value, _ := strings.Cut(entry, "=")
@@ -569,7 +656,41 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 			return errors.New("vHive guest environment differs")
 		}
 	}
-	metadata, err := json.Marshal([]any{info, spec})
+	objects := []any{info, spec}
+	if m.options.CompanionImage != "" || info.Labels[companionLabel] != "" {
+		expected, err := imageReference(m.options.CompanionImage)
+		if err != nil || info.Labels[companionLabel] != expected.String() {
+			return errors.New("vHive companion image identity differs")
+		}
+		c, companion, err := m.ownedCompanion(ctx, info)
+		if err != nil {
+			return err
+		}
+		if companion.SnapshotKey != companion.ID {
+			return errors.New("vHive companion root snapshot identity differs")
+		}
+		other, err := c.Spec(ctx)
+		if err != nil {
+			return err
+		}
+		if err := validateGuestSpec(other, false); err != nil {
+			return err
+		}
+		if other.Annotations[vmAnnotation] != id || other.Process == nil || len(other.Process.Args) == 0 ||
+			spec.Linux.CgroupsPath != filepath.Join("/", m.options.Namespace, id) ||
+			other.Linux.CgroupsPath != filepath.Join("/", m.options.Namespace, companion.ID) {
+			return errors.New("vHive companion VM binding, command or cgroup differs")
+		}
+		for _, guest := range []*specs.Spec{spec, other} {
+			for _, ns := range guest.Linux.Namespaces {
+				if ns.Type == specs.NetworkNamespace {
+					return errors.New("paired vHive tasks must share the VM network namespace")
+				}
+			}
+		}
+		objects = append(objects, companion, other)
+	}
+	metadata, err := json.Marshal(objects)
 	if err != nil {
 		return err
 	}
@@ -603,13 +724,39 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 	return nil
 }
 
+func validateGuestSpec(spec *specs.Spec, privateHosts bool) error {
+	if spec == nil || spec.Root == nil || spec.Root.Path != "rootfs" || spec.Linux == nil || len(spec.Linux.Devices) != 0 {
+		return errors.New("vHive guest root or device policy differs")
+	}
+	for _, ns := range spec.Linux.Namespaces {
+		if ns.Path != "" {
+			return errors.New("vHive guest cannot join an external namespace")
+		}
+	}
+	for _, mount := range spec.Mounts {
+		if privateHosts && mount.Destination == "/etc/hosts" {
+			return errors.New("vHive private hosts file is covered by a mount")
+		}
+		switch mount.Type {
+		case "proc", "tmpfs", "devpts", "mqueue", "sysfs", "cgroup", "cgroup2":
+		case "bind":
+			if !((mount.Source == "/etc/hosts" || mount.Source == "/etc/resolv.conf") && mount.Source == mount.Destination) {
+				return errors.New("vHive guest has an unexpected bind mount")
+			}
+		default:
+			return errors.New("vHive guest has an unexpected filesystem mount")
+		}
+	}
+	return nil
+}
+
 func (m *Manager) Start(ctx context.Context, id string) error {
 	running, err := m.Running(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !running {
-		return errors.New("vHive idle guest task is not running")
+		return errors.New("vHive guest task is not running")
 	}
 	return nil
 }
@@ -659,8 +806,15 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if info.ID != id || info.Runtime.Name != runtimeName || info.Snapshotter != m.options.Snapshotter || info.Labels["aries.managed"] != "true" || info.Labels["aries.kind"] != "task-container" {
+	if info.ID != id || info.Runtime.Name != runtimeName || info.Snapshotter != m.options.Snapshotter || info.Labels["aries.managed"] != "true" || info.Labels["aries.kind"] != "task-container" || info.Labels[ownerLabel] != "" {
 		return errors.New("refusing to remove unowned vHive runtime")
+	}
+	var companion containerd.Container
+	if info.Labels[companionLabel] != "" {
+		companion, _, err = m.ownedCompanion(ctx, info)
+		if err != nil && !errdefs.IsNotFound(err) {
+			return err
+		}
 	}
 	state := info.Labels[stateLabel]
 	if m.options.IdleMode == "checkpoint" {
@@ -700,27 +854,39 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	// returns an untyped socket-dial error rather than NotFound.
 	// The snapshot name is reserved even if its metadata Update response was
 	// lost. Remove it explicitly rather than relying on info.SnapshotKey.
-	snapshotter := m.client.SnapshotService(m.options.Snapshotter)
-	if err = snapshotter.Remove(ctx, id); err != nil && !errdefs.IsNotFound(err) {
+	if companion != nil {
+		if err := m.removeTaskAllocation(ctx, companionID(id), companion); err != nil {
+			return err
+		}
+	}
+	if err := m.removeTaskAllocation(ctx, id, c); err != nil {
 		return err
 	}
-	if _, err = snapshotter.Stat(ctx, id); !errdefs.IsNotFound(err) {
+	if m.options.IdleMode == "checkpoint" {
+		return os.RemoveAll(m.runtimeDir(id))
+	}
+	return nil
+}
+
+func (m *Manager) removeTaskAllocation(ctx context.Context, id string, c containerd.Container) error {
+	snapshotter := m.client.SnapshotService(m.options.Snapshotter)
+	if err := snapshotter.Remove(ctx, id); err != nil && !errdefs.IsNotFound(err) {
+		return err
+	}
+	if _, err := snapshotter.Stat(ctx, id); !errdefs.IsNotFound(err) {
 		if err == nil {
 			return errors.New("vHive snapshot remains after removal")
 		}
 		return err
 	}
-	if err = c.Delete(ctx); err != nil && !errdefs.IsNotFound(err) {
+	if err := c.Delete(ctx); err != nil && !errdefs.IsNotFound(err) {
 		return err
 	}
-	if _, err = m.client.LoadContainer(ctx, id); !errdefs.IsNotFound(err) {
+	if _, err := m.client.LoadContainer(ctx, id); !errdefs.IsNotFound(err) {
 		if err == nil {
 			return errors.New("vHive container metadata remains after removal")
 		}
 		return err
-	}
-	if m.options.IdleMode == "checkpoint" {
-		return os.RemoveAll(m.runtimeDir(id))
 	}
 	return nil
 }

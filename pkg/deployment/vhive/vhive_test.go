@@ -29,17 +29,21 @@ import (
 type fakeClient struct {
 	containerClient
 	container     *fakeContainer
+	containers    map[string]*fakeContainer
 	loadErr       error
 	snapshots     *fakeSnapshots
 	leaseReleased bool
 }
 
-type fakeImage struct{ containerd.Image }
+type fakeImage struct {
+	containerd.Image
+	name string
+}
 
-func (fakeImage) Name() string                                                  { return "docker.io/library/example:test" }
+func (i fakeImage) Name() string                                                { return i.name }
 func (fakeImage) Unpack(context.Context, string, ...containerd.UnpackOpt) error { return nil }
-func (c *fakeClient) GetImage(context.Context, string) (containerd.Image, error) {
-	return fakeImage{}, nil
+func (c *fakeClient) GetImage(_ context.Context, name string) (containerd.Image, error) {
+	return fakeImage{name: name}, nil
 }
 func (c *fakeClient) WithLease(ctx context.Context, _ ...leases.Opt) (context.Context, func(context.Context) error, error) {
 	return ctx, func(context.Context) error { c.leaseReleased = true; return nil }, nil
@@ -51,21 +55,27 @@ func (c *fakeClient) NewContainer(ctx context.Context, id string, opts ...contai
 			return nil, err
 		}
 	}
-	c.container.info = info
-	return c.container, nil
+	container := c.container
+	if c.containers != nil {
+		container = c.containers[id]
+	}
+	container.info = info
+	return container, nil
 }
 
 type fakeSnapshots struct {
 	snapshots.Snapshotter
 	removed   bool
+	keys      []string
 	removeErr error
 }
 
-func (s *fakeSnapshots) Remove(context.Context, string) error {
+func (s *fakeSnapshots) Remove(_ context.Context, name string) error {
 	if s.removeErr != nil {
 		return s.removeErr
 	}
 	s.removed = true
+	s.keys = append(s.keys, name)
 	return nil
 }
 func (s *fakeSnapshots) Stat(context.Context, string) (snapshots.Info, error) {
@@ -81,14 +91,18 @@ func (c *fakeClient) SnapshotService(string) snapshots.Snapshotter {
 	return c.snapshots
 }
 
-func (c *fakeClient) LoadContainer(context.Context, string) (containerd.Container, error) {
+func (c *fakeClient) LoadContainer(_ context.Context, name string) (containerd.Container, error) {
 	if c.loadErr != nil {
 		return nil, c.loadErr
 	}
-	if c.container == nil || c.container.removed {
+	container := c.container
+	if c.containers != nil {
+		container = c.containers[name]
+	}
+	if container == nil || container.removed {
 		return nil, errdefs.ErrNotFound
 	}
-	return c.container, nil
+	return container, nil
 }
 
 type fakeContainer struct {
@@ -129,12 +143,22 @@ func (c *fakeContainer) Task(context.Context, cio.Attach) (containerd.Task, erro
 	return c.task, nil
 }
 
+func (c *fakeContainer) NewTask(context.Context, cio.Creator, ...containerd.NewTaskOpts) (containerd.Task, error) {
+	return c.task, nil
+}
+
 type fakeVM struct {
 	vmClient
 	stopErr error
 	stops   int
 	wrongID bool
 	onStop  func()
+	request *proto.CreateVMRequest
+}
+
+func (v *fakeVM) CreateVM(_ context.Context, r *proto.CreateVMRequest) (*proto.CreateVMResponse, error) {
+	v.request = r
+	return &proto.CreateVMResponse{}, nil
 }
 
 func (v *fakeVM) GetVMInfo(_ context.Context, r *proto.GetVMInfoRequest) (*proto.GetVMInfoResponse, error) {
@@ -382,7 +406,10 @@ type fakeTask struct {
 	containerd.Task
 	proc    *fakeProcess
 	process *specs.Process
+	starts  int
 }
+
+func (t *fakeTask) Start(context.Context) error { t.starts++; return nil }
 
 func (t *fakeTask) Exec(_ context.Context, _ string, spec *specs.Process, _ cio.Creator) (containerd.Process, error) {
 	t.process = spec

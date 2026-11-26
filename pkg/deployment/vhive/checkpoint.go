@@ -249,10 +249,13 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 		return err
 	}
 	endStage := core.TimeCommandStage(ctx, "checkpoint.inspect_task")
-	running, err := m.guestTaskRunning(ctx, id)
+	running, err := m.guestTasksRunning(ctx, s.Request)
 	endStage()
 	if err != nil {
 		return err
+	}
+	if s.Request.ContainerCount == 2 && !running {
+		return errors.New("both vHive tasks must be running before checkpoint")
 	}
 	s.TaskRunning = running
 	if m.options.RestoreMemorySocket != "" {
@@ -437,6 +440,15 @@ func (m *Manager) restoreCheckpointVM(ctx context.Context, id string, s *checkpo
 	if err != nil {
 		return fmt.Errorf("restore vHive microVM: %w", err)
 	}
+	if s.Request.ContainerCount == 2 {
+		running, err := m.guestTasksRunning(ctx, s.Request)
+		if err != nil {
+			return fmt.Errorf("check restored vHive tasks: %w", err)
+		}
+		if !running {
+			return errors.New("both vHive tasks must be running after restore")
+		}
+	}
 	s.Phase = "running"
 	s.Processes = nil
 	endStage = core.TimeCommandStage(ctx, "restore.persist_running")
@@ -469,7 +481,7 @@ func (m *Manager) checkpointRunning(ctx context.Context, id string) (bool, error
 	if s.Phase != "running" {
 		return false, fmt.Errorf("checkpoint in %s state", s.Phase)
 	}
-	return m.guestTaskRunning(m.ctx(ctx), id)
+	return m.guestTasksRunning(m.ctx(ctx), s.Request)
 }
 
 func processStart(pid int) (string, error) {

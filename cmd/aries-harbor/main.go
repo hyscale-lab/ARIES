@@ -98,6 +98,7 @@ func command(ctx context.Context) error {
 	flag.BoolVar(&o.GuestTaskV3, "guest-task-v3", true, "containerd-v2 stack with guest task v3 and framed streams")
 	flag.BoolVar(&o.NativeCheckpoint, "native-checkpoint", false, "optimized native checkpoint and restore API")
 	flag.BoolVar(&o.NativeReportingOnly, "native-reporting-only", false, "zero-target free-page reporting on the native DAMON-disabled control")
+	flag.StringVar(&o.CompanionImage, "companion-image", "", "digest-qualified companion image required by the source fixture")
 	flag.StringVar(&o.CNINetwork, "cni-network", "", "task-specific guest network")
 	flag.StringVar(&o.CNIConfDir, "cni-conf-dir", "", "task-specific CNI configuration directory")
 	flag.StringVar(&o.CNICacheDir, "cni-cache-dir", "", "task-specific CNI cache directory")
@@ -230,6 +231,13 @@ func command(ctx context.Context) error {
 	}
 	if *image != r.Image {
 		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
+	}
+	requiredCompanion := ""
+	if r.Trial == "be1d1d11-8af3-404e-9238-e4597b6552e2" {
+		requiredCompanion = "localhost/zb-nextjs-warehouse@sha256:decefdfc46bbed17ebdc58a58d0b220ae52d4c71b363ce42b58ecde17d309ba8"
+	}
+	if o.CompanionImage != requiredCompanion {
+		return fmt.Errorf("companion image differs from the source fixture for trial %s", r.Trial)
 	}
 	if r.NeedsNetwork != (o.CNINetwork != "") {
 		return fmt.Errorf("source %s requires guest network enabled=%t", r.Trial, r.NeedsNetwork)
