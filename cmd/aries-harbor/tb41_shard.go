@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
-	"github.com/hyscale-lab/aries/pkg/harness"
 )
 
 const pretrainShardTask = "pretrain-shard-corruption"
@@ -43,16 +43,8 @@ func stageShardHistoryCA(ctx context.Context, m *vhive.Manager, id, path string,
 			return err
 		}
 	}
-	bundle, err := harness.StageArchive(nil, map[string]harness.ArchiveFile{
-		"aries-shard-history.crt": {Content: data, Mode: 0644},
-	})
-	if err != nil {
-		return err
-	}
-	if err := m.UploadArchive(ctx, id, "/opt", bytes.NewReader(bundle)); err != nil {
-		return err
-	}
-	out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", pretrainShardHistoryHealth}})
+	out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python",
+		Args: []string{"-c", pretrainShardHistoryHealth, base64.StdEncoding.EncodeToString(data)}})
 	if err != nil {
 		return err
 	}
@@ -60,8 +52,11 @@ func stageShardHistoryCA(ctx context.Context, m *vhive.Manager, id, path string,
 		"certificate_sha256": fmt.Sprintf("%x", sha256.Sum256(data)), "readback": json.RawMessage(out)})
 }
 
-const pretrainShardHistoryHealth = `import json, os, socket, ssl, urllib.request
+const pretrainShardHistoryHealth = `import base64, json, os, socket, ssl, sys, urllib.request
+from pathlib import Path
 certificate = os.environ['CURL_CA_BUNDLE']
+with Path(certificate).open('xb') as out:
+    out.write(base64.b64decode(sys.argv[1], validate=True))
 hosts = ('raw.githubusercontent.com', 's3.amazonaws.com', 'www.gutenberg.org')
 context = ssl.create_default_context(cafile=certificate)
 for host in hosts:

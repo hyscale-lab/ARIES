@@ -5,6 +5,8 @@ stack=$(realpath "$1")
 node=$2
 source=$3
 arm=$4
+repeat=${5:-1}
+[[ "$repeat" =~ ^[1-9]$ ]]
 unit="fcmod-zepbound-$node-shard-repair"
 runtime="$stack/runtime"
 stage="$stack/replay"
@@ -17,6 +19,7 @@ case "$arm" in
     *) exit 2 ;;
 esac
 out="$stack/runs/pretrain-shard-corruption-$source-repair-$node-$arm"
+if [[ "$repeat" != 1 ]]; then out="$out-$repeat"; fi
 [[ ! -e "$out" && ! -e "$out.driver" ]]
 mkdir -p "$stack/runs"
 [[ ${#out} -le 93 ]]
