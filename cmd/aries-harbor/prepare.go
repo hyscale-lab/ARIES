@@ -465,26 +465,18 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
 	}
+	if r.Task == "mvcc-lsm-compaction" {
+		// Each digest covers all fourteen files retained in the original trial.
+		want := map[string]string{
+			"142e80d4-a690-4aa9-8722-7b02a585a936": "2e2779e3df3f5ebc272276c72b0b5ec3e2955838fcca61fc3786c3d1841d23e4",
+			"88f11121-1f97-443d-9a33-d28ec9956a0d": "044f597b19b55320f6242df54f32871187312c66e7ac2af7468c7705d2e37ecf",
+			"759604be-a617-4ac5-be5e-289cdc771b9d": "6bb69077e527de9e654667d5b9c6b21d387eb8a1edeb8c1ad190aa14ed3df314",
+			"6a70afa0-fb22-4646-b2bb-3ff8eced7237": "4b606e96f191e952f086ad5cd7edcff00ec7450b8b28455c9a6e1f5e50157f90",
+			"ef50d0ac-9de1-4c3d-b320-3312179b5ca1": "b0ce0d81f7f00162d58f3571b42124488921731fd4d50390972160700232840a",
+		}[r.Trial]
+		cmd += "\nexport LC_ALL=C\nsha256sum Makefile crash_report.txt include/mvcc_lsm/* src/* tests/* | tee /dev/stderr | sha256sum | grep -Fx '" + want + "  -'"
+	}
 	switch r.Trial {
-	case "142e80d4-a690-4aa9-8722-7b02a585a936":
-		cmd += `
-sha256sum -c <<'MVCC_ARTIFACTS'
-f23385d475bb28bf6e5b3c977171625d74f6aadedb1b487c69aca1317dd7051e  Makefile
-8d9fba1ff100806f0a13e48de94c147dedd9ea4e901434ae0002efa1503e297f  crash_report.txt
-d1f15cb061010cfaaf707e66508617ae88a4de3add058ddf6a829a1934a323e8  include/mvcc_lsm/flush_builder.h
-00d67ee4b1d9f4a9dc1e63218d15ad0dc2afd359a887aa3abb73003e2136a469  include/mvcc_lsm/lsm_db.h
-dcbef0aca85044157211e21f2759ddddedead7c9b9a23f14ad10bd5d5473f242  include/mvcc_lsm/snapshot_context.h
-8e0cf474081f67d46e8a33443d28aef02ea0b7a21496caa332c74d499880e5b9  include/mvcc_lsm/types.h
-c40a6fe3019b233e7e4a9cad6ac6f8d9ad7c5f8322bea293e0338b8e357c6829  include/mvcc_lsm/version.h
-802bfb6e22195022e1c298756e499ebe3b7371eb825c97938c47c227101da7d6  include/mvcc_lsm/version_store.h
-406912a36c953ba1592dfe909281c000ef57769bf4e757e9fcd8160d682ec966  src/flush_builder.cc
-e3d4838768ae1857394224a28edb4958001d57654de61e66004ab27e200ef584  src/lsm_db.cc
-33e13235e226beb8b1819b09eb1fa63196f39fb2bfbd05a9fa8c9d51d3de6987  src/snapshot_context.cc
-56ad9e10cf0e7c8e3f9e52d0a62b9a754467d653acbb0c2d0071939283f5ee38  src/version_store.cc
-130ef732980ad98df82247d0ad2a0c8be872f97d4dc15ae4d3a10a180301c24e  tests/regression_test.cc
-0750a0c2d746c713a26b1792df231e6685d9f928770d78a1231f46b0e7eb3a76  tests/stress_repro.cc
-MVCC_ARTIFACTS
-`
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:

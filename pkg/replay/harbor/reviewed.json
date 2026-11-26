@@ -10,7 +10,8 @@
     "storage_mib": 10240,
     "tools": [
       "exec_command",
-      "update_plan"
+      "update_plan",
+      "write_stdin"
     ],
     "effects": [
       "Inspect and edit local C++ sources and validate synthetic storage snapshots with the supplied local tests."
@@ -20,6 +21,26 @@
         "trial": "142e80d4-a690-4aa9-8722-7b02a585a936",
         "trajectory_sha256": "691a76e8f280185c4627faeadc5acae4896ec0529308447f5013b1307052b3d5",
         "rollout_sha256": "31d3d952ceebb3ce009a3892f8dfd9f5806586dc23723559a950eac4a1d31261"
+      },
+      {
+        "trial": "88f11121-1f97-443d-9a33-d28ec9956a0d",
+        "trajectory_sha256": "bbd1723ff2be12c705d13042a263974234db7aef7fba7705aaa6b9c180acaaef",
+        "rollout_sha256": "9d9c1736a29bfecee7c02a192bac12af7099080a076855d2ac1d8b4b968591db"
+      },
+      {
+        "trial": "759604be-a617-4ac5-be5e-289cdc771b9d",
+        "trajectory_sha256": "e2249bb3a575388b80a5ecfadeaedbdbc4a43933bd23b07eb23538f3c3999387",
+        "rollout_sha256": "802df0bdad8f3c92a31045f9f4dd5c66447fbc34dcefb7100672a14f94b5afbc"
+      },
+      {
+        "trial": "6a70afa0-fb22-4646-b2bb-3ff8eced7237",
+        "trajectory_sha256": "4e5cab7f4c311fc51148a9f72c9b78d065f87d877347a971968a4f3d8bbdd6ca",
+        "rollout_sha256": "19e28961254abb582ccda8ad9404917a25fcbfc79737cbdd11b9e3b41d79c07a"
+      },
+      {
+        "trial": "ef50d0ac-9de1-4c3d-b320-3312179b5ca1",
+        "trajectory_sha256": "53ecd34af784f82a60b9fbc7ab76fd95a6944dbe6c8acea86a824c458455faf2",
+        "rollout_sha256": "e5357618b2d9c12acd4d93a079641d2359d4c76f6dfb8a91970bf88fe2c101f4"
       }
     ]
   },
