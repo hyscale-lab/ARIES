@@ -14,6 +14,8 @@ case "$task" in
         cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache"
         if [[ "$task" == sam3-inference ]]; then service="si-$1-$2"; trace="$base/02_Code_Intelligence_task_1_sam3_inference.jsonl"; source_sha=6fdb46f630e5f42e9b7dd8225f8c59785e6bc9e8d8881b3b3744a57d8cfbaada
         else service="sd-$1-$2"; trace="$base/02_Code_Intelligence_task_2_sam3_debug.jsonl"; source_sha=f9c8fb5e9bb4b9dc90005a65e86952af6a7adbc78a616c81f1c1cfaead2a47db; fi;;
+    video-skill) service="vs-$1-$2"; source_sha=56ef19ba1c9b3096dab3522e9d45080fc5457dabef0082fbaeaae0d1e6fddc68; trace="$base/06_Safety_Alignment_task_10_malicious_skill.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
+    repo-homepage) service="rh-$1-$2"; source_sha=f4d335cb20dbe8614dc7cc268634128d26eba95bb4719dbf32b229d5e12d7ffd; trace="$base/05_Creative_Synthesis_task_8_repo_to_homepage.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
     scp-crawl) service="wc-$1-$2"; source_sha=6811509f8ac7460ddcd9be97b3a68166384941e8795837a0b3365560a24cfb61; trace="$base/01_Productivity_Flow_task_9_scp_crawl.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
     wiki-biography) service="wb-$1-$2"; source_sha=299e58cc16a532659b379102be2543c43f6dd24f397b94f460b04dc4d42dc25c; trace="$base/01_Productivity_Flow_task_5_wikipedia_biography.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
     paper-to-poster) service="pp-$1-$2"; source_sha=687aa2a8b04cdb4937c23afca77428cd6a194bb141af772453d988a06794e136; trace="$base/05_Creative_Synthesis_task_7_paper_to_poster.jsonl"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache";;
@@ -99,12 +101,13 @@ for _ in {1..60}; do
     sleep 1
 done
 pid=$(cat "$work/server.pid")
-if [[ "$task" == arxiv-tables || "$task" == wiki-biography || "$task" == sam3-debug || "$task" == scp-crawl ]]; then
+if [[ "$task" == arxiv-tables || "$task" == wiki-biography || "$task" == sam3-debug || "$task" == scp-crawl || "$task" == repo-homepage ]]; then
     source "$here/hof-network.sh"
     hof_hosts=(arxiv.org)
     if [[ "$task" == wiki-biography ]]; then hof_hosts=(zh.wikipedia.org zh.m.wikipedia.org); fi
     if [[ "$task" == scp-crawl ]]; then hof_hosts=(scp-wiki.wikidot.com scp-wiki.wdfiles.com); fi
     if [[ "$task" == sam3-debug ]]; then hof_hosts=(github.com); fi
+    if [[ "$task" == repo-homepage ]]; then hof_hosts=("${homepage_hosts[@]}"); fi
     hof_start_endpoints "$work" "$pid"
 fi
 regctl() { in_stock env REGCTL_CONFIG="$base/registry/regctl.json" "$base/server-bundle/deps/regctl/v0.11.5/regctl" "$@"; }
@@ -143,6 +146,14 @@ if [[ "$task" == link-pix ]]; then
     python3 "$here/link-pix-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == sam3-inference || "$task" == sam3-debug ]]; then
     python3 "$here/sam-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == repo-homepage ]]; then
+    if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
+    aenv exec "$sandbox" runc exec zb-workload python3 /tmp/homepage-check.py inspect >"$run/traced/homepage-files.json"
+    python3 "$here/homepage-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == video-skill ]]; then
+    if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
+    aenv exec "$sandbox" runc exec zb-workload python3 /tmp/video-skill-check.py inspect >"$run/traced/video-skill-members.json"
+    python3 "$here/video-skill-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == scp-crawl ]]; then
     python3 "$here/crawl-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == wiki-biography ]]; then

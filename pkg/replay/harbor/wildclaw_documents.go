@@ -15,7 +15,7 @@ const wildClawConflicts = "7a020f97fe201c8153c08e219839b7a6b6d77ae6f6755a42588c2
 
 // The source PID is only a key for the open live stream. The native OpenClaw
 // session name accompanies the receipt and is never passed to the guest OS.
-func documentCall(c WildClawSourceCall, handles map[string]int) (replay.Call, error) {
+func documentCall(c WildClawSourceCall, handles map[string]int, sessionCWD string) (replay.Call, error) {
 	call := replay.Call{Sequence: c.Sequence, ToolCallID: c.ID}
 	if c.Reply == nil || c.Reply.IsError == nil || *c.Reply.IsError {
 		return call, errors.New("missing reviewed native reply")
@@ -49,7 +49,10 @@ func documentCall(c WildClawSourceCall, handles map[string]int) (replay.Call, er
 	call.ResponseStdout = []byte(content[0].Text)
 	switch {
 	case c.Name == "exec" && d.Status == "running":
-		if d.PID <= 0 || d.SessionID == "" || handles[d.SessionID] != 0 || args.Command == "" || args.Workdir != d.CWD || args.YieldMS <= 0 {
+		if args.Workdir == "" && d.CWD == sessionCWD {
+			args.Workdir = sessionCWD
+		}
+		if d.PID <= 0 || args.Workdir == "" || d.SessionID == "" || handles[d.SessionID] != 0 || args.Command == "" || args.Workdir != d.CWD || args.YieldMS <= 0 {
 			return call, errors.New("invalid OpenClaw running reply")
 		}
 		handles[d.SessionID] = d.PID
@@ -97,7 +100,7 @@ func documentCall(c WildClawSourceCall, handles map[string]int) (replay.Call, er
 		}
 		call.Path, call.Body, call.ResponseCode = args.Path, c.Arguments, "success"
 	default:
-		return wildClawLiveCall(c)
+		return wildClawLiveCall(c, sessionCWD)
 	}
 	call.ResponseSHA256, call.ResponseBytes = digest(call.ResponseStdout), int64(len(call.ResponseStdout))
 	return call, nil

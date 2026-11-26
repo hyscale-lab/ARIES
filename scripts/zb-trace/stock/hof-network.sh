@@ -2,6 +2,7 @@
 # Functions called only inside a fresh HOF service or during HOF guest preparation.
 hof_hosts=(api.github.com github.com raw.githubusercontent.com release-assets.githubusercontent.com snapshot.ubuntu.com)
 
+homepage_hosts=(github.com api.github.com registry.npmjs.org cdn.playwright.dev playwright.download.prss.microsoft.com storage.googleapis.com)
 nextjs_hosts=(registry.npmjs.org snapshot.debian.org cdn.playwright.dev storage.googleapis.com playwright.download.prss.microsoft.com)
 
 hof_start_endpoints() {
@@ -75,11 +76,16 @@ hof_network_guest() {
         ip link set hof-host up
         container_ip "$pid" address add 192.0.2.242/30 dev hof-task
         container_ip "$pid" link set hof-task up
-        for n in 11 12 13 14 15; do container_ip "$pid" route add "192.0.2.$n/32" via 192.0.2.241 dev hof-task; done
+        local_addresses=""
+        for n in $(seq 11 "$((10 + $2))"); do
+            address="192.0.2.$n"
+            container_ip "$pid" route add "$address/32" via 192.0.2.241 dev hof-task
+            local_addresses="${local_addresses:+$local_addresses,}$address"
+        done
         "$loader" --library-path "$d" "$d/nft" -f - <<RULES
 table ip hof {
     chain input { type filter hook input priority -10; policy accept; iifname "hof-host" drop; }
-    chain forward { type filter hook forward priority -10; policy accept; iifname "hof-host" ip daddr {192.0.2.11,192.0.2.12,192.0.2.13,192.0.2.14,192.0.2.15} tcp dport 443 accept; iifname "hof-host" drop; }
+    chain forward { type filter hook forward priority -10; policy accept; iifname "hof-host" ip daddr { $local_addresses } tcp dport 443 accept; iifname "hof-host" drop; }
     chain nat { type nat hook postrouting priority srcnat; policy accept; ip saddr 192.0.2.242 masquerade; }
 }
 RULES
@@ -90,7 +96,7 @@ RULES
         done
         "$loader" --library-path "$d" "$d/nft" list table ip hof
         rm -r "$d"
-    ' _ "$pid" >"$run/hof-network.txt"
+    ' _ "$pid" "${#hof_hosts[@]}" >"$run/hof-network.txt"
     local n=10 host
     for host in "${hof_hosts[@]}"; do
         n=$((n + 1))

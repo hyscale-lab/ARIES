@@ -106,9 +106,9 @@ func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
 				var call replay.Call
 				var err error
 				if localFileSource(s.SHA256) || s.SHA256 == wildClawPDF || s.SHA256 == wildClawConflicts {
-					call, err = documentCall(c, handles)
+					call, err = documentCall(c, handles, s.CWD)
 				} else {
-					call, err = wildClawLiveCall(c)
+					call, err = wildClawLiveCall(c, s.CWD)
 				}
 				if err != nil {
 					return nil, fmt.Errorf("WildClaw source line %d, call %d: %w", row.Line, c.Sequence, err)
@@ -135,7 +135,7 @@ func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
 	return r, nil
 }
 
-func wildClawLiveCall(c WildClawSourceCall) (replay.Call, error) {
+func wildClawLiveCall(c WildClawSourceCall, sessionCWD string) (replay.Call, error) {
 	call := replay.Call{ToolCallID: c.ID, Sequence: c.Sequence}
 	if c.Reply == nil || c.Reply.IsError == nil || *c.Reply.IsError {
 		return call, errors.New("live projection requires a completed native tool reply")
@@ -179,8 +179,11 @@ func wildClawLiveCall(c WildClawSourceCall) (replay.Call, error) {
 		if err := json.Unmarshal(c.Reply.Details, &details); err != nil {
 			return call, err
 		}
-		if args.Workdir == "" && details.CWD == "/root" {
+		if args.Workdir == "" && details.CWD == sessionCWD {
 			args.Workdir = details.CWD
+		}
+		if args.Workdir == "" && details.Status == "error" && details.CWD == "" {
+			args.Workdir = sessionCWD
 		}
 		if details.Status == "error" && details.ExitCode == nil && strings.HasSuffix(details.Error, "\n\nCommand not found") && args.Command != "" && args.Workdir != "" {
 			call.Operation, call.Script, call.Workdir = "Exec", args.Command, args.Workdir

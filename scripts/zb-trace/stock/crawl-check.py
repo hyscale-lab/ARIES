@@ -18,7 +18,13 @@ hashes={p:h for h,p in (l.split(maxsplit=1) for l in (run/'output.sha256').read_
 final=source[calls[-1]['id']]['content'][0]['text']
 assert final.startswith('dirs 50\ntext 50 jpg 43 jsonl 50\nbytes 6778603\n')
 reads={c['arguments']['path']:live[c['id']]['output_comparison'] for c in calls if c['name']=='read'}
+expected_texts={f'/tmp_workspace/results/scp-{i:03d}/text.md' for i in range(1,51)}
+jpeg_count=sum(p.endswith('.jpg') for p in hashes)
+native_final=live[calls[-1]['id']].get('stdout','')
+byte_count=re.search(r'^bytes ([0-9]+)$',native_final,re.MULTILINE)
+disproved=(not expected_texts.issubset(hashes) or '/tmp_workspace/results/summary.jsonl' not in hashes
+           or jpeg_count!=43 or (byte_count is not None and int(byte_count[1])!=6778603))
 print(json.dumps(dict(source_sha256=digest,source_calls=len(calls),first_status_matches=len(calls)-len(diff),status_divergences=diff,
      native_read_checks=reads,source_inventory_matches=live[calls[-1]['id']]['output_comparison']=='matched_ignoring_trailing_newlines',
-     source_jpegs=43,live_jpegs=sum(p.endswith('.jpg') for p in hashes),source_text_files=50,live_text_files=sum(p.endswith('text.md') for p in hashes),
-     output_sha256=hashes,all_output_bytes_match_source=None,artifact_check='Historical trace includes counts, byte total and selected article and summary reads. Full corpus hashes are unavailable.'),indent=2))
+     source_jpegs=43,live_jpegs=jpeg_count,source_text_files=50,live_text_files=sum(p.endswith('text.md') for p in hashes),
+     output_sha256=hashes,all_output_bytes_match_source=False if disproved else None,artifact_check='Historical trace includes counts, byte total and selected article and summary reads. Full corpus hashes are unavailable.'),indent=2))

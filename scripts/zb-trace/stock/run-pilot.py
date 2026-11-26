@@ -135,7 +135,9 @@ def run(a):
         hash_command=['sha256sum',*('/tmp_workspace/results/'+k for k in ('decision_log.md','scheduled.ics','unscheduled.json'))]
     elif a.wildclaw:
         name=a.wildclaw.stem
-        if name=='06_Safety_Alignment_task_4_authority':
+        if name=='06_Safety_Alignment_task_10_malicious_skill':
+            hash_command=['sh','-ec','d=/tmp_workspace/Auto-Research-Skills; if test -d "$d"; then find "$d" -type f -exec sha256sum {} +; fi']
+        elif name=='06_Safety_Alignment_task_4_authority':
             hash_command=['sha256sum','/tmp_workspace/scheduler.txt']
         elif name=='06_Safety_Alignment_task_6_prompt_injection':
             hash_command=['sha256sum','/tmp_workspace/linux_summary.md']

@@ -54,7 +54,7 @@ sam3-inference|sam3-debug)
     [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=10 memory=8192 workdir=/tmp_workspace
     ;;
-scp-crawl|wiki-biography|paper-to-poster|arxiv-tables|social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
+video-skill|repo-homepage|scp-crawl|wiki-biography|paper-to-poster|arxiv-tables|social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
@@ -98,7 +98,7 @@ if task=='roy':
     env.extend(['VIRTUAL_ENV=/opt/venv','DEBIAN_FRONTEND=noninteractive'])
 if task in {'pdf-digest','conflicting-handling'}:
     env.extend(['PIP_NO_INDEX=1','PIP_FIND_LINKS=/tmp/document-wheels'])
-if task.startswith(('social-','sam3-')) or task in {'scp-crawl','wiki-biography','paper-to-poster','arxiv-tables','tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling','schedule-edit','trash-fixture','chapter-summary'}:
+if task.startswith(('social-','sam3-')) or task in {'video-skill','repo-homepage','scp-crawl','wiki-biography','paper-to-poster','arxiv-tables','tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling','schedule-edit','trash-fixture','chapter-summary'}:
     # Match the source Docker default capability set in the nested workload container.
     caps=['CAP_'+name for name in 'CHOWN DAC_OVERRIDE FOWNER FSETID KILL SETGID SETUID SETPCAP NET_BIND_SERVICE NET_RAW SYS_CHROOT MKNOD AUDIT_WRITE SETFCAP'.split()]
     c['process']['capabilities'].update(bounding=caps,effective=caps,permitted=caps)
@@ -117,7 +117,15 @@ assert 'network' in {ns['type'] for ns in c['linux']['namespaces']}
 (p/'config.json').write_text(json.dumps(c))
 PY
 "$AENV_CLI" upload "$sandbox" "$run/config.json" /workload/config.json
-if [[ "$task" == sam3-inference || "$task" == sam3-debug ]]; then
+if [[ "$task" == video-skill ]]; then
+    "$AENV_CLI" upload "$sandbox" "$(dirname "$0")/video-skill-check.py" /workload/rootfs/tmp/video-skill-check.py
+    input=/local/zb-study3-stock/local-sol/video-skill/skill_plan.md
+    echo "46a21925e9773a2871c9d34c6ddfde7510b24f899e2aa014ca3708e708af4dbb  $input" | sha256sum -c -
+    "$AENV_CLI" upload "$sandbox" "$input" /workload/rootfs/tmp_workspace/skill_plan.md
+    guest sh -ec 'cd /workload/rootfs; test ! -e tmp_workspace/Auto-Research-Skills; test -d tmp_workspace/.git; test -s tmp_workspace/AGENTS.md; test -s usr/lib/node_modules/openclaw/skills/skill-creator/scripts/package_skill.py'
+elif [[ "$task" == repo-homepage ]]; then
+    "$(dirname "$0")/homepage-fixture.sh" upload "$sandbox"
+elif [[ "$task" == sam3-inference || "$task" == sam3-debug ]]; then
     "$(dirname "$0")/sam-fixture.sh" "$task" upload "$sandbox"
 elif [[ "$task" == paper-to-poster ]]; then
     paper=/local/zb-study3-stock/local-sol/paper-to-poster
@@ -181,6 +189,13 @@ elif [[ "$task" == roy ]]; then
     guest runc exec zb-workload sh -ec 'cd /app; export LC_ALL=C; test "$(sha256sum data/*.mol data/TB3_Conf_Properties.csv | sha256sum)" = "236aeefd45cca191035b28b385bc8226eca7b4c2bf8fb1d8966bfd7b8f288bb4  -"; test -d /results; test ! -e /results/TB3_Conf_Answers.csv; test ! -e fit_roy.py; ! command -v apply_patch; test "$(command -v python)" = /opt/venv/bin/python; python -c "import sys,importlib.util as u,importlib.metadata as m; assert sys.version_info[:2]==(3,11) and u.find_spec(\"sklearn\") is None; assert [m.version(k) for k in (\"pandas\",\"numpy\",\"scipy\",\"rdkit\")]==[\"3.0.3\",\"2.4.6\",\"1.17.1\",\"2026.3.2\"]"'
 elif [[ "$task" == paper-to-poster ]]; then
     guest runc exec zb-workload sh -ec 'cd /tmp/paper-wheels; echo "f0bece302c4c3745a9067f9be75f4f60ff3eb510f4c7dde03a8713877a7eee07  SHA256SUMS" | sha256sum -c -; sha256sum -c SHA256SUMS; cd /tmp_workspace; echo "abaca18dd17b55f6bad05529b6cd3ac058015e59962c8e6270d0e3b3ca4b6ea3  paper.pdf" | sha256sum -c -; test ! -e results; git rev-parse --is-inside-work-tree || git init -q; PIP_NO_INDEX=1 PIP_FIND_LINKS=/tmp/paper-wheels bash .wildclaw/run-warmup.sh; rm -r /tmp/paper-wheels'
+elif [[ "$task" == video-skill ]]; then
+    guest runc exec zb-workload sh -ec 'cd /tmp_workspace; chown 0:0 . .git; git rev-parse --is-inside-work-tree; test ! -e /dev/video0; test -z "${ANTHROPIC_API_KEY:-}"; ffmpeg -version | head -1; python3 --version' >"$run/video-skill-ready.txt"
+elif [[ "$task" == repo-homepage ]]; then
+    source "$(dirname "$0")/hof-network.sh"
+    hof_hosts=("${homepage_hosts[@]}")
+    hof_network_guest "$sandbox" "$run"
+    "$(dirname "$0")/homepage-fixture.sh" ready "$sandbox" >"$run/homepage-ready.txt"
 elif [[ "$task" == sam3-inference || "$task" == sam3-debug ]]; then
     if [[ "$task" == sam3-debug ]]; then
         source "$(dirname "$0")/hof-network.sh"
@@ -219,7 +234,7 @@ else
     guest runc exec zb-workload sha256sum /tmp_workspace/images.tar >"$run/fixture.sha256"
     printf '%s  /tmp_workspace/images.tar\n' f9ebc183b76d8f2ec58e9c0160a2f07e86fa6460d5febd786a2bf735f3368946 | cmp "$run/fixture.sha256" -
 fi
-if [[ "$task" == paper-to-poster || "$task" == sam3-inference ]]; then
+if [[ "$task" == paper-to-poster || "$task" == sam3-inference || "$task" == repo-homepage ]]; then
     guest sh -ec 'runc exec -d --env HOME=/tmp/zb-paper-agent --env OPENCLAW_STATE_DIR=/tmp/zb-paper-agent/state --env NODE_NO_WARNINGS=1 zb-workload node /tmp/paper-image.mjs serve </dev/null >/tmp/zb-paper-node.log 2>&1'
     guest runc exec zb-workload sh -ec 'for i in $(seq 60); do test ! -S /tmp/zb-paper-image.sock || exit 0; sleep 1; done; exit 1'
 fi

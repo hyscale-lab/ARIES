@@ -13,6 +13,11 @@ upload_archive() {
     guest tar -xzf /tmp/tb41-fixture.tar.gz -C "$target"
     guest rm /tmp/tb41-fixture.tar.gz
 }
+if [[ "$(jq -er .task "$meta")" == nextjs-performance ]]; then
+    container sh -ec 'printf "\n127.0.0.1 localhost\n" >> /etc/hosts; chmod 644 /etc/hosts; getent ahostsv4 localhost'
+    guest runc exec --user "$(container id -u _apt):$(container id -g _apt)" zb-workload getent ahostsv4 snapshot.debian.org
+    container curl -fsS --max-time 45 -o /dev/null https://snapshot.debian.org/archive/debian/20260831T083140Z/dists/bookworm/InRelease
+fi
 helper=$(jq -r '.image_helper_sha256 // ""' "$meta")
 if [[ -n "$helper" ]]; then
     : "${TB41_IMAGE_HELPER:?}"

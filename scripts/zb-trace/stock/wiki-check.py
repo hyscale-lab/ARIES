@@ -23,6 +23,6 @@ names=source[calls[-1]]['content'][0]['text'].strip().splitlines()
 hashes={Path(path).name:h for h,path in (line.split(maxsplit=1) for line in (run/'output.sha256').read_text().splitlines())}
 assert len(names)==9
 print(json.dumps(dict(source_sha256=digest,source_calls=len(calls),first_status_matches=len(calls)-len(diff),status_divergences=diff,
-    names_match=sorted(names)==sorted(hashes),source_file_count=len(names),output_sha256=hashes,all_output_bytes_match_source=None,
+    names_match=sorted(names)==sorted(hashes),source_file_count=len(names),output_sha256=hashes,all_output_bytes_match_source=None if sorted(names)==sorted(hashes) else False,
     artifact_check='Historical reply lists nine names and text lengths. It supplies no full-file digest.',
     reply_comparisons={k:r.get('output_comparison') for k,r in replies.items()}),indent=2))
