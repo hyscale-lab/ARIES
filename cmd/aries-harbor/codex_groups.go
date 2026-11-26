@@ -23,6 +23,7 @@ const codexGroupPath = "/usr/local/libexec/aries-codex-group.py"
 
 type shellGroups struct {
 	prefix            string
+	python            string
 	onlyInterruptible bool
 	interruptible     map[int]bool
 	lock              sync.Mutex
@@ -35,7 +36,7 @@ func newShellGroups() (*shellGroups, error) {
 	if _, err := rand.Read(key[:]); err != nil {
 		return nil, err
 	}
-	return &shellGroups{prefix: hex.EncodeToString(key[:]), released: make(map[string]func() error)}, nil
+	return &shellGroups{prefix: hex.EncodeToString(key[:]), python: "python3", released: make(map[string]func() error)}, nil
 }
 
 func (g *shellGroups) token(c replay.Call) string {
@@ -53,7 +54,7 @@ func (g *shellGroups) start(command core.Command, call replay.Call) core.Command
 	if g.interruptible[call.SessionID] {
 		mode = "start-interruptible"
 	}
-	args := []string{"python3", "-I", "-S", codexGroupPath, mode, g.token(call), command.Path}
+	args := []string{g.python, "-I", "-S", codexGroupPath, mode, g.token(call), command.Path}
 	command.Path = "/usr/bin/env"
 	command.Args = append(args, command.Args...)
 	return command
@@ -70,7 +71,7 @@ func (g *shellGroups) interrupt(ctx context.Context, guest groupCommand, c repla
 	if g == nil || !g.interruptible[c.SessionID] {
 		return fmt.Errorf("no native interrupt group for source handle %d", c.SessionID)
 	}
-	result, err := guest(ctx, core.Command{Path: "/usr/bin/env", Args: []string{"python3", "-I", "-S", codexGroupPath, "interrupt", g.token(c)}})
+	result, err := guest(ctx, core.Command{Path: "/usr/bin/env", Args: []string{g.python, "-I", "-S", codexGroupPath, "interrupt", g.token(c)}})
 	if err != nil {
 		return fmt.Errorf("interrupt guest process group: %w", err)
 	}
@@ -80,9 +81,9 @@ func (g *shellGroups) interrupt(ctx context.Context, guest groupCommand, c repla
 	return nil
 }
 
-func installCodexGroups(ctx context.Context, guest groupCommand) (string, error) {
+func (g *shellGroups) install(ctx context.Context, guest groupCommand) (string, error) {
 	const script = "import hashlib,pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(exist_ok=True); f=p.open('xb'); f.write(sys.argv[2].encode()); f.close(); print(hashlib.sha256(p.read_bytes()).hexdigest())"
-	out, err := guest(ctx, core.Command{Path: "/usr/bin/env", Args: []string{"python3", "-I", "-S", "-c", script, codexGroupPath, codexGroupProgram}})
+	out, err := guest(ctx, core.Command{Path: "/usr/bin/env", Args: []string{g.python, "-I", "-S", "-c", script, codexGroupPath, codexGroupProgram}})
 	if err != nil {
 		return "", err
 	}
@@ -107,7 +108,7 @@ func (g *shellGroups) releaseOnExit(run shellCall, guest groupCommand) shellCall
 		if !ok {
 			release = sync.OnceValue(func() error {
 				started := time.Now()
-				result, err := guest(ctx, core.Command{Path: "/usr/bin/env", Args: []string{"python3", "-I", "-S", codexGroupPath, "release", token}})
+				result, err := guest(ctx, core.Command{Path: "/usr/bin/env", Args: []string{g.python, "-I", "-S", codexGroupPath, "release", token}})
 				g.lock.Lock()
 				g.timings = append(g.timings, map[string]any{"sequence": c.Sequence, "source_call_id": c.ToolCallID, "cleanup_ns": time.Since(started).Nanoseconds(), "exit_code": result.ExitCode})
 				g.lock.Unlock()

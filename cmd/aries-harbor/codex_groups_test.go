@@ -67,7 +67,7 @@ func runGroupControl(t *testing.T, unit, dir, image string) {
 	guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
 		return m.Exec(ctx, id, command)
 	}
-	if _, err := installCodexGroups(ctx, guest); err != nil {
+	if _, err := (&shellGroups{python: "python3"}).install(ctx, guest); err != nil {
 		t.Fatal(err)
 	}
 	if err = m.Start(ctx, id); err != nil {

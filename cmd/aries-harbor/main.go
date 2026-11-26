@@ -374,12 +374,15 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		if err != nil {
 			return err
 		}
+		if r.Trial == "be1d1d11-8af3-404e-9238-e4597b6552e2" {
+			groups.python = "/opt/aries-python/bin/python3"
+		}
 		groups.onlyInterruptible = !groupMode
 		groups.interruptible = interruptible
 		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
 			return m.Exec(ctx, id, command)
 		}
-		sum, err := installCodexGroups(ctx, guest)
+		sum, err := groups.install(ctx, guest)
 		if err != nil {
 			return err
 		}
