@@ -22,10 +22,12 @@ var codexGroupProgram string
 const codexGroupPath = "/usr/local/libexec/aries-codex-group.py"
 
 type shellGroups struct {
-	prefix   string
-	lock     sync.Mutex
-	released map[string]func() error
-	timings  []map[string]any
+	prefix            string
+	onlyInterruptible bool
+	interruptible     map[int]bool
+	lock              sync.Mutex
+	released          map[string]func() error
+	timings           []map[string]any
 }
 
 func newShellGroups() (*shellGroups, error) {
@@ -44,17 +46,39 @@ func (g *shellGroups) token(c replay.Call) string {
 }
 
 func (g *shellGroups) start(command core.Command, call replay.Call) core.Command {
-	if g == nil {
+	if !g.owns(call) {
 		return command
 	}
-	args := []string{"python3", "-I", "-S", codexGroupPath, "start", g.token(call), command.Path}
+	mode := "start"
+	if g.interruptible[call.SessionID] {
+		mode = "start-interruptible"
+	}
+	args := []string{"python3", "-I", "-S", codexGroupPath, mode, g.token(call), command.Path}
 	command.Path = "/usr/bin/env"
 	command.Args = append(args, command.Args...)
 	return command
 }
 
+func (g *shellGroups) owns(c replay.Call) bool {
+	return g != nil && (!g.onlyInterruptible || g.interruptible[c.SessionID])
+}
+
 type groupCommand func(context.Context, core.Command) (core.CommandResult, error)
 type shellCall func(context.Context, replay.Call) (core.CommandResult, error)
+
+func (g *shellGroups) interrupt(ctx context.Context, guest groupCommand, c replay.Call) error {
+	if g == nil || !g.interruptible[c.SessionID] {
+		return fmt.Errorf("no native interrupt group for source handle %d", c.SessionID)
+	}
+	result, err := guest(ctx, core.Command{Path: "/usr/bin/env", Args: []string{"python3", "-I", "-S", codexGroupPath, "interrupt", g.token(c)}})
+	if err != nil {
+		return fmt.Errorf("interrupt guest process group: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("interrupt guest process group exited %d: %s", result.ExitCode, result.Stderr)
+	}
+	return nil
+}
 
 func installCodexGroups(ctx context.Context, guest groupCommand) (string, error) {
 	const script = "import hashlib,pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(exist_ok=True); f=p.open('xb'); f.write(sys.argv[2].encode()); f.close(); print(hashlib.sha256(p.read_bytes()).hexdigest())"
@@ -74,7 +98,7 @@ func installCodexGroups(ctx context.Context, guest groupCommand) (string, error)
 func (g *shellGroups) releaseOnExit(run shellCall, guest groupCommand) shellCall {
 	return func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
 		out, err := run(ctx, c)
-		if err != nil || out.ExitCode == harbor.ProcessRunning || (c.Operation != "Exec" && c.Operation != "StartProcess" && c.Operation != "PollProcess") {
+		if err != nil || out.ExitCode == harbor.ProcessRunning || !g.owns(c) || (c.Operation != "Exec" && c.Operation != "StartProcess" && c.Operation != "PollProcess") {
 			return out, err
 		}
 		token := g.token(c)

@@ -44,6 +44,7 @@ type Receipt struct {
 	RunnableTargetNS *int64              `json:"target_runnable_ns,omitempty"`
 	RunnableActualNS *int64              `json:"actual_runnable_ns,omitempty"`
 	SessionID        int                 `json:"source_process_session_id,omitempty"`
+	PipeInterrupt    bool                `json:"pipe_interrupt,omitempty"`
 	DiagnosticID     int                 `json:"diagnostic_process_id,omitempty"`
 	Operation        string              `json:"operation,omitempty"`
 	StatusBasis      string              `json:"status_basis,omitempty"`
@@ -277,6 +278,7 @@ func (h Hooks) dispatchReceipt(receipt Receipt, phase string) error {
 
 func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	receipt.Operation = call.Operation
+	receipt.PipeInterrupt = call.PipeInterrupt
 	if call.SessionID != 0 {
 		receipt.SessionID = call.SessionID
 		receipt.StatusBasis = "live_process_status_or_exit"

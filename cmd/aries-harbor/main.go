@@ -363,11 +363,19 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		}
 	}
 	var groups *shellGroups
-	if groupMode {
+	interruptible := map[int]bool{}
+	for _, call := range r.Plan.Calls {
+		if call.PipeInterrupt {
+			interruptible[call.SessionID] = true
+		}
+	}
+	if groupMode || len(interruptible) > 0 {
 		groups, err = newShellGroups()
 		if err != nil {
 			return err
 		}
+		groups.onlyInterruptible = !groupMode
+		groups.interruptible = interruptible
 		guest := func(ctx context.Context, command core.Command) (core.CommandResult, error) {
 			return m.Exec(ctx, id, command)
 		}
@@ -510,6 +518,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	sessions := harbor.NewCodexProcessSessions(ctx, func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
 		return m.ExecStream(ctx, id, groups.start(sourceShellCommand(r.Task, r.Trial, call), call), nil, stdout, stderr)
 	})
+	sessions.SendInterrupt = func(ctx context.Context, call replay.Call) error {
+		return groups.interrupt(ctx, func(ctx context.Context, command core.Command) (core.CommandResult, error) {
+			return m.Exec(ctx, id, command)
+		}, call)
+	}
 	defer sessions.Close()
 	tb41Polls := r.Job == harbor.TerminalBench4SourceJob
 	relaxedStatus := relaxedML || timingAudit || bnFit

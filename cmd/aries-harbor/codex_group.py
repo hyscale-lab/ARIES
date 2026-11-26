@@ -6,6 +6,7 @@ import selectors
 import signal
 import socket
 import sys
+import threading
 import time
 
 
@@ -19,10 +20,12 @@ def copy_output(source, destination):
     return True
 
 
-def supervise(listener, status, pipes, command):
+def supervise(listener, status, pipes, command, interruptible):
     # Reap orphaned group members so a later kill -0 sees their true lifetime.
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER")
+    if interruptible:
+        ready_read, ready_write = os.pipe()
     child = os.fork()
     if not child:
         os.setsid()
@@ -30,11 +33,21 @@ def supervise(listener, status, pipes, command):
         os.dup2(pipes[1][1], 2)
         for sig in (signal.SIGPIPE, signal.SIGXFSZ):
             signal.signal(sig, signal.SIG_DFL)
+        if interruptible:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            os.close(ready_read)
+            os.write(ready_write, b'1')
+            os.close(ready_write)
         try:
             os.execv(command[0], command)
         except OSError as error:
             print(error, file=sys.stderr, flush=True)
             os._exit(127 if isinstance(error, FileNotFoundError) else 126)
+    if interruptible:
+        os.close(ready_write)
+        with os.fdopen(ready_read, 'rb', buffering=0) as ready:
+            if ready.read(1) != b'1':
+                raise RuntimeError("interruptible process group did not start")
     for pipe in pipes:
         for fd in pipe:
             os.close(fd)
@@ -43,25 +56,54 @@ def supervise(listener, status, pipes, command):
             os.dup2(null.fileno(), fd)
     # WNOWAIT retains the real group leader and prevents PID reuse while the
     # host has a yielded handle. Only its matching release can clean that group.
-    done = os.waitid(os.P_PID, child, os.WEXITED | os.WNOWAIT)
-    code = done.si_status if done.si_code == os.CLD_EXITED else 128 + done.si_status
-    status.sendall(bytes([code]))
-    status.close()
-    conn, _ = listener.accept()
-    with conn:
-        if conn.recv(1) != b'R':
-            raise RuntimeError("invalid release request")
-        os.killpg(child, signal.SIGKILL)
-        os.waitpid(child, 0)
-        while True:
+    def report_exit():
+        with status:
+            done = os.waitid(os.P_PID, child, os.WEXITED | os.WNOWAIT)
+            code = done.si_status if done.si_code == os.CLD_EXITED else 128 + done.si_status
             try:
-                os.waitpid(-child, 0)
-            except ChildProcessError:
-                break
-        conn.sendall(b'K')
+                status.sendall(bytes([code]))
+            except BrokenPipeError:
+                pass
+
+    if interruptible:
+        waiter = threading.Thread(target=report_exit)
+        waiter.start()
+    else:
+        report_exit()
+    while True:
+        conn, _ = listener.accept()
+        with conn:
+            request = conn.recv(1)
+            if request == b'I' and interruptible:
+                try:
+                    os.killpg(child, signal.SIGINT)
+                except OSError:
+                    acknowledgement = b'E'
+                else:
+                    acknowledgement = b'S'
+                try:
+                    conn.sendall(acknowledgement)
+                except BrokenPipeError:
+                    pass
+                continue
+            if not request:
+                continue
+            if request != b'R':
+                raise RuntimeError("invalid release request")
+            os.killpg(child, signal.SIGKILL)
+            if interruptible:
+                waiter.join()
+            os.waitpid(child, 0)
+            while True:
+                try:
+                    os.waitpid(-child, 0)
+                except ChildProcessError:
+                    break
+            conn.sendall(b'K')
+            return
 
 
-def run(address, command):
+def run(address, command, interruptible):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         listener.bind(address)
         listener.listen(1)
@@ -70,7 +112,7 @@ def run(address, command):
         if os.fork() == 0:
             status.close()
             try:
-                supervise(listener, child_status, pipes, command)
+                supervise(listener, child_status, pipes, command, interruptible)
             finally:
                 os._exit(0)
         child_status.close()
@@ -101,15 +143,16 @@ def run(address, command):
 def main():
     mode, token, *command = sys.argv[1:]
     address = b'\x00aries-codex-' + token.encode('ascii')
-    if mode == 'start' and command:
-        return run(address, command)
-    if mode != 'release' or command:
-        raise ValueError("expected start with argv or release")
+    if mode in ('start', 'start-interruptible') and command:
+        return run(address, command, mode == 'start-interruptible')
+    if mode not in ('release', 'interrupt') or command:
+        raise ValueError("expected start with argv, release, or interrupt")
+    request, acknowledgement = (b'R', b'K') if mode == 'release' else (b'I', b'S')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
         conn.connect(address)
-        conn.sendall(b'R')
-        if conn.recv(1) != b'K':
-            raise RuntimeError("guest did not acknowledge group release")
+        conn.sendall(request)
+        if conn.recv(1) != acknowledgement:
+            raise RuntimeError(f"guest did not acknowledge group {mode}")
     return 0
 
 

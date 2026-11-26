@@ -30,3 +30,26 @@ func TestOriginalEmptyPollYieldRespectsCodexBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestOriginalPipeInterruptYieldAndInput(t *testing.T) {
+	for _, test := range []struct {
+		args string
+		want time.Duration
+	}{
+		{`{"session_id":13,"chars":"\u0003","yield_time_ms":1}`, 250 * time.Millisecond},
+		{`{"session_id":13,"chars":"\u0003","yield_time_ms":1000}`, time.Second},
+		{`{"session_id":13,"chars":"\u0003","yield_time_ms":9223372036854775807}`, 30 * time.Second},
+		{`{"session_id":13,"chars":"\u0003\u0003"}`, 0},
+		{`{"session_id":13,"chars":"other"}`, 0},
+	} {
+		call := indexedCall{call: toolCall{Name: "write_stdin", Args: json.RawMessage(test.args)}, output: "Process exited with code 130\nOutput:\n"}
+		got, err := processPoll(call, time.Time{}, time.Time{}, 1)
+		if test.want == 0 {
+			if err == nil {
+				t.Fatalf("unsupported input accepted: %s", test.args)
+			}
+		} else if err != nil || !got.PipeInterrupt || got.YieldTime != test.want || got.SessionID != 13 || got.ExitCode != 130 {
+			t.Fatalf("source interrupt %s: %+v, err %v", test.args, got, err)
+		}
+	}
+}

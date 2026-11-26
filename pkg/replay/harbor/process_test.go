@@ -271,6 +271,43 @@ func TestNativeClockRejectsTransportWithoutAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestPipeInterruptDoesNotResendDuringDiagnosticPoll(t *testing.T) {
+	finish := make(chan struct{})
+	sessions := NewProcessSessions(t.Context(), func(ctx context.Context, _ replay.Call, _, _ io.Writer) (core.CommandResult, error) {
+		select {
+		case <-ctx.Done():
+			return core.CommandResult{}, ctx.Err()
+		case <-finish:
+			return core.CommandResult{ExitCode: 130}, nil
+		}
+	})
+	defer sessions.Close()
+	interrupts := 0
+	sessions.SendInterrupt = func(_ context.Context, call replay.Call) error {
+		if call.SessionID != 37 {
+			t.Fatalf("interrupt targeted %d", call.SessionID)
+		}
+		interrupts++
+		return nil
+	}
+	start := replay.Call{Operation: "StartProcess", SessionID: 37, ExitCode: ProcessRunning, YieldTime: time.Millisecond}
+	if got, err := sessions.Execute(t.Context(), start); err != nil || got.ExitCode != ProcessRunning {
+		t.Fatalf("start = %+v, %v", got, err)
+	}
+	poll := replay.Call{Operation: "PollProcess", SessionID: 37, PipeInterrupt: true, ExitCode: 130, YieldTime: time.Millisecond}
+	if got, err := sessions.ObserveRelaxed(t.Context(), poll); err != nil || got.ExitCode != ProcessRunning {
+		t.Fatalf("interrupt poll = %+v, %v", got, err)
+	}
+	close(finish)
+	poll.YieldTime = time.Second
+	if got, err := sessions.PollObservedProcess(t.Context(), poll); err != nil || got.ExitCode != 130 || interrupts != 1 {
+		t.Fatalf("diagnostic poll = %+v, %v, sent %d interrupts", got, err, interrupts)
+	}
+	if _, err := sessions.Execute(t.Context(), poll); err == nil || interrupts != 1 {
+		t.Fatalf("closed handle returned %v after %d interrupts", err, interrupts)
+	}
+}
+
 func TestBoundedDiagnosticStillRunning(t *testing.T) {
 	call := replay.Call{Operation: "PollProcess", SessionID: 73, ExitCode: 0}
 	var events []Receipt

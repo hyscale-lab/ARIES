@@ -15,6 +15,7 @@ type Call struct {
 	ImageWidth     int           `json:"image_width,omitempty"`
 	ImageHeight    int           `json:"image_height,omitempty"`
 	SessionID      int           `json:"session_id,omitempty"`
+	PipeInterrupt  bool          `json:"pipe_interrupt,omitempty"`
 	YieldTime      time.Duration `json:"yield_time,omitempty"`
 	Operation      string        `json:"operation"`
 	Sequence       uint64        `json:"sequence"`

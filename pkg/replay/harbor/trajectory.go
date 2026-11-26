@@ -460,14 +460,19 @@ func processPoll(c indexedCall, origin, ts time.Time, sequence uint64) (replay.C
 	}
 	d := json.NewDecoder(bytes.NewReader(c.call.Args))
 	d.DisallowUnknownFields()
-	if err := d.Decode(&args); err != nil || args.SessionID <= 0 || args.Chars != "" || args.YieldMs < 0 {
-		return replay.Call{}, errors.New("only empty, bounded native process polls are reviewed")
+	if err := d.Decode(&args); err != nil || args.SessionID <= 0 || (args.Chars != "" && args.Chars != "\x03") || args.YieldMs < 0 {
+		return replay.Call{}, errors.New("only empty or single Ctrl-C native pipe polls are reviewed")
 	}
 	header, body, ok := strings.Cut(c.output, "\nOutput:\n")
 	if !ok {
 		return replay.Call{}, errors.New("missing poll observation")
 	}
-	call := replay.Call{Operation: "PollProcess", SessionID: args.SessionID, YieldTime: time.Duration(min(300000, max(5000, args.YieldMs))) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: []byte(body)}
+	interrupt := args.Chars == "\x03"
+	yield := min(300000, max(5000, args.YieldMs))
+	if interrupt {
+		yield = min(30000, max(250, args.YieldMs))
+	}
+	call := replay.Call{Operation: "PollProcess", SessionID: args.SessionID, PipeInterrupt: interrupt, YieldTime: time.Duration(yield) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: []byte(body)}
 	if running := runningHeader.FindStringSubmatch(header); len(running) == 2 && running[1] == strconv.Itoa(args.SessionID) {
 		call.ExitCode = ProcessRunning
 		return call, nil

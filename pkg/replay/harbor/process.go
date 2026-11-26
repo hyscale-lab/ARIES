@@ -48,8 +48,9 @@ type guestProcess struct {
 }
 
 // ProcessSessions owns live foreground processes that returned a native
-// session handle. Only empty write_stdin polls are accepted by the parser.
+// session handle.
 type ProcessSessions struct {
+	SendInterrupt    func(context.Context, replay.Call) error
 	lock             sync.Mutex
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -129,6 +130,7 @@ func diagnosticProcessID(call replay.Call) int {
 }
 
 func observedProcessPoll(call replay.Call) replay.Call {
+	call.PipeInterrupt = false
 	if call.Operation == "Exec" {
 		call.SessionID = diagnosticProcessID(call)
 		call.Operation = "PollProcess"
@@ -207,6 +209,14 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		return core.CommandResult{}, errors.New("unexpected process session operation")
 	}
 	s.lock.Unlock()
+	if call.Operation == "PollProcess" && call.PipeInterrupt && !join {
+		if s.SendInterrupt == nil {
+			return core.CommandResult{}, errors.New("native pipe interrupt delivery is unavailable")
+		}
+		if err := s.SendInterrupt(ctx, call); err != nil {
+			return core.CommandResult{}, err
+		}
+	}
 	var timeout <-chan time.Time
 	if !join {
 		wait := call.YieldTime
