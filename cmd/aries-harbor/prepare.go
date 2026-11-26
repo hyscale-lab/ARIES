@@ -120,15 +120,21 @@ mkdir -p /root/.codex/tmp/arg0/codex-arg0PK2zte
 ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch
 test -x /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch`
 	}
-	if r.Trial == hofSystreTrial || r.Trial == hofExperimentalTrial {
+	if r.Trial == hofSystreTrial || r.Trial == hofExperimentalTrial || r.Trial == hofGavrogTrial {
 		alias := "codex-arg0w7w0OR"
 		if r.Trial == hofExperimentalTrial {
 			alias = "codex-arg0baCVWK"
 			task.packagesSHA = "0593c8378d11b09baa24247d774653cb617ea3e7b6f7d72c31dabb0c4de81663"
 			task.initialCheck = strings.Replace(task.initialCheck, "'numpy',", "'ase', 'numpy',", 1)
 		}
+		if r.Trial == hofGavrogTrial {
+			alias = "codex-arg0OtJsdz"
+		}
 		task.initialCheck = strings.ReplaceAll(task.initialCheck, "codex-arg02OZDT5", alias)
 		task.initialCheck += financialAptSetup(financialAptProfile{Snapshot: "20260831T073500Z"})
+		if r.Trial == hofGavrogTrial {
+			task.initialCheck += hofGavrogGitSetup
+		}
 	}
 	if r.Task == "git-leak-recovery" {
 		task.initialCheck += gitRecoveryTemp(r.Trial)
@@ -440,6 +446,9 @@ echo '320537a03e8783317457a88d17ee0137f80fd0c3eb914da56c8a76b50a379386  /app/sol
 cd /app/solution
 /opt/venv/bin/python validate.py`
 	}
+	if r.Trial == hofGavrogTrial {
+		cmd += hofGavrogFinal
+	}
 	if r.Trial == hofSystreTrial {
 		cmd += `
 sha256sum -c <<'SYSTRE'
@@ -544,7 +553,7 @@ with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/I
 	if task == financialTask {
 		python = "/usr/bin/python3"
 	}
-	if recording.Trial == hofSystreTrial || recording.Trial == hofExperimentalTrial {
+	if recording.Trial == hofSystreTrial || recording.Trial == hofExperimentalTrial || recording.Trial == hofGavrogTrial {
 		python = "/opt/venv/bin/python"
 		probe = `import json,socket,urllib.request
 hosts = ["api.github.com","github.com","raw.githubusercontent.com","release-assets.githubusercontent.com","snapshot.ubuntu.com"]

@@ -16,7 +16,7 @@ while IFS=$'\t' read -r task original source python codex os image_helper; do
     [[ "$codex" == - ]] || flags+=(-codex-tools "$stage/fixtures/$codex")
     [[ "$os" == - ]] || flags+=(-os-tools "$stage/fixtures/$os")
     [[ -z "$image_helper" || "$image_helper" == - ]] || flags+=(-image-helper "$stage/fixtures/$image_helper")
-    if [[ "$original" == 27c84b6a-af43-4332-9ba4-0f70ab1e160d || "$original" == bb35c2e1-18a6-4dfb-abf7-872812037a8c ]]; then
+    if [[ "$original" == 27c84b6a-af43-4332-9ba4-0f70ab1e160d || "$original" == bb35c2e1-18a6-4dfb-abf7-872812037a8c || "$original" == cd7a4ef6-d690-42c4-aa79-2a75bcf6c9e4 ]]; then
         flags+=(-cni-network zbhof183 -cni-conf-dir "$stage/cni/conf" -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin")
     fi
     if [[ "$original" == be1d1d11-8af3-404e-9238-e4597b6552e2 ]]; then

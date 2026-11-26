@@ -81,6 +81,33 @@
     ]
   },
   {
+    "task": "hof-topology-interpenetration",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-hof-topology-interpenetration@sha256:d5db936be8f7a1b25b7d694ba92eba72220e418e259a19884359b4b657bb1276",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "needs_network": true,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "effects": [
+      "Analyze seven local CIFs with the original scientific Python commands, clone the public Gavrog repository, install the dated Ubuntu JRE and retrieve the experimental Systre 20.8.0 JAR. Verify the dated shallow checkout candidate, original input files and all seven reported output tuples."
+    ],
+    "trials": [
+      {
+        "trial": "cd7a4ef6-d690-42c4-aa79-2a75bcf6c9e4",
+        "trajectory_sha256": "fa4ffd16b86dacf9caabb0d41861f8cb0223dc014ab05e22fb0e9939487b2580",
+        "rollout_sha256": "1dad95f4d92a652cadb3c27767240ee78a0930d4e419c75e8be4c6e148703cac"
+      }
+    ]
+  },
+  {
     "task": "embedding-drift-monitor",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-embedding-drift-monitor@sha256:63f78bde4225e2199f869cbd4130e0ee8280eff8eed87303075586c6486dd672",
