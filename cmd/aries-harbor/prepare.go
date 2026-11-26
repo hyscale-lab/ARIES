@@ -110,6 +110,13 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
+	if r.Trial == "3102c53f-5ea4-45e6-b7bf-2ee5c8698518" {
+		// This recording invokes the original argv[0] patch alias by its full path.
+		task.initialCheck += `
+mkdir -p /root/.codex/tmp/arg0/codex-arg0PK2zte
+ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch
+test -x /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch`
+	}
 	if r.Task == "git-leak-recovery" {
 		task.initialCheck += gitRecoveryTemp(r.Trial)
 	}
@@ -250,7 +257,7 @@ ARIESPATH`}})
 			return "", nil, err
 		}
 	}
-	if r.Trial == "b43d6be8-70d4-44fb-97a6-358b6bb55b3f" {
+	if r.Trial == "b43d6be8-70d4-44fb-97a6-358b6bb55b3f" || r.Trial == "5be2716d-f7a5-476e-8b31-718f12a6906b" {
 		// This recorded ls requires the harness directory. Its transient logs
 		// and credential-bearing state are deliberately absent from the fixture.
 		if _, err := checked(ctx, m, id, core.Command{Path: "/bin/mkdir", Args: []string{"-m", "0700", "-p", "/tmp/codex-home"}}); err != nil {
