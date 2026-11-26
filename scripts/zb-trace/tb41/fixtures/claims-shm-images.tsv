@@ -1,0 +1,2 @@
+main	docker.io/harborframework/terminal-bench:medical-claims-processing-environment-98fb909bc55e54a7@sha256:dc51c3e3da8c9b5758b095543f94f4c5082ff401a8d63414a2898708e787d541
+playwright-mcp	docker.io/harborframework/terminal-bench:medical-claims-processing-sidecar-playwright-mcp-8867302f7b779be5@sha256:9a5080ae6a8d839875f4a5536145a279a9321721dcfd0ac15286de8caffb3aff

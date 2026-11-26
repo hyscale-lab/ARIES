@@ -113,6 +113,20 @@ size an individual companion's private `/dev/shm` tmpfs. For example, set it
 to 1024 for a browser companion that requires 1 GiB. Zero uses containerd's
 default size.
 
+The [amd183 medical-claims mount fixture](../../scripts/zb-trace/tb41/fixtures/claims-shm-amd183.sh)
+checks Playwright's 1 GiB setting alongside a default companion. It runs headless
+Chromium on a generated document with only loopback available. The probe uses a
+generated service in place of the workspace and starts the browser directly.
+[Published Compose manifest](https://github.com/harbor-framework/terminal-bench/blob/452bf305c6daa62fc59061d22133a7cbc7c1572e/tasks/medical-claims-processing/environment/docker-compose.yaml)
+To stage it, build an amd64 test binary with
+`CGO_ENABLED=0 go test -c -o claims-shm.test ./pkg/deployment/vhive`. Copy the
+binary, the driver and [image pins](../../scripts/zb-trace/tb41/fixtures/claims-shm-images.tsv)
+into a fresh `/local/zb-claims-shm-20261126` directory on amd183, with the pins
+named `images.tsv`. In that directory, generate `execution.sha256` with
+`sha256sum claims-shm.test claims-shm-amd183.sh images.tsv > execution.sha256`.
+Run `sudo bash claims-shm-amd183.sh` and collect `status`, `test.log`,
+and `events.jsonl` before removing the staging directory.
+
 The bridge validates the exact runtime, guest VM binding, component, run, task
 and logical running state before granting borrowed execution. Persistent mode
 needs only containerd execution access. Checkpoint mode also needs VM control
