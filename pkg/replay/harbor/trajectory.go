@@ -65,6 +65,8 @@ type Event struct {
 	Sequence     uint64        `json:"guest_sequence,omitempty"`
 	Wait         time.Duration `json:"modeled_wait_ns"`
 	Basis        string        `json:"wait_basis"`
+
+	VerificationInterval time.Duration `json:"recorded_verification_ns,omitempty"`
 }
 
 type workload struct {
@@ -265,9 +267,17 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 			if rejectedBeforeGuest(trial, c) {
 				e.Kind = "harness_rejection_request"
 			} else if p.Name != "update_plan" {
-				call, err := guestCall(c, cwd, r.Plan.StartedAt, raw.Time, uint64(len(r.Plan.Calls)+1))
-				if err != nil {
-					return nil, err
+				sequence := uint64(len(r.Plan.Calls) + 1)
+				call, interval, verified := paymentsPatchVerification(trial, c, cwd)
+				if verified {
+					call.Sequence = sequence
+					call.StartOffset = raw.Time.Sub(r.Plan.StartedAt)
+					e.VerificationInterval = interval
+				} else {
+					call, err = guestCall(c, cwd, r.Plan.StartedAt, raw.Time, sequence)
+					if err != nil {
+						return nil, err
+					}
 				}
 				r.Plan.Calls = append(r.Plan.Calls, call)
 				e.Sequence = call.Sequence
@@ -286,6 +296,14 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 				e.Basis = "recorded_harness_tool_interval"
 			} else if c.call.Name != "update_plan" {
 				e.Basis = "replaced_by_live_guest_reply"
+				if r.Plan.Calls[seq-1].Operation == VerifyPatch {
+					prior := r.Events[len(r.Events)-1]
+					if prior.Sequence != seq || e.ParallelSize != 0 || e.Wait != prior.VerificationInterval {
+						return nil, fmt.Errorf("step %d has an unbound read-only verification interval", c.step)
+					}
+					e.Basis = "recorded_patch_verification_interval"
+					e.VerificationInterval = e.Wait
+				}
 				e.Wait = 0
 				e.Sequence = seq
 			} else {

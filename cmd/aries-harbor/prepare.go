@@ -462,6 +462,11 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	}
 	if r.Task == paymentsTask {
 		cmd += paymentsFinalCheck
+		if r.Trial == harbor.PaymentsRejectedPatchTrial {
+			cmd += "test ! -e state.py\n"
+		} else {
+			cmd += "sha256sum state.py\n"
+		}
 	}
 	switch r.Trial {
 	case nextjsTrial:

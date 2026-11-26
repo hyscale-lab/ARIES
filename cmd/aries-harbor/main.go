@@ -71,6 +71,7 @@ func command(ctx context.Context) error {
 	hfHarness := flag.String("hf-harness", "", "directory with the approved Debian utility and curated marketplace archives for the two HF inspection trials")
 	grpcTools := flag.String("grpc-tools", "", "signed, date-matched Debian git/patch package bundle for the 69ba source")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
+	paymentsVerifier := flag.String("payments-patch-verifier", "", "pinned Codex read-only verifier for the two reviewed Payments refusals")
 	opamPID := flag.Bool("diagnostic-opam-pid", false, "bind the recorded compiler signal-zero check and progress reads to the observed guest installer")
 	opamLog := flag.Bool("diagnostic-opam-log", false, "bind the original compiler progress-log name to its observed OPAM file in a diagnostic")
 	ipv4Addrs := flag.Bool("diagnostic-grpc-ipv4-addresses-only", false, "require the isolated 69ba guest to have IPv4 addresses only with its IPv6 stack enabled")
@@ -256,6 +257,10 @@ func command(ctx context.Context) error {
 	if needsImage && *imageHelper == "" {
 		return errors.New("this task requires the pinned in-guest -image-helper")
 	}
+	needsPaymentsVerifier := r.Trial == harbor.PaymentsRejectedPatchTrial || r.Trial == harbor.PaymentsRejectedNestedPatchTrial
+	if needsPaymentsVerifier != (*paymentsVerifier != "") {
+		return errors.New("provide the pinned patch verifier only for the two reviewed Payments recordings")
+	}
 	readySetup, _ := sourceSetup(r)
 	if ((r.Trial == hfLoopbackTrial && *hfHarness == "") || r.Trial == hfDefaultThreadsTrial || r.Trial == datasetPythonTrial || r.Task == "sanitize-git-repo") != (*curlPackages != "") {
 		return errors.New("provide the pinned curl archive for the source trial requiring the additional HTTP client")
@@ -287,10 +292,10 @@ func command(ctx context.Context) error {
 	if *periodicSocket != "" && (*observer != "" || *intraStep != 0 || *probe != "") {
 		return errors.New("periodic collector owns all trace boundaries")
 	}
-	return native(ctx, o, r, *image, *periodicSocket, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *shardSciPy, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *periodicSocket, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *shardSciPy, *paymentsVerifier, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, periodicSocket, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP, shardSciPy string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, periodicSocket, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP, shardSciPy, paymentsVerifier string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -350,6 +355,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		{"rg", rg, "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"},
 		{"zb-guest", probe, ""},
 		{"aries-harbor-image", imageHelper, imageHelperSHA},
+		{paymentsVerifierName, paymentsVerifier, paymentsVerifierSHA},
 	} {
 		if helper.path == "" {
 			continue
@@ -575,6 +581,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 			if call.Operation == "ApplyPatch" {
 				const binary = "/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
 				return m.Exec(ctx, id, core.Command{Path: binary, Args: []string{"--codex-run-as-apply-patch", string(call.Body)}, Dir: call.Workdir})
+			}
+			if call.Operation == harbor.VerifyPatch {
+				return m.Exec(ctx, id, paymentsVerificationCommand(call))
 			}
 			if call.Operation == "ViewImage" {
 				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})

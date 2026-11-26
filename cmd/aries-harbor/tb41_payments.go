@@ -1,10 +1,26 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/hyscale-lab/aries/pkg/replay/harbor"
+)
 
 const paymentsTask = "payments-pipeline-fix"
 const paymentsFirstTrial = "4d316e1a-590b-41e6-8a2d-a55a895af680"
 const paymentsWheelTrial = "73d8a7b2-71f4-4245-938e-1cb6a8bbc545"
+const paymentsVerifierName = "aries-payments-verify-patch"
+const paymentsVerifierSHA = "ddd8bb602ef5e6d075fe88169a2bd49c4b4ed35a3700001d7a0cfa26dce771f6"
+const paymentsBwrap = "/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-resources/bwrap"
+
+func paymentsVerificationCommand(call replay.Call) core.Command {
+	return core.Command{
+		Path: paymentsBwrap, Dir: call.Workdir,
+		Args: []string{"--die-with-parent", "--unshare-user", "--unshare-net", "--ro-bind", "/", "/", "--", "/usr/local/bin/" + paymentsVerifierName, call.Script},
+	}
+}
 
 var paymentsSetup = taskSetup{
 	output: "/app/src/worker/worker.py",
@@ -58,6 +74,9 @@ func paymentsSourceSetup(trial string) taskSetup {
 		task.initialCheck += strings.ReplaceAll(paymentsPatchAlias, "CAPTURED_ALIAS", "codex-arg0BJn4iX")
 	case paymentsWheelTrial:
 		task.initialCheck += paymentsWheelCheck + strings.ReplaceAll(paymentsPatchAlias, "CAPTURED_ALIAS", "codex-arg0GbnyWR")
+	case harbor.PaymentsRejectedPatchTrial, harbor.PaymentsRejectedNestedPatchTrial:
+		task.initialCheck += paymentsWheelCheck +
+			"echo '7df960565a0dece99240ea4b9d0e011307817f9f3b73176c7b71fda44fe84765  " + paymentsBwrap + "' | sha256sum -c -\n"
 	default:
 		task.initialCheck += paymentsWheelCheck
 	}
@@ -88,7 +107,7 @@ print(json.dumps({"routes": routes, "customer": "ok", "kafka_watermarks": waterm
 const paymentsFinalCheck = `
 cd /app/src/worker
 python -m compileall -q .
-sha256sum __init__.py config.py requirements.txt state.py README.md
+sha256sum __init__.py config.py requirements.txt README.md
 grep -E 'ready in .*: 16000 balances, 1216000 transaction IDs' /tmp/worker-00.err | tail -n 5
 if test -f /tmp/worker-validation.log; then
     grep -E '^(PASS|.* latency )' /tmp/worker-validation.log || true
