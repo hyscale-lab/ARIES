@@ -61,7 +61,7 @@ func command(ctx context.Context) error {
 	atif := flag.String("trajectory", "", "original Harbor agent/trajectory.json")
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	wildSource := flag.String("wildclaw", "", "WildClawBench OpenClaw session JSONL")
-	wildMode := flag.String("wildclaw-mode", "", "inspect, timeline (paced source receipts), or live-plan")
+	wildMode := flag.String("wildclaw-mode", "", "inspect, timeline (paced source receipts), live-plan, or deltabox-lite")
 	wildClaw := flag.String("wildclaw-calendar", "", "inspect the reviewed WildClawBench Sol OpenClaw JSONL and plan")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")

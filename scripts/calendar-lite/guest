@@ -1,0 +1,3 @@
+#!/bin/bash
+set -eu
+exec ssh -T -p 22405 -i guest-key -o UserKnownHostsFile=guest-known-hosts -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes root@127.0.0.1 "$@"

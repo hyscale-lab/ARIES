@@ -1,0 +1,7 @@
+# Worker preparation
+
+Use a dedicated host-local directory with QEMU, qemu-img, KVM, systemd, Python 3 and OpenSSH. Copy this directory's executable scripts there. The local inputs are a stopped prepared.qcow2, bzImage, initrd, seed.img, guest-key, a tests directory with the benchmark's private verifier and result-hashes.txt. Keep SSH keys and private inputs on the worker.
+
+Use the pinned DeltaBox-Lite commit 3df54212919b75404544118adbfa0fef1e1af61c. Build with cargo build --locked --release -p deltabox and install the resulting deltabox executable in the guest PATH. A Noble cloud root with Debian 6.12.117+deb13-amd64 supports the required FUSE, DAMON and virtio reporting features. The 512 MiB guest uses one vCPU and has root SSH key access from the worker's loopback forwarding port. Prepare /srv/calendar with the three calendar inputs, a fresh master Git directory, seven documented Markdown markers and .openclaw/workspace-state.json. Install the source USER.md without its front matter at /root/USER.md and token.py at /opt/pilot/token.py. Keep the guest free of earlier sessions and verifier files. Shut it down before creating overlays.
+
+Invoke the aries-harbor deltabox-lite mode from this directory, with a fresh run label and an explicit profile (on/off) and arm (checkpoint/control). The arm directory contains the monotonic replay clock, VMM and cgroup samples, source and recovered token, mount status, guest profile and verifier receipts. The qcow2 overlay is retained for inspection.

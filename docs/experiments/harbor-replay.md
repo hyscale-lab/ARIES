@@ -126,3 +126,14 @@ Sound Change Cascade uses the released Python 3.12 and Git fixture, its fixed 78
 | Cargo `3494bc2e` | `d0f04134a875e55e61c5441abd559a7d12657ee9a7ba1f7b2e736573ff1ee6fc` |
 
 Use the archived tool packages only for the listed sources. The Bookworm archives were built for their respective images. The Trixie session-window archive uses its own package set.
+
+### DeltaBox-Lite with a local VM snapshot
+
+The reviewed calendar trace can run through a stock DeltaBox-Lite Linux FUSE session inside QEMU/KVM. The opt-in mode uses a separate, private node-local deployment directory. Copy the files from scripts/calendar-lite into it and prepare the base and inputs described in its README. Use the same directory for the launcher, source and control on this host. Run as root for process accounting, transient systemd service management and QMP. Each label owns a new qcow2 overlay and evidence directory.
+
+```bash
+ARIES_LITE_RUN=pair1-cr ARIES_LITE_PROFILE=off ARIES_LITE_ARM=checkpoint \
+  aries-harbor -wildclaw /local/calendar/trace.jsonl -wildclaw-mode deltabox-lite
+```
+
+Select control for a five-second resident hold or checkpoint for stop, savevm, source exit and loadvm. Profile on enables the pinned DAMON and negotiated balloon reporting treatment. Both arms verify the in-memory process token and execute the identical five calls through the Harbor scheduler. The launcher copies the private verifier into the guest after the final reply, checks the result hashes and score, and cleans up its VM. The sibling deltabox-lite-session mode executes the tool schedule inside that prepared session.
