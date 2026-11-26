@@ -23,6 +23,11 @@
         "trial": "be1d1d11-8af3-404e-9238-e4597b6552e2",
         "trajectory_sha256": "6ee4133ae15fc0d503b093e467cebd7dd0c6fd44d2dee0bdbe1c71b2002c0a6d",
         "rollout_sha256": "d89e72a1d3877f8503d53bc9d1f995034ecc08d80bdad081f9e85c29cfcd4e9a"
+      },
+      {
+        "trial": "09288c37-6d48-4073-a05a-1d5770fecef0",
+        "trajectory_sha256": "bebb5600b85988b0aac4a730e6d044973d55416d829e43c6090dd32c77cfa4ec",
+        "rollout_sha256": "abc2c5ae084cb9b52fd28be5edcaedbb06fdb47afb900328399d35c781ffe604"
       }
     ]
   },
