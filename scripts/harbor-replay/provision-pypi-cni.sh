@@ -11,6 +11,7 @@ tls_hosts=(pypi.org files.pythonhosted.org)
 http_hosts=()
 github_addresses=()
 private_dns=false
+pin_egress=false
 dns_unit=
 case "${3:-video}" in
     video|video-amd182|video-amd183|video-amd189|video-amd191|video-amd198|video-amd200|video-amd201|video-amd203)
@@ -87,6 +88,18 @@ case "${3:-video}" in
         dns_unit=zb-ccsnap-dns-amd183
         tls_hosts=(github.com raw.githubusercontent.com opam.ocaml.org snapshot.ubuntu.com)
         ;;
+    nextjs-be1d1d11-amd191)
+        private_dns=true
+        pin_egress=true
+        bridge=zbnextbe1d191
+        subnet=10.250.191.0/28
+        chain=ZB191NEXTBE1D
+        name=zbnext-be1d1d11-amd191
+        dns_unit=zb-next-be1d1d11-dns-amd191
+        # The Playwright CDN redirects Chromium and FFmpeg to these exact hosts.
+        tls_hosts=(registry.npmjs.org cdn.playwright.dev storage.googleapis.com
+                   playwright.download.prss.microsoft.com snapshot.debian.org)
+        ;;
     compcert)
         bridge=zbcc189
         subnet=10.231.189.0/28
@@ -99,6 +112,13 @@ case "${3:-video}" in
 esac
 ipt=(sudo -n iptables -w -t mangle)
 jump=(-i "$bridge" -s "$subnet" -m comment --comment "$name" -j "$chain")
+if [[ $pin_egress == true ]]; then
+    exec 9>"$base/nextjs-network.lock"
+    flock 9
+    jump=(-i "$bridge" -m comment --comment "$name" -j "$chain")
+    ip6t=(sudo -n ip6tables -w -t mangle)
+    deny_v6=(-i "$bridge" -m comment --comment "$name" -j DROP)
+fi
 if [[ "$action" == remove ]]; then
     if [[ $private_dns == true ]] && sudo -n systemctl is-active --quiet "$dns_unit"; then
         sudo -n systemctl stop "$dns_unit"
@@ -107,6 +127,9 @@ if [[ "$action" == remove ]]; then
         "${ipt[@]}" -D PREROUTING "${jump[@]}"
         "${ipt[@]}" -F "$chain"
         "${ipt[@]}" -X "$chain"
+    fi
+    if [[ $pin_egress == true ]] && "${ip6t[@]}" -C PREROUTING "${deny_v6[@]}" 2>/dev/null; then
+        "${ip6t[@]}" -D PREROUTING "${deny_v6[@]}"
     fi
     exit 0
 fi
@@ -151,6 +174,7 @@ config={"cniVersion":"1.0.0","name":name,"plugins":[{"type":"bridge","bridge":br
 (base/"conf"/"10-video.conflist").write_text(json.dumps(config,indent=2)+"\n")
 PY
 if [[ $private_dns == true ]]; then
+    test -x /usr/sbin/dnsmasq
     python3 - "$base/conf/dataset-hosts.json" "${ZB_TLS_CANDIDATES:-}" "${tls_hosts[@]}" <<'PYTLS'
 import ipaddress,json,pathlib,socket,ssl,sys
 path=pathlib.Path(sys.argv[1]); hosts={}
@@ -175,9 +199,34 @@ for host in sys.argv[3:]:
 path.write_text(json.dumps(hosts,sort_keys=True)+"\n")
 (path.parent.parent/"dns.hosts").write_text("".join(f"{addr} {host}\n" for host, addr in sorted(hosts.items())))
 PYTLS
+    if [[ $pin_egress == true ]]; then
+        # shortcut: enforce verified IPs and ports, use an application proxy if shared CDN addresses need hostname enforcement.
+        # Replace the profile chain atomically so a DNS refresh retires old IPs.
+        if ! "${ip6t[@]}" -C PREROUTING "${deny_v6[@]}" 2>/dev/null; then
+            "${ip6t[@]}" -I PREROUTING 1 "${deny_v6[@]}"
+        fi
+        insert_jump=
+        if ! "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
+            insert_jump=true
+        fi
+        {
+            printf '*mangle\n:%s - [0:0]\n' "$chain"
+            printf -- '-A %s ! -s %s -j DROP\n' "$chain" "$subnet"
+            for protocol in udp tcp; do
+                printf -- '-A %s -d %s -p %s --dport 53 -j RETURN\n' "$chain" "$resolver" "$protocol"
+            done
+            while read -r address; do
+                printf -- '-A %s -d %s -p tcp --dport 443 -j RETURN\n' "$chain" "$address"
+            done < <(cut -d ' ' -f 1 "$base/dns.hosts" | sort -u)
+            printf -- '-A %s -j DROP\n' "$chain"
+            if [[ $insert_jump == true ]]; then
+                printf -- '-I PREROUTING 1 %s\n' "${jump[*]}"
+            fi
+            printf 'COMMIT\n'
+        } | sudo -n iptables-restore --wait --noflush
+    fi
     # The platform mounts /etc/hosts read-only. Resolve service records on this
     # dedicated bridge and return NXDOMAIN for names outside the approved set.
-    test -x /usr/sbin/dnsmasq
     # The private runtime can be mode 0700. dnsmasq reloads records after
     # dropping privileges, so expose only the selected public DNS records.
     dns_runtime=/run/$dns_unit
@@ -195,6 +244,12 @@ PYTLS
             --bind-dynamic --interface="$bridge" --except-interface=lo --listen-address="$resolver" \
             --addn-hosts="$dns_runtime/hosts" --local=/#/ --pid-file="$dns_runtime/dns.pid"
     fi
+fi
+if [[ $pin_egress == true ]]; then
+    "${ipt[@]}" -C PREROUTING "${jump[@]}"
+    "${ip6t[@]}" -C PREROUTING "${deny_v6[@]}"
+    "${ipt[@]}" -S "$chain"
+    exit 0
 fi
 if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     "${ipt[@]}" -N "$chain"

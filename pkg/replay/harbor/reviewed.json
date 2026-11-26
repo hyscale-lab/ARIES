@@ -1,5 +1,32 @@
 [
   {
+    "task": "nextjs-performance",
+    "workdir": "/app",
+    "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 15360,
+    "needs_network": true,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "effects": [
+      "Build and optimize the local Next.js warehouse application with its loopback warehouse and audit companion. Install Playwright, Chromium and browser prerequisites during the original calls using source-dated npm resolution and signed Debian snapshot metadata. The recorded Next.js documentation search remains a host-only event. Read back the final source, production build, browser artifacts and audit receipt."
+    ],
+    "trials": [
+      {
+        "trial": "be1d1d11-8af3-404e-9238-e4597b6552e2",
+        "trajectory_sha256": "6ee4133ae15fc0d503b093e467cebd7dd0c6fd44d2dee0bdbe1c71b2002c0a6d",
+        "rollout_sha256": "d89e72a1d3877f8503d53bc9d1f995034ecc08d80bdad081f9e85c29cfcd4e9a"
+      }
+    ]
+  },
+  {
     "task": "hof-topology-interpenetration",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-hof-topology-interpenetration@sha256:d5db936be8f7a1b25b7d694ba92eba72220e418e259a19884359b4b657bb1276",

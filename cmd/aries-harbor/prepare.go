@@ -109,6 +109,9 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // Debian Bookworm's signed Packages index identifies patch_2.7.6-7_amd64.deb.
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
+	if r.Task == nextjsTask {
+		return nextjsSetup, r.Trial == nextjsTrial
+	}
 	task, ok := taskSetups[r.Task]
 	if r.Trial == "3102c53f-5ea4-45e6-b7bf-2ee5c8698518" {
 		// This recording invokes the original argv[0] patch alias by its full path.
@@ -294,12 +297,15 @@ ARIESPATH`}})
 		allocation = strings.TrimSpace(out)
 	}
 	node := "node"
+	toolCheck := "command -v node codex rg python3"
+	if r.Trial == nextjsTrial {
+		toolCheck = "command -v node codex rg\n/opt/aries-python/bin/python3 --version"
+	}
 	if r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
 		// The task prepends its Conda Node installation in login shells.
 		node = "/root/.nvm/versions/node/v22.23.2/bin/node"
 	}
-	state := "set -eu\n" + initial + "\n" + task.inputCheck + `
-command -v node codex rg python3
+	state := "set -eu\n" + initial + "\n" + task.inputCheck + "\n" + toolCheck + `
 test "$(` + node + ` --version)" = v22.23.2
 rg --version | head -1`
 	if task.packagesSHA != "" && task.packagesField == "" {
@@ -405,6 +411,9 @@ printf '%s\n' 'SOURCE_TEMPLATE -> SOURCE_DIR'`
 
 func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools bool) error {
 	task := taskSetups[r.Task]
+	if r.Trial == nextjsTrial {
+		task = nextjsSetup
+	}
 	begin, err := harbor.Clock()
 	if err != nil {
 		return err
@@ -412,6 +421,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
+	}
+	if r.Trial == nextjsTrial {
+		cmd += nextjsFinalCheck
 	}
 	if r.Task == "sanitize-git-repo" {
 		cmd += "\nfind . -type f -not -path './.git/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
@@ -545,9 +557,16 @@ with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/
 	if task == torchTask {
 		python, probe = "/usr/bin/python3", torchNetworkProbe
 	}
-	out, err := checked(ctx, m, id, core.Command{Path: python, Args: []string{"-c", probe}})
+	command := core.Command{Path: python, Args: []string{"-c", probe}}
+	if recording.Trial == nextjsTrial {
+		command = core.Command{Path: "/usr/local/bin/node", Args: []string{"-e", nextjsHealthCheck}}
+	}
+	out, err := checked(ctx, m, id, command)
 	end, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil || !json.Valid([]byte(out)) {
+		if recording.Trial == nextjsTrial {
+			return errors.Join(errors.New("warehouse companion health readback failed"), err, clockErr)
+		}
 		return errors.Join(errors.New("public dependency route/DNS/TLS readback failed"), err, clockErr)
 	}
 	return log.Encode(map[string]any{"event": "validated_guest_network", "phase": phase, "begin_monotonic_ns": begin, "end_monotonic_ns": end, "network": json.RawMessage(out)})

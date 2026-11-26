@@ -19,6 +19,11 @@ while IFS=$'\t' read -r task original source python codex os image_helper; do
     if [[ "$original" == 27c84b6a-af43-4332-9ba4-0f70ab1e160d ]]; then
         flags+=(-cni-network zbhof183 -cni-conf-dir "$stage/cni/conf" -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin")
     fi
+    if [[ "$original" == be1d1d11-8af3-404e-9238-e4597b6552e2 ]]; then
+        flags+=(-companion-image localhost/zb-nextjs-warehouse@sha256:decefdfc46bbed17ebdc58a58d0b220ae52d4c71b363ce42b58ecde17d309ba8
+                -cni-network zbnext-be1d1d11-amd191 -cni-conf-dir "$stage/cni/conf"
+                -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin")
+    fi
     status=0
     ZB_SOURCE_DIR="$stage/sources/$source" ZB_GUEST_PYTHON="$python" \
         bash "$stage/zb-trace/tb41/pilot.sh" "$stage" "$runtime" "$unit" traced "$out" "${flags[@]}" >"$out.driver" 2>&1 || status=$?
