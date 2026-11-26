@@ -135,6 +135,52 @@
     ]
   },
   {
+    "task": "sound-change-cascade",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-sound-change-cascade@sha256:dfacac4194f78a66ab602a8bd2d8aab13a5953e04df9e87f56c90b21bfbb0aa2",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "needs_network": false,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Infer and validate phonological rules against 780 local synthetic training pairs. Replay the original package-install calls from the source-dated wheelhouse with guest networking disabled."
+    ],
+    "trials": [
+      {
+        "trial": "16f06a85-5b3e-43db-babc-8d2cf1d31497",
+        "trajectory_sha256": "5b036c37704b6fc4b0c945263120ab247783e26d0eef5b365dc0121b611e3e11",
+        "rollout_sha256": "bb26499ad2164927353fc93272c8f9b96d9249d0d19948b1d1a85982859ea6f4"
+      },
+      {
+        "trial": "0829d780-a19e-4717-90d5-1664514bb797",
+        "trajectory_sha256": "d5df00c600d382c3a72da42ec6fb715b22ef9bc86d011dd23af03295fe9a8b96",
+        "rollout_sha256": "6eb889b5dd0951ea486072c53aec5a0713ade1b3f070fc7def05c9eae9a833ab"
+      },
+      {
+        "trial": "2b3984d8-7648-4dfb-bd50-2a99957679c9",
+        "trajectory_sha256": "4c0d768ecd871e638256e616c6cc870ef154af4b81fd3a6b68514812054ba88a",
+        "rollout_sha256": "828316921879dca65f91d2143ba0d70fd643b9ebeda8a5b527e5e2ff74293b8d"
+      },
+      {
+        "trial": "e42bf0ae-155f-48f2-a656-40a3dcc3870c",
+        "trajectory_sha256": "7187d0dac05c79451bbbf9e3cd071a7999461858bbf74b39437b937fac2d751b",
+        "rollout_sha256": "65197b1a19b92df5426ed950361567c2402f9a46bafcbc772ef797169f42987d"
+      },
+      {
+        "trial": "04c7e5d4-203f-47e7-b5f7-04c2503f1813",
+        "trajectory_sha256": "0cfeb8ae6c8244c79ff4425254e448f216a748bb938a66b89f57665f0af9e1c5",
+        "rollout_sha256": "32e9da9f1ae3648fe3e7fe221c49eecf4233534588783ea85fd373a17023ca77"
+      }
+    ]
+  },
+  {
     "task": "nextjs-performance",
     "workdir": "/app",
     "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",
