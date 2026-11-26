@@ -7,11 +7,17 @@ unit=$3
 arm=$4
 out=$(realpath -m "$5")
 trial=${6:-4d316e1a-590b-41e6-8a2d-a55a895af680}
+verifier=()
 case "$trial" in
     4d316e1a-590b-41e6-8a2d-a55a895af680|4df3e44e-0549-4a45-ac27-619c8b3d12f9|73d8a7b2-71f4-4245-938e-1cb6a8bbc545) ;;
+    1532d3f9-a790-4d9b-b849-42c48290acd7|3bcd8259-9e48-4322-8c01-e925035743eb)
+        verifier=(-payments-patch-verifier "$stage/fixtures/aries-payments-verify-patch")
+        ;;
     *) exit 2 ;;
 esac
-bridge=zbpayments198
+node=$(cat /var/emulab/boot/nodeid)
+[[ "$node" =~ ^amd[0-9]+$ ]]
+bridge="zbpayments${node#amd}"
 sidecars="$out.sidecars"
 [[ "$out" =~ -[0-9]{2}$ ]]
 network_prefix="zbp${trial:0:4}${out: -2}"
@@ -106,7 +112,7 @@ ZB_SOURCE_DIR="$stage/sources/$trial" ZB_GUEST_PYTHON=/usr/local/bin/python3 \
     bash "$stage/zb-trace/tb41/pilot.sh" "$stage" "$runtime" "$unit" "$arm" "$out" \
     -codex-tools "$stage/fixtures/codex-harbor-tools.tar.gz" \
     -cni-network "$bridge" -cni-conf-dir "$stage/cni/conf" \
-    -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin" || exit "$?"
+    -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin" "${verifier[@]}" || exit "$?"
 
 "${runc[@]}" exec zbp-kafka sync
 status=0

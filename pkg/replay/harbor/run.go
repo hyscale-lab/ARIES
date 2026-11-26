@@ -65,6 +65,8 @@ type Receipt struct {
 	CaptureEndNS     int64               `json:"capture_end_monotonic_ns,omitempty"`
 	CaptureIndex     int                 `json:"capture_index,omitempty"`
 	NativeError      string              `json:"native_error,omitempty"`
+
+	SourceVerificationNS int64 `json:"source_verification_ns,omitempty"`
 }
 
 func Clock() (int64, error) {
@@ -173,7 +175,17 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		if err := h.dispatchReceipt(receipt, "tool"); err != nil {
 			return err
 		}
+		var verificationStart int64
+		if e.VerificationInterval > 0 {
+			verificationStart, err = Clock()
+			if err != nil {
+				return err
+			}
+		}
 		out, replyTime, err := h.executeTool(ctx, call, receipt)
+		if err == nil && e.VerificationInterval > 0 {
+			replyTime, err = h.preserveVerificationInterval(ctx, e.Step, e.VerificationInterval, verificationStart, replyTime)
+		}
 		if h.clock == nil {
 			captureErr := h.boundary(ctx, "post-tool", e.Step, replyTime)
 			if err := recordReply(ctx, h, call, receipt, out, replyTime, errors.Join(err, captureErr)); err != nil {
@@ -202,7 +214,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 }
 
 func recordSourceEvent(ctx context.Context, h Hooks, e Event) (Receipt, error) {
-	receipt := Receipt{Event: "source_event", SourceKind: e.Kind, SourceCallID: e.CallID, Line: e.Line, Step: e.Step, Sequence: e.Sequence, Basis: e.Basis, ParallelSize: e.ParallelSize}
+	receipt := Receipt{Event: "source_event", SourceKind: e.Kind, SourceCallID: e.CallID, Line: e.Line, Step: e.Step, Sequence: e.Sequence, Basis: e.Basis, ParallelSize: e.ParallelSize, SourceVerificationNS: int64(e.VerificationInterval)}
 	if e.Wait > 0 {
 		receipt.Event = "wait_start"
 		receipt.RequestedNS = int64(e.Wait)
@@ -289,6 +301,9 @@ func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	if call.Operation == "ViewImage" {
 		receipt.StatusBasis = "recorded_high_detail_image_attachment"
 	}
+	if call.Operation == VerifyPatch {
+		receipt.StatusBasis = "read_only_patch_verification"
+	}
 
 	return receipt
 }
@@ -312,6 +327,9 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 	}
 	if err := errors.Join(callErr, h.Record(receipt)); err != nil {
 		return err
+	}
+	if call.Operation == VerifyPatch && (out.ExitCode != 0 || out.Stderr != "" || receipt.OutputComparison != "matched_ignoring_trailing_newlines") {
+		return fmt.Errorf("step %d read-only verification differs from the recorded refusal", receipt.Step)
 	}
 	if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
 		if out.ExitCode == 0 && (h.DiagnosticVideoImages || h.RecordSourceDivergence) && comparableLiveImage(call, out.Stdout) {

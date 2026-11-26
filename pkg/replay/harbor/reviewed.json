@@ -226,6 +226,16 @@
         "trial": "73d8a7b2-71f4-4245-938e-1cb6a8bbc545",
         "trajectory_sha256": "e3b2f4654af86f55e7f1dcac77a68491baa6d08217154097693028bcc93e9763",
         "rollout_sha256": "d536cf87aaa809fbc20de6bc8da950b7fa41a7ce0991c60df3c8e73df20c4e07"
+      },
+      {
+        "trial": "1532d3f9-a790-4d9b-b849-42c48290acd7",
+        "trajectory_sha256": "1695df14ef7d09f0945027c4370803dd255ffa25df8fdf189c4ab320bcfd43a8",
+        "rollout_sha256": "74e4b31f374459b290f4ac1d6d4c5b1b4f7d71138d2030a9437e726615fcb881"
+      },
+      {
+        "trial": "3bcd8259-9e48-4322-8c01-e925035743eb",
+        "trajectory_sha256": "58dcc2c7f2b9ab9a3db6b43205a808c0a3132bce4958d56d94dfdb707f5e9553",
+        "rollout_sha256": "e6126830afd07bd5bcf6c4ed5eb8a1034c84ef277171fa34da947b7a74a0ab56"
       }
     ]
   },
