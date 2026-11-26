@@ -1,4 +1,4 @@
-"""Pair a guest cgroup read with Firecracker CPU and PSS observations every second."""
+"""Pair a guest cgroup read with Firecracker CPU, RSS and PSS observations every second."""
 import json
 import os
 from pathlib import Path
@@ -84,14 +84,16 @@ def sample(api):
             after, cpu_ticks = process_times(proc)
             end = time.monotonic_ns()
             assert before == after == start
-            pss, = [s.split()[1:] for s in rollup.splitlines() if s.startswith("Pss:")]
-            assert pss[1] == "kB"
+            sizes = {fields[0]: int(fields[1]) * 1024 for line in rollup.splitlines()
+                     if (fields := line.split()) and fields[0] in {"Rss:", "Pss:"} and fields[2:] == ["kB"]}
+            assert 0 <= sizes["Pss:"] <= sizes["Rss:"]
             timeout = deadline + (12 * SECOND if tick == 0 else SECOND * 8 // 10)
             guest = read_guest(stats, tick, timeout)
             guest_end = time.monotonic_ns()
             members = read_guest(membership, tick, timeout)
             membership_end = time.monotonic_ns()
-            row.update(begin_ns=begin, end_ns=end, pss_bytes=int(pss[0]) * 1024,
+            row.update(begin_ns=begin, end_ns=end, pss_bytes=sizes["Pss:"], rss_bytes=sizes["Rss:"],
+                       placement=os.environ.get("ZB_TB41_PLACEMENT", "solo"),
                        cpu_ticks=cpu_ticks, ticks_per_second=hz, cpu_observed_ns=(cpu_begin + end) // 2,
                        guest_capture_begin_ns=guest_begin, guest_capture_end_ns=guest_end,
                        guest=guest, membership=members, membership_received_ns=membership_end,
