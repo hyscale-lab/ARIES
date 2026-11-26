@@ -10,14 +10,17 @@ from tempfile import TemporaryDirectory
 from process import process
 
 
-def collect(host, cache, results):
-    stage='/local/zb-tb41-cohort/runs'
+def collect(host, cache, results, stage='/local/zb-tb41-cohort/runs'):
+    if not re.fullmatch(r'/local/(?:[a-zA-Z0-9_-]+/)+runs',stage):
+        raise ValueError('expected a worker study runs directory under /local')
     command=['ssh','-o','BatchMode=yes',host]
     names=subprocess.check_output([*command, f"sudo find {stage} -maxdepth 1 -name '*.exit' -printf '%f\\n'"],text=True)
     for name in sorted(names.splitlines()):
         if not re.fullmatch(r'[a-z0-9-]+-campaign-[0-9]+\.exit',name):
             raise ValueError('unexpected worker attempt name')
         run=name[:-5]
+        if (results/'runs'/run/'run.json').is_file() or (results/'attempts'/run/'attempt.json').is_file():
+            continue
         dest=cache/run
         if not dest.exists():
             cache.mkdir(parents=True,exist_ok=True)
@@ -67,5 +70,6 @@ if __name__=='__main__':
     p.add_argument('host')
     p.add_argument('cache',type=Path)
     p.add_argument('results',type=Path)
+    p.add_argument('--stage',default='/local/zb-tb41-cohort/runs')
     a=p.parse_args()
-    collect(a.host,a.cache,a.results)
+    collect(a.host,a.cache,a.results,a.stage)
