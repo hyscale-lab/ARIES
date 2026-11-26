@@ -41,6 +41,24 @@ scripts/harbor-replay/run-traced.sh ./bin/aries-harbor scripts/zb-trace /path/to
     -checkpoint-dir "$CHECKPOINT_DIR" -shim-dir "$SHIM_DIR" -io-dir "$IO_DIR"
 ```
 
+## WildClawBench OpenClaw v3 sessions
+
+Use one native session JSONL file per invocation. Each invocation starts the replay clock at the user prompt. The reader retains the earlier session metadata.
+
+```sh
+bin/aries-harbor -wildclaw session.jsonl
+bin/aries-harbor -wildclaw session.jsonl -wildclaw-mode timeline > source-receipts.jsonl
+bin/aries-harbor -wildclaw session.jsonl -wildclaw-mode live-plan > plan.json
+```
+
+The default prints the timeline immediately. In timeline mode, `harbor.Run` sleeps for recorded inter-event gaps and emits source receipts. Batched requests share their assistant timestamp. Replies retain their native order, including numeric HTTP statuses. An interrupted session ends at its last observed event, with any unanswered call identified. These intervals include harness overhead. The trace does not measure model inference or guest CPU time separately.
+
+For programmatic use, `harbor.ParseWildClawSource` exposes request arguments and raw reply content and details. `harbor.LoadWildClawTimeline` returns an observation-only recording for the shared runner. `harbor.LoadWildClawLive` produces an executable recording for the two reviewed Sol source digests, calendar scheduling and image categorization. Supply a prepared sandbox and the `Exec`, `Boundary` and `Record` hooks to `harbor.Run` for live operation. Live scheduling retains the inter-turn gaps and uses the actual tool completion time. The published score in a plan describes the source session. `-wildclaw-calendar` retains the original calendar-only plan inspector.
+
+For a reviewed live plan, `go run ./cmd/wildclaw-docker session.jsonl DISPOSABLE_CONTAINER` runs the recorded tools in a caller-prepared Docker container. Supply the matching task files and shell environment before replay.
+
+The optional cohort tests take `WILDCLAW_SOL_TRACE_DIR` and use the bundled inventory by default. Set `WILDCLAW_SOL_INVENTORY` to override its path. Set `WILDCLAW_CALENDAR_TRACE` for the roughly 103-second calendar clock test.
+
 ## Terminal-Bench 4.1 replay pilot
 
 The 4.1 cohort pilot uses the [original `roy-polymorph-cn` trial](https://hub.harborframework.com/jobs/a538f69d-7756-444a-9dfe-43a0ab10b3a8/trials/d16a13fe-8381-4594-b6f6-60bb6f3aa660) from the Terminal-Bench 4.0 job that Harbor regraded. ARIES pins the original artifact pair, source job and row, and the OCI manifest rebuilt from the [original task Dockerfile and data](https://github.com/harbor-framework/terminal-bench/tree/452bf305c6daa62fc59061d22133a7cbc7c1572e/tasks/roy-polymorph-cn). Import the digest-qualified image into the selected containerd namespace before starting the pilot. Guest readiness verifies the task inputs, virtual environment, first-run output paths and the absence of the command that produced the recorded exit 2. The five guest replies should be `0, 0, 0, 2, 0` in source order. One recorded web action and the plan updates remain host-side timeline events.

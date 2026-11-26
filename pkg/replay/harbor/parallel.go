@@ -27,7 +27,7 @@ func validateParallelGroups(r *Recording) error {
 				return fmt.Errorf("interleaved batch at step %d", e.Step)
 			}
 			if j < n {
-				if x.Kind == "function_call_output" || seen[x.Sequence] {
+				if x.isToolReply() || seen[x.Sequence] {
 					return errors.New("batch requires a reply before all dispatches")
 				}
 				seen[x.Sequence] = true
@@ -37,7 +37,7 @@ func validateParallelGroups(r *Recording) error {
 				}
 				sessions[id] = true
 			} else {
-				if x.Kind != "function_call_output" || !seen[x.Sequence] {
+				if !x.isToolReply() || !seen[x.Sequence] {
 					return errors.New("wrong parallel reply binding")
 				}
 				delete(seen, x.Sequence)
@@ -187,7 +187,7 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 			e := events[next]
 			receipt := first
 			if next > 0 {
-				receipt = Receipt{Event: "source_event", SourceKind: e.Kind, SourceCallID: e.CallID, Step: e.Step, Line: e.Line, Sequence: e.Sequence, ParallelSize: n, Basis: e.Basis, RequestedNS: int64(e.Wait)}
+				receipt = sourceReceipt(e)
 				if err := emit(h, receipt); err != nil {
 					return err
 				}

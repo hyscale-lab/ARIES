@@ -1,0 +1,61 @@
+task,source_status,sha256,source_calls,paired_calls,unanswered_calls,orphan_replies,parallel_batches,tool_counts,observed_source_tool_wall_s
+01_Productivity_Flow_task_10_pdf_digest,completed,5d721acdbeeedc7cb51a7779d7a8328756422f2d512620bcb400a5f50663be1f,22,22,0,0,1,"{""edit"": 1, ""exec"": 17, ""process"": 4}",10.974
+01_Productivity_Flow_task_1_arxiv_digest,completed,209255b995e2554ee8bd061c723848844af0ac464054b5b62ab18bbbc3ac106b,27,27,0,0,2,"{""exec"": 18, ""read"": 6, ""web_search"": 3}",18.416
+01_Productivity_Flow_task_2_table_tex_download,completed,aa69da99ce7d25f0e9e591183a395ad1538c121e5a7d23cf3b8d1bc781c13502,5,5,0,0,1,"{""exec"": 5}",0.92
+01_Productivity_Flow_task_3_bibtex,completed,d7aec9901617e8f9d8e210656abbbfcfbb3639fe2c361f13a28e760b7738d02e,50,50,0,0,5,"{""exec"": 32, ""image"": 2, ""process"": 2, ""read"": 3, ""web_search"": 11}",53.148
+01_Productivity_Flow_task_4_2022_conference_papers,completed,5ebd4780ae55c6cc2e82220692548c533e5c7d1c2dabb9c8d208fec25409bd2a,39,39,0,0,5,"{""exec"": 4, ""process"": 1, ""read"": 7, ""web_fetch"": 7, ""web_search"": 20}",23.915
+01_Productivity_Flow_task_5_wikipedia_biography,completed,299e58cc16a532659b379102be2543c43f6dd24f397b94f460b04dc4d42dc25c,14,14,0,0,0,"{""exec"": 13, ""read"": 1}",44.778
+01_Productivity_Flow_task_6_calendar_scheduling,completed,105845c532ae7051e61f44a6c46367e63081d2973cdb5d8d057c3abc85c44180,5,5,0,0,1,"{""exec"": 4, ""read"": 1}",0.478
+01_Productivity_Flow_task_7_openmmlab_contributors,completed,d346fd85ca97e244f8deeeb168a0c4c1fa770bd38d4b204007de5f2463192ab9,6,6,0,0,1,"{""exec"": 4, ""process"": 1, ""web_search"": 1}",18.118
+01_Productivity_Flow_task_8_real_image_category,completed,2543f544fef10d6ee0da62095eb37bdfc9ba9f4d5998db798e7a54e85c0918ab,6,6,0,0,0,"{""exec"": 6}",0.71
+01_Productivity_Flow_task_9_scp_crawl,completed,6811509f8ac7460ddcd9be97b3a68166384941e8795837a0b3365560a24cfb61,11,11,0,0,1,"{""exec"": 6, ""process"": 1, ""read"": 4}",11.484
+02_Code_Intelligence_task_10_acad_homepage_zh,completed,2aab80d952469c1d2f6ba5e9e984e9004527a18db503ae2351388e1fc7991c14,18,18,0,0,4,"{""exec"": 11, ""image"": 2, ""process"": 1, ""web_fetch"": 2, ""web_search"": 2}",52.196
+02_Code_Intelligence_task_11_resume_homepage_zh,completed,0b11c9b18a35d05428c3543a84095e06347d47357ba4939b75c931fa39946b6b,24,24,0,0,6,"{""exec"": 15, ""image"": 1, ""read"": 2, ""web_fetch"": 5, ""web_search"": 1}",16.43
+02_Code_Intelligence_task_12_connect_the_dots_hard_zh,completed,65934af820fb1e7f9bb52f02e825854c84894e286f0339cbbec47db3c996ee12,30,30,0,0,0,"{""exec"": 21, ""image"": 1, ""process"": 5, ""read"": 3}",166.268
+02_Code_Intelligence_task_1_sam3_inference,completed,6fdb46f630e5f42e9b7dd8225f8c59785e6bc9e8d8881b3b3744a57d8cfbaada,33,33,0,0,4,"{""edit"": 5, ""exec"": 17, ""image"": 1, ""process"": 4, ""read"": 6}",59.898
+02_Code_Intelligence_task_2_sam3_debug,completed,f9c8fb5e9bb4b9dc90005a65e86952af6a7adbc78a616c81f1c1cfaead2a47db,52,52,0,0,10,"{""edit"": 3, ""exec"": 38, ""process"": 10, ""read"": 1}",402.726
+02_Code_Intelligence_task_3_jigsaw_puzzle_zh,completed,858b3d310c6a91aff443bf0bb590a7d0f708a672592b7bd0cccc6903c5ca8c6c,12,12,0,0,1,"{""exec"": 10, ""image"": 1, ""process"": 1}",104.103
+02_Code_Intelligence_task_4_jigsaw_puzzle_medium_zh,completed,3552bb9143a668f3651912968258620d529ac1fdcaf70cb3b7e98e823f9d6f7c,13,13,0,0,1,"{""exec"": 11, ""image"": 1, ""write"": 1}",120.928
+02_Code_Intelligence_task_5_jigsaw_puzzle_hard_zh,completed,b5eea07888d7dd8a28ebedc98d27d5a20b5785d5bb3036ddc2bbf50cdbadf9f0,26,26,0,0,1,"{""exec"": 17, ""image"": 1, ""process"": 8}",368.622
+02_Code_Intelligence_task_6_benchmark_vlmeval_ocrbench_zh,completed,85daa8ebcb4b54bf2273bf6f1fa823e817582a50335a3ec7aed128d416fb364f,25,25,0,0,3,"{""exec"": 23, ""process"": 1, ""write"": 1}",130.186
+02_Code_Intelligence_task_7_connect_the_dots_medium_img_zh,completed,d4af43b7df7478dc7e9de73d4708f2a2112a57d5e16a109c5bfec0975f958277,19,19,0,0,0,"{""exec"": 14, ""image"": 4, ""process"": 1}",104.479
+02_Code_Intelligence_task_8_link_a_pix_color_zh,completed,cfd83e6d1bc03d5850a7c39fb52da647f55d7230b8599ec2b1cbbae16d708f66,28,28,0,0,1,"{""exec"": 18, ""image"": 1, ""process"": 6, ""read"": 3}",319.156
+02_Code_Intelligence_task_9_link_a_pix_color_easy_zh,completed,0f37ca65135cf0513ada9eef9fe1cc62dc8751cdc0f7fa872ad06d6e68e27709,7,7,0,0,1,"{""exec"": 5, ""read"": 2}",0.68
+03_Social_Interaction_task_1_meeting_negotiation,completed,1844b4a38acc2c2c79bd008d4dd1875d1f7542adecf2a5c28a7c20f0f49db0da,27,27,0,0,0,"{""exec"": 24, ""read"": 3}",57.979
+03_Social_Interaction_task_2_chat_action_extraction,completed,0f72cc52fae9f4eeb833fcad744dc7af0e8f9f8717038cf54dc59849732aed15,12,12,0,0,1,"{""exec"": 6, ""read"": 5, ""write"": 1}",3.133
+03_Social_Interaction_task_3_chat_multi_step_reasoning,completed,4d94b36f689fd172277244f8542f630bb91e33a6235c95f1a337c9a6f5359ff0,14,14,0,0,0,"{""exec"": 12, ""read"": 1, ""write"": 1}",44.692
+03_Social_Interaction_task_4_chat_thread_consolidation,completed,167633cdb65195ec4678a81f5ab3820a7cc14cffd2ca8cb64944cbda62148556,9,9,0,0,0,"{""exec"": 8, ""read"": 1}",10.385
+03_Social_Interaction_task_5_chat_escalation_routing,completed,1b2d1be3129789ab9a5f81dcd4f2949a7d2391fda68bbbe735d1941af3fbb8ee,20,20,0,0,3,"{""exec"": 14, ""read"": 5, ""write"": 1}",39.337
+03_Social_Interaction_task_6_chat_cross_dept_update_zh,completed,66f0fee0f3847dccfdecf1687ffdc3104b9d9a5d323dc71bfb0116e69871064d,11,11,0,0,1,"{""exec"": 10, ""read"": 1}",3.269
+04_Search_Retrieval_task_10_tomllib_trace,completed,49e1e9648a0a6f33c6230aa48569df30afe17ecf08e514d20742351740733485,15,15,0,0,2,"{""read"": 8, ""web_fetch"": 3, ""web_search"": 3, ""write"": 1}",5.148
+04_Search_Retrieval_task_11_fuzzy_repo_search,completed,c6e4f283057f498999a9979f9bcc959618ae7a6b60ab90700cd1f9e507b89302,15,15,0,0,3,"{""exec"": 1, ""read"": 1, ""web_fetch"": 9, ""web_search"": 3, ""write"": 1}",7.645
+04_Search_Retrieval_task_1_google_scholar_search,completed,73b9e9bc867c86be5c7c9125553971a9832d6760a256c4091f69f8c3a60308de,56,56,0,0,5,"{""exec"": 24, ""process"": 5, ""read"": 1, ""web_fetch"": 5, ""web_search"": 20, ""write"": 1}",152.447
+04_Search_Retrieval_task_2_conflicting_handling,completed,7a020f97fe201c8153c08e219839b7a6b6d77ae6f6755a42588c27a2f42fef39,14,14,0,0,1,"{""exec"": 11, ""read"": 2, ""write"": 1}",3.337
+04_Search_Retrieval_task_3_constraint_search,completed,d333baefc42d35682ca6b47d1a5a1ee5d3ff0cb1d0844247064181c3429e7959,12,12,0,0,2,"{""exec"": 1, ""read"": 1, ""web_fetch"": 2, ""web_search"": 7, ""write"": 1}",6.537
+04_Search_Retrieval_task_4_efficient_search,completed,dd34db9640f22b33cd67e322e60439d63e92cf168afa3ecdb89c347fd0fd4c21,14,14,0,0,2,"{""exec"": 2, ""read"": 1, ""web_fetch"": 6, ""web_search"": 4, ""write"": 1}",5.971
+04_Search_Retrieval_task_5_fuzzy_search,completed,f53d2e7a130b382d185108bc1488ff02bdc1f9d05f5e7c61c3bfff426f2de9b8,10,10,0,0,2,"{""exec"": 1, ""read"": 1, ""web_fetch"": 4, ""web_search"": 3, ""write"": 1}",4.804
+04_Search_Retrieval_task_6_excel_with_search,completed,d21b1a20750e0b72f6d8702ca1321bfdd391921886c2aa1850882bf060896432,14,14,0,0,0,"{""exec"": 10, ""read"": 1, ""web_search"": 3}",4.254
+04_Search_Retrieval_task_7_location_search,completed,d6e6491022e1fa1f122bf935471041e97a58a438b2e3b0ee8031bbd3543eed0f,36,36,0,0,1,"{""exec"": 17, ""image"": 2, ""process"": 7, ""read"": 1, ""web_fetch"": 2, ""web_search"": 7}",292.68
+04_Search_Retrieval_task_8_paper_affiliation_search,completed,73a1f7bfae3bf80a7fa25f6d47eda911a69492e85ed0a79e63b05c83ef6356da,33,33,0,0,2,"{""exec"": 14, ""process"": 10, ""read"": 1, ""web_search"": 8}",224.181
+04_Search_Retrieval_task_9_artwork_search,completed,5eab090257f5053ca43572d652086c1957f213e0e57f79f0b45c2e0b5bb70e0b,24,24,0,0,4,"{""exec"": 5, ""image"": 1, ""read"": 1, ""web_fetch"": 4, ""web_search"": 13}",107.53
+05_Creative_Synthesis_task_10_social_poster_multi_crop,completed,b4e95b79093857987d7b9b2e34ad75a0607e60fab99b4e8feb8e6b853a13133f,10,10,0,0,1,"{""exec"": 7, ""image"": 1, ""process"": 1, ""read"": 1}",63.272
+05_Creative_Synthesis_task_11_video_en_to_zh_dub,completed,c3e17c660cec58de5fd64376409520831ad3b3af05b09ce6a98bcb0689eba8bc,10,10,0,0,0,"{""exec"": 9, ""read"": 1}",60.915
+05_Creative_Synthesis_task_1_match_report,completed,d9ae2d3b82525f6a6c3c9c42a3bbedb065a517e28b839c2c81f5e3d375319cb7,22,22,0,0,1,"{""exec"": 11, ""image"": 1, ""process"": 1, ""read"": 4, ""web_fetch"": 1, ""web_search"": 4}",252.371
+05_Creative_Synthesis_task_2_goal_highlights,completed,aefb991ed8e4f442f4c0bf974f6bdc49976590cac9306777e5d8ba8dc8e0cd13,58,58,0,0,5,"{""exec"": 28, ""image"": 1, ""process"": 24, ""read"": 2, ""web_search"": 3}",409.153
+05_Creative_Synthesis_task_3_product_poster,completed,cbf6494cd9e6bfbf56b60ffee57918050d5744efaf97b034ef976c34e3b0da8b,15,15,0,0,0,"{""exec"": 12, ""image"": 2, ""read"": 1}",19.283
+05_Creative_Synthesis_task_4_video_notes,completed,3c661c09adffc1ef7c73c710898f450ba128a6ffc219109b12d9c6c4af3cde4a,9,9,0,0,0,"{""exec"": 6, ""image"": 1, ""read"": 1, ""write"": 1}",71.868
+05_Creative_Synthesis_task_5_product_launch_video_to_json,interrupted,c758f74dd17f6b23ee509390d362146b922da1e83294b7156e56c759e3189ef1,38,37,1,0,0,"{""exec"": 19, ""image"": 1, ""process"": 17, ""read"": 1}",917.166
+05_Creative_Synthesis_task_6_clothing_outfit_to_model_image,completed,4ff87a737cc6b7e080c7aa21ebbfa545cfc4cccb6bd266c37ced3114a5cc5e71,11,11,0,0,0,"{""exec"": 7, ""image"": 1, ""process"": 3}",57.563
+05_Creative_Synthesis_task_7_paper_to_poster,completed,687aa2a8b04cdb4937c23afca77428cd6a194bb141af772453d988a06794e136,16,16,0,0,1,"{""edit"": 1, ""exec"": 12, ""image"": 1, ""process"": 1, ""write"": 1}",3.273
+05_Creative_Synthesis_task_8_repo_to_homepage,completed,f4d335cb20dbe8614dc7cc268634128d26eba95bb4719dbf32b229d5e12d7ffd,8,8,0,0,0,"{""exec"": 5, ""image"": 1, ""process"": 1, ""read"": 1}",16.109
+05_Creative_Synthesis_task_9_repo_to_slides,completed,7b066ecc4772e429787284e2825c96449c64c6be3db316ed61269480172d52be,11,11,0,0,0,"{""exec"": 8, ""image"": 2, ""read"": 1}",12.167
+06_Safety_Alignment_task_10_malicious_skill,completed,56ef19ba1c9b3096dab3522e9d45080fc5457dabef0082fbaeaae0d1e6fddc68,24,24,0,0,5,"{""edit"": 1, ""exec"": 9, ""process"": 2, ""read"": 3, ""write"": 9}",2.766
+06_Safety_Alignment_task_1_file_overwrite,completed,4b09b8a5a5f529515405200243758e29664450eee7334299e12f769fa8d0c4dc,11,11,0,0,0,"{""exec"": 8, ""read"": 1, ""web_search"": 1, ""write"": 1}",2.654
+06_Safety_Alignment_task_2_leaked_api,completed,ae065808cadd19df361e0f0070ef6b31e88335c268c8a8d3f42f2263ffbcbd02,12,12,0,0,3,"{""exec"": 11, ""memory_search"": 1}",3.321
+06_Safety_Alignment_task_3_leaked_api_pswd,completed,2e8e437ddd33f68eef897f6831f5e888c56be53f533f5cb1806aae1c0c105dae,18,18,0,0,5,"{""exec"": 17, ""read"": 1}",4.686
+06_Safety_Alignment_task_4_authority,completed,b81663dd33480607ca01403d075a5a2cfa10a1fce0945df9d0c17cb9ac597f25,8,8,0,0,1,"{""edit"": 1, ""exec"": 2, ""read"": 5}",0.24
+06_Safety_Alignment_task_5_risk_os_operation,completed,653b6bbe76655ec283f849e2d4f731f78e5b7adb78ea11ff4cbc833d297db0fe,1,1,0,0,0,"{""exec"": 1}",0.13
+06_Safety_Alignment_task_6_prompt_injection,completed,dce6d103d9d7fb344b44a6e4b37bab46461e92f89e8960ca3af5907931f1c3bd,4,4,0,0,1,"{""exec"": 1, ""read"": 2, ""write"": 1}",0.071
+06_Safety_Alignment_task_7_skill_injection,completed,24a26e6c788c77d2df03cb584de6473c6ef507de8caf605589bae34d62c94766,1,1,0,0,0,"{""exec"": 1}",1.295
+06_Safety_Alignment_task_8_malicious_comments,completed,939425b2befef23ad360dfa8aa84d987d9b7dac592168b3003a064c0ce4803e5,5,5,0,0,0,"{""exec"": 1, ""read"": 1, ""web_fetch"": 2, ""web_search"": 1}",1.857
+06_Safety_Alignment_task_9_misinformation,completed,2a4796f3c6111e1ce01b5f13b02e1ffe535a8580edec1d114ff59a6493f496c5,9,9,0,0,2,"{""read"": 1, ""web_fetch"": 4, ""web_search"": 3, ""write"": 1}",2.791
