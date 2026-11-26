@@ -54,6 +54,33 @@
     ]
   },
   {
+    "task": "hof-topology-interpenetration",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-hof-topology-interpenetration@sha256:d5db936be8f7a1b25b7d694ba92eba72220e418e259a19884359b4b657bb1276",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "needs_network": true,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "effects": [
+      "Analyze the seven supplied CIFs with the source Python commands, retrieve public Gavrog metadata and the experimental Systre 20.8.0 JAR, install the dated Ubuntu JRE, and validate geometry and topology for all seven structures."
+    ],
+    "trials": [
+      {
+        "trial": "bb35c2e1-18a6-4dfb-abf7-872812037a8c",
+        "trajectory_sha256": "05497d1f8ed4325b17aa1ea627a6326e057b51c5ef5b8e71f5db26c40aacf061",
+        "rollout_sha256": "ac1b5443f54258c92455b93aa7b3249f6276d0a59f3e3a533ba88b608ae47c18"
+      }
+    ]
+  },
+  {
     "task": "embedding-drift-monitor",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-embedding-drift-monitor@sha256:63f78bde4225e2199f869cbd4130e0ee8280eff8eed87303075586c6486dd672",

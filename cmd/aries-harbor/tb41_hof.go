@@ -9,6 +9,7 @@ import (
 
 const hofTopologyTask = "hof-topology-interpenetration"
 const hofSystreTrial = "27c84b6a-af43-4332-9ba4-0f70ab1e160d"
+const hofExperimentalTrial = "bb35c2e1-18a6-4dfb-abf7-872812037a8c"
 const hofTopologyOfflineTrial = "aabc93fe-c1d8-4e28-af4b-e4e9bcee0540"
 
 // The pinned wheel set is a dated reconstruction. It preserves in-session
@@ -50,10 +51,10 @@ readlink "$alias_dir/apply_patch"
 if command -v apply_patch; then exit 1; fi`,
 }
 
-func stageHOFWheels(ctx context.Context, m *vhive.Manager, id, archive string) error {
+func stageHOFWheels(ctx context.Context, m *vhive.Manager, id, archive, digest string) error {
 	const wheelDir = "/opt/zb-hof"
 	if _, err := checked(ctx, m, id, core.Command{Path: "/usr/bin/install", Args: []string{"-d", wheelDir}}); err != nil {
 		return err
 	}
-	return uploadPinned(ctx, m, id, archive, hofTopologyOfflineSetup.packagesSHA, wheelDir)
+	return uploadPinned(ctx, m, id, archive, digest, wheelDir)
 }
