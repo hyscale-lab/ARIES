@@ -344,7 +344,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		return errors.Join(err, logErr)
 	}
 	imageHelperSHA := "b06faaf4f96c04e41d6808ee8e38317ea1fd19c68b20693b2045c8fe7e712bc9"
-	if r.Task == "music-harmony" || r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
+	if r.Task == claimsTask || r.Task == "music-harmony" || r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
 		imageHelperSHA = "470c750e1af208d646f53c77a5334c33224a107693e2d02e83df124e50e7cde5"
 	}
 	for _, helper := range []struct{ name, path, expected string }{
