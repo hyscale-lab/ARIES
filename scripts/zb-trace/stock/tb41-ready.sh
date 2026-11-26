@@ -13,6 +13,13 @@ upload_archive() {
     guest tar -xzf /tmp/tb41-fixture.tar.gz -C "$target"
     guest rm /tmp/tb41-fixture.tar.gz
 }
+helper=$(jq -r '.image_helper_sha256 // ""' "$meta")
+if [[ -n "$helper" ]]; then
+    : "${TB41_IMAGE_HELPER:?}"
+    echo "$helper  $TB41_IMAGE_HELPER" | sha256sum -c -
+    "$AENV_CLI" upload "$sandbox" "$TB41_IMAGE_HELPER" /workload/rootfs/usr/local/bin/aries-harbor-image
+    container chmod 755 /usr/local/bin/aries-harbor-image
+fi
 packages=$(jq -r .packages_sha256 "$meta")
 if [[ -n "$packages" ]]; then
     : "${TB41_PACKAGE_ARCHIVE:?}"

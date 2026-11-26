@@ -44,16 +44,23 @@ var selectedTrials = map[string]string{
 	"payments-pipeline-fix":         "4df3e44e-0549-4a45-ac27-619c8b3d12f9",
 }
 
-func recording(atif, rollout, calendar string) (*harbor.Recording, error) {
-	if calendar != "" && atif == "" && rollout == "" {
+func recording(atif, rollout, calendar, wildclaw string) (*harbor.Recording, error) {
+	if (calendar != "") != (wildclaw != "") && atif == "" && rollout == "" {
+		if calendar == "" {
+			data, err := os.ReadFile(wildclaw)
+			if err != nil {
+				return nil, err
+			}
+			return harbor.LoadWildClawLive(data)
+		}
 		data, err := os.ReadFile(calendar)
 		if err != nil {
 			return nil, err
 		}
 		return harbor.LoadWildClawCalendar(data)
 	}
-	if atif == "" || rollout == "" || calendar != "" {
-		return nil, errors.New("specify either -atif and -rollout, or -calendar")
+	if atif == "" || rollout == "" || calendar != "" || wildclaw != "" {
+		return nil, errors.New("specify -atif and -rollout, -calendar, or -wildclaw")
 	}
 	a, err := os.ReadFile(atif)
 	if err != nil {
@@ -98,7 +105,7 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 				return err
 			}
 		}
-		if g.calendar && c.Operation == "Exec" && c.YieldTime < codexGrace {
+		if g.openClaw && (c.Operation == "Exec" || c.Operation == "StartProcess") && c.YieldTime < codexGrace {
 			return fmt.Errorf("unsupported OpenClaw yield %s for %s", c.YieldTime, c.ToolCallID)
 		}
 	}
@@ -145,7 +152,7 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 		RelaxedMeasuredStatus: true,
 		FinishObservedProcess: sessions.PollObservedProcess,
 		Exec: func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
-			if c.Operation == "ReadFile" {
+			if c.Operation == "ReadFile" || c.Operation == "WriteFile" || c.Operation == "EditFile" || c.Operation == "ApplyPatch" || c.Operation == "ViewImage" {
 				var stdout, stderr bytes.Buffer
 				ctx, timings := core.WithCommandTimings(ctx)
 				result, err := g.stream(ctx, c, &stdout, &stderr)
@@ -153,7 +160,7 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 				result.Timing, result.Stdout, result.Stderr = &t, stdout.String(), stderr.String()
 				return result, err
 			}
-			if g.calendar && c.Operation == "Exec" {
+			if g.openClaw && (c.Operation == "Exec" || c.Operation == "StartProcess") {
 				c.YieldTime -= codexGrace
 			}
 			return sessions.ObserveRelaxed(ctx, c)
@@ -174,6 +181,7 @@ func command(ctx context.Context) error {
 	atif := flag.String("atif", "", "selected TB 4.1 ATIF trajectory")
 	rollout := flag.String("rollout", "", "selected TB 4.1 Codex rollout")
 	calendar := flag.String("calendar", "", "reviewed Sol Calendar JSONL")
+	wildclaw := flag.String("wildclaw", "", "reviewed WildClawBench live replay JSONL")
 	flag.Parse()
 	u, err := url.Parse(g.url)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -203,11 +211,15 @@ func command(ctx context.Context) error {
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	g.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	g.token = os.Getenv("ENVD_ACCESS_TOKEN")
-	r, err := recording(*atif, *rollout, *calendar)
+	r, err := recording(*atif, *rollout, *calendar, *wildclaw)
 	if err != nil {
 		return err
 	}
-	g.calendar = r.OpenClawTrace != nil
+	g.openClaw = r.OpenClawTrace != nil
+	switch r.Task {
+	case "01_Productivity_Flow_task_8_real_image_category", "02_Code_Intelligence_task_9_link_a_pix_color_easy_zh", "01_Productivity_Flow_task_10_pdf_digest", "04_Search_Retrieval_task_2_conflicting_handling":
+		g.shell = "sh" // The recorded shell rejects pipefail and identifies itself as sh.
+	}
 	g.roy = r.Task == "roy-polymorph-cn"
 	return replayGuest(ctx, g, r, os.Stdout)
 }

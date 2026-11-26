@@ -36,6 +36,7 @@ type Hooks struct {
 }
 
 type Receipt struct {
+	SourceHandle         string              `json:"source_handle,omitempty"`
 	SourcePlayback       bool                `json:"source_playback,omitempty"`
 	SourceTraceStatus    string              `json:"source_trace_status,omitempty"`
 	SourceTime           time.Time           `json:"source_time,omitzero"`
@@ -349,6 +350,7 @@ func (h Hooks) dispatchReceipt(receipt Receipt, phase string) error {
 
 func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	receipt.Operation = call.Operation
+	receipt.SourceHandle = call.SourceHandle
 	receipt.PipeInterrupt = call.PipeInterrupt
 	if call.SessionID != 0 {
 		receipt.SessionID = call.SessionID
@@ -360,10 +362,15 @@ func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	if call.Operation == "ViewImage" {
 		receipt.StatusBasis = "recorded_high_detail_image_attachment"
 	}
+	if call.ResponseCode == "command_not_found" {
+		receipt.StatusBasis = "source_command_not_found_error_compared_with_native_shell_status_127"
+	}
 	if call.Operation == VerifyPatch {
 		receipt.StatusBasis = "read_only_patch_verification"
 	}
-	if call.Operation == "ReadFile" {
+	if call.ResponseCode == "ENOENT" {
+		receipt.StatusBasis = "source_missing_file_compared_with_native_access_error"
+	} else if call.Operation == "ReadFile" {
 		receipt.StatusBasis = "recorded_successful_file_read_without_process_exit"
 	}
 

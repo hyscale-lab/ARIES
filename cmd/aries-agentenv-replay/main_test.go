@@ -100,7 +100,7 @@ func TestTransportErrorsNeverBecomeExits(t *testing.T) {
 
 func TestContainerWorkdirAndRead(t *testing.T) {
 	for _, tc := range []struct{ runtime, wdirFlag string }{{"docker", "-w"}, {"runc", "--cwd"}} {
-		g := guest{calendar: true, container: "work", runtime: tc.runtime}
+		g := guest{openClaw: true, container: "work", runtime: tc.runtime}
 		p, err := g.process(replay.Call{Operation: "Exec", Workdir: "/tmp_workspace", Script: "git status"})
 		if err != nil || p.Command != tc.runtime || !reflect.DeepEqual(p.Args, []string{"exec", tc.wdirFlag, "/tmp_workspace", "work", "/bin/bash", "-c", "git status"}) || p.CWD != "" {
 			t.Fatalf("%+v, %v", p, err)
@@ -117,6 +117,15 @@ func TestUnreviewedSourceBeforeDispatch(t *testing.T) {
 	r := &harbor.Recording{Plan: replay.Plan{Calls: []replay.Call{{Operation: "Unsupported", ToolCallID: "example"}}}}
 	if err := replayGuest(context.Background(), guest{}, r, &out); err == nil || !strings.Contains(err.Error(), "example") || out.Len() != 0 {
 		t.Fatalf("output %q error %v", out.String(), err)
+	}
+}
+
+func TestImageCategoryShellPreservesRecordedFailure(t *testing.T) {
+	call := replay.Call{Operation: "Exec", Script: "set -euo pipefail", Workdir: "/root"}
+	g := guest{openClaw: true, shell: "sh", container: "work", runtime: "runc"}
+	p, err := g.process(call)
+	if err != nil || !reflect.DeepEqual(p.Args, []string{"exec", "--cwd", "/root", "work", "sh", "-c", call.Script}) {
+		t.Fatalf("process=%+v err=%v", p, err)
 	}
 }
 
@@ -137,5 +146,13 @@ func TestSelectedCodexShellEnvironment(t *testing.T) {
 		if err != nil || p.Args[0] != "-lc" || strings.Contains(p.Args[1], "/opt/venv/bin") != roy {
 			t.Fatalf("roy=%t: process=%+v err=%v", roy, p, err)
 		}
+	}
+}
+
+func TestSelectedPatchExecutesOriginalBytes(t *testing.T) {
+	call := replay.Call{Operation: "ApplyPatch", Workdir: "/app", Body: []byte("*** Begin Patch\n*** End Patch\n")}
+	p, err := (guest{container: "w", runtime: "runc"}).process(call)
+	if err != nil || p.Command != "runc" || p.Args[2] != "/app" || p.Args[len(p.Args)-2] != "--codex-run-as-apply-patch" || p.Args[len(p.Args)-1] != string(call.Body) {
+		t.Fatalf("process=%+v err=%v", p, err)
 	}
 }

@@ -57,6 +57,8 @@ For programmatic use, `harbor.ParseWildClawSource` exposes request arguments and
 
 For a reviewed live plan, `go run ./cmd/wildclaw-docker session.jsonl DISPOSABLE_CONTAINER` runs the recorded tools in a caller-prepared Docker container. Supply the matching task files and shell environment before replay.
 
+On stock AgentENV, `aries-agentenv-replay -wildclaw session.jsonl` takes a reviewed live source, along with the URL, restored sandbox ID, and workload container. The original `-calendar` option keeps its Calendar-only source check. For image categorization, the [stock arm driver](../../scripts/zb-trace/stock/image-category-arm.sh) provisions the pinned WildClaw image and image archive and uses the recorded `/bin/sh` shell. The [offline check](../../scripts/zb-trace/stock/image-category-check.py) compares the six first replies with their recorded status and output and checks the result paths and file hashes against the recording and the input archive.
+
 The optional cohort tests take `WILDCLAW_SOL_TRACE_DIR` and use the bundled inventory by default. Set `WILDCLAW_SOL_INVENTORY` to override its path. Set `WILDCLAW_CALENDAR_TRACE` for the roughly 103-second calendar clock test.
 
 ## Terminal-Bench 4.1 replay pilot

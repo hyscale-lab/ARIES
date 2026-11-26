@@ -69,9 +69,11 @@ def run(a):
     subprocess.run([cli,'exec',sandbox,'chmod','755','/usr/local/bin/zb-guest'],env=cli_env,check=True)
     here = Path(__file__).resolve().parent
     env = dict(os.environ, ENVD_ACCESS_TOKEN=detail['envdAccessToken'])
-    cmd = [str(b/'aries-agentenv-replay'),'-url',url,'-sandbox',sandbox,'-runtime','runc','-container','zb-workload']
+    cmd = [os.environ.get('STOCK_REPLAY_BINARY', str(b/'aries-agentenv-replay')),'-url',url,'-sandbox',sandbox,'-runtime','runc','-container','zb-workload']
     if a.calendar:
         cmd += ['-calendar',str(a.calendar)]
+    elif a.wildclaw:
+        cmd += ['-wildclaw',str(a.wildclaw)]
     else:
         source = a.tb41_dir or b
         cmd += ['-atif',str(source/'trajectory'),'-rollout',str(source/'rollout')]
@@ -128,13 +130,15 @@ def run(a):
     if a.tb41_dir:
         meta=json.loads((a.tb41_dir/'metadata.json').read_text())
         cwd_args=['--cwd',meta['workdir']]
-        files=[meta['output']]
+        hash_command=['sha256sum',meta['output']]
     elif a.calendar:
-        files=['/tmp_workspace/results/'+k for k in ('decision_log.md','scheduled.ics','unscheduled.json')]
+        hash_command=['sha256sum',*('/tmp_workspace/results/'+k for k in ('decision_log.md','scheduled.ics','unscheduled.json'))]
+    elif a.wildclaw:
+        hash_command=['find','/tmp_workspace/results','-type','f','-exec','sha256sum','{}','+']
     else:
-        files=['/results/TB3_Conf_Answers.csv']
+        hash_command=['sha256sum','/results/TB3_Conf_Answers.csv']
     with (a.output/'output.sha256').open('x') as f:
-        subprocess.run([cli,'exec',sandbox,'runc','exec',*cwd_args,'zb-workload','sha256sum',*files],env=cli_env,stdout=f,check=True)
+        subprocess.run([cli,'exec',sandbox,'runc','exec',*cwd_args,'zb-workload',*hash_command],env=cli_env,stdout=f,check=True)
 
 
 if __name__ == '__main__':
@@ -145,6 +149,7 @@ if __name__ == '__main__':
     parser.add_argument('--service',default='roy')
     sources=parser.add_mutually_exclusive_group()
     sources.add_argument('--calendar',type=Path)
+    sources.add_argument('--wildclaw',type=Path)
     sources.add_argument('--tb41-dir',type=Path)
     parser.add_argument('--deep',action='store_true')
     parser.add_argument('--checkpoint',action='store_true')

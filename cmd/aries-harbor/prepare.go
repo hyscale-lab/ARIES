@@ -472,14 +472,10 @@ chmod 0755 /usr/local/bin/mktemp
 sha256sum /usr/local/bin/mktemp
 printf '%s\n' 'SOURCE_TEMPLATE -> SOURCE_DIR'`
 
-func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools bool) error {
+func taskOutputChecks(r *harbor.Recording, grpcTools bool) (string, error) {
 	task := taskSetups[r.Task]
 	if r.Task == nextjsTask {
 		task, _ = nextjsSourceSetup(r.Trial)
-	}
-	begin, err := harbor.Clock()
-	if err != nil {
-		return err
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
 	if r.Trial == pretrainShardLiveTrial {
@@ -607,14 +603,14 @@ sha256sum drift_monitor/*.py`
 	if r.Task == sparqlTask {
 		check, err := sparqlOutputCheck(r.Trial)
 		if err != nil {
-			return err
+			return "", err
 		}
 		cmd += check
 	}
 	if r.Task == torchTask {
 		check, err := torchOutputCheck(r.Trial)
 		if err != nil {
-			return err
+			return "", err
 		}
 		cmd += check
 	}
@@ -624,7 +620,7 @@ sha256sum drift_monitor/*.py`
 	if r.Task == claimsTask {
 		check, err := claimsFinalCheck(r.Trial)
 		if err != nil {
-			return err
+			return "", err
 		}
 		cmd += check
 	}
@@ -640,6 +636,18 @@ records = json.loads(Path('/tmp/aries-reviewed-pip-install.json').read_text())['
 for item in records:
     print(json.dumps({'name':item['metadata']['name'],'version':item['metadata']['version'],'download':item['download_info']},sort_keys=True))
 PYREPORT`
+	}
+	return cmd, nil
+}
+
+func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools bool) error {
+	begin, err := harbor.Clock()
+	if err != nil {
+		return err
+	}
+	cmd, err := taskOutputChecks(r, grpcTools)
+	if err != nil {
+		return err
 	}
 	out, err := checked(ctx, m, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", cmd}, Dir: r.Workdir})
 	end, clockErr := harbor.Clock()

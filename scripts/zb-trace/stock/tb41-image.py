@@ -3,12 +3,12 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
+from pathlib import Path
 
 
 def import_image(archive, fixture, regctl, registry):
@@ -46,6 +46,11 @@ def import_image(archive, fixture, regctl, registry):
         else:
             raise ValueError(f'missing selected manifest {digest}')
         manifest = json.loads(copy_blob(desc).read_text())
+        if 'manifests' in manifest:
+            desc, = [child for child in manifest['manifests'] if child.get('platform',{}).get('os')=='linux'
+                     and child['platform'].get('architecture')=='amd64']
+            manifest = json.loads(copy_blob(desc).read_bytes())
+        platform_digest = desc['digest']
         config = json.loads(copy_blob(manifest['config']).read_text())
         if (config['os'],config['architecture']) != ('linux','amd64'):
             raise ValueError('reviewed image requires linux/amd64')
@@ -57,13 +62,14 @@ def import_image(archive, fixture, regctl, registry):
         target = f"{registry}/library/{metadata['task']}:reviewed"
         subprocess.run([regctl,'image','copy',f'ocidir://{layout}:reviewed',target],check=True)
         resolved = subprocess.check_output([regctl,'image','digest',target],text=True).strip()
-        if resolved != digest:
-            raise ValueError(f'registry digest {resolved} differs from {digest}')
+        if resolved != platform_digest:
+            raise ValueError(f'registry digest {resolved} differs from {platform_digest}')
         env = config['config']['Env']
         if not any(entry.startswith('HOME=') for entry in env):
             env.append('HOME=/root')
         (fixture / 'image-env.json').write_text(json.dumps(env)+'\n')
-        print(f"{target} {resolved}")
+        (fixture/'image-platform.digest').write_text(resolved+'\n')
+        print(f"{target} source={digest} platform={resolved}")
 
 
 if __name__ == '__main__':

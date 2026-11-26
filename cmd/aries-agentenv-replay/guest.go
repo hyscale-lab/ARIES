@@ -19,7 +19,8 @@ import (
 
 type guest struct {
 	url, sandbox, token, container, runtime string
-	calendar, roy                           bool
+	openClaw, roy                           bool
+	shell                                   string
 	client                                  *http.Client
 }
 
@@ -35,19 +36,38 @@ func (g guest) process(c replay.Call) (processConfig, error) {
 	case "Exec", "StartProcess":
 		flag := "-c"
 		script := c.Script
-		if !g.calendar && c.Login {
+		if !g.openClaw && c.Login {
 			flag = "-lc"
 		}
 		if g.roy {
 			// Match the reviewed Roy image's shell environment in aries-harbor.
 			script = `export PATH=/opt/venv/bin:/root/.local/bin:"$PATH"; ` + script
 		}
-		p = processConfig{"/bin/bash", []string{flag, script}, c.Workdir}
+		shell := g.shell
+		if shell == "" {
+			shell = "/bin/bash"
+		}
+		p = processConfig{shell, []string{flag, script}, c.Workdir}
+	case "ApplyPatch":
+		const binary = "/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+		p = processConfig{binary, []string{"--codex-run-as-apply-patch", string(c.Body)}, c.Workdir}
+	case "ViewImage":
+		p = processConfig{"/usr/local/bin/aries-harbor-image", []string{c.Path, strconv.Itoa(c.ImageWidth), strconv.Itoa(c.ImageHeight)}, ""}
+	case "WriteFile", "EditFile":
+		if !g.openClaw {
+			return p, errors.New("unexpected OpenClaw document operation")
+		}
+		p = processConfig{"node", []string{"-e", documentOperation, c.Operation, string(c.Body)}, ""}
 	case "ReadFile":
-		if !g.calendar {
+		if !g.openClaw {
 			return p, fmt.Errorf("unexpected Codex file read for %s", c.ToolCallID)
 		}
 		p = processConfig{"/bin/cat", []string{"--", c.Path}, ""}
+		if c.ResponseCode == "ENOENT" {
+			p = processConfig{"node", []string{"-e", missingFileRead, c.Path}, ""}
+		} else if c.ResponseCode == "image/png" {
+			p = processConfig{"/usr/bin/base64", []string{"-w0", "--", c.Path}, ""}
+		}
 	default:
 		return p, fmt.Errorf("unsupported guest operation %q for %s", c.Operation, c.ToolCallID)
 	}
@@ -109,7 +129,7 @@ func (g *guest) stream(ctx context.Context, c replay.Call, stdout, stderr io.Wri
 	if typ, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); typ != "application/connect+json" {
 		return result, fmt.Errorf("unexpected envd content type %q", typ)
 	}
-	if g.calendar && c.Operation == "Exec" {
+	if g.openClaw && (c.Operation == "Exec" || c.Operation == "StartProcess") {
 		stderr = stdout // OpenClaw returns aggregated output in stream order.
 	}
 	return processReply(ctx, resp.Body, stdout, stderr)

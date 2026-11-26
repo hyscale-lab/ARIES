@@ -9,14 +9,27 @@ export TB41_FIXTURE_DIR="$base/$1" XDG_CONFIG_HOME="$base/$3/xdg" AENV_CLI="$bas
 export STOCK_BASE_IMAGE=127.0.0.1:18762/library/ubuntu@sha256:9a04f13b3f80ef056361e30868593b1cfd2279fe19e4081cb93a90bf56819d6a
 task=$(jq -er .task "$TB41_FIXTURE_DIR/metadata.json")
 [[ "$1" == "$task" ]]
-image=127.0.0.1:18762/library/$task@$(jq -er .image_digest "$TB41_FIXTURE_DIR/metadata.json")
+platform=$(jq -er .image_digest "$TB41_FIXTURE_DIR/metadata.json")
+if [[ -s "$TB41_FIXTURE_DIR/image-platform.digest" ]]; then platform=$(cat "$TB41_FIXTURE_DIR/image-platform.digest"); fi
+image=127.0.0.1:18762/library/$task@$platform
 test ! -e "$2-prepared"
 test ! -e "$2-run"
+opts=(--deep)
+checkpoint=${STUDY_CHECKPOINT:-0}
+if [[ "${5:-}" == pack ]]; then checkpoint=1; fi
+if [[ "$checkpoint" == 1 ]]; then
+    export STOCK_PACK_STORE="$base/$3/home/snapshot-store/repository"
+    opts+=(--checkpoint)
+elif [[ "$checkpoint" != 0 ]] || (($# != 4)); then exit 2
+fi
 check_empty() { "$AENV_CLI" list --output json | jq -e 'length==0' >/dev/null; }
 check_empty
 cleanup() {
     local file id
-    for file in "$2-prepared/restored-id" "$2-prepared/original-id"; do
+    if [[ -s "$2-run/bindings.json" ]]; then
+        jq -r '.workload.sandbox_id // empty' "$2-run/bindings.json" >"$2-prepared/last-bound-id"
+    fi
+    for file in "$2-run/final-sandbox-id" "$2-prepared/last-bound-id" "$2-prepared/restored-id" "$2-prepared/original-id"; do
         if [[ -s "$file" ]]; then
             id=$(cat "$file")
             if "$AENV_CLI" list --output json | jq -e --arg id "$id" 'any(.[]; .sandboxID == $id)' >/dev/null; then
@@ -38,6 +51,13 @@ done)
 socket=$(tr '\0' '\n' <"/proc/${vm[0]}/cmdline" | awk 'found {print; exit} $0=="--api-sock" {found=1}')
 test -S "$socket"
 printf '%s\n' "${vm[0]}" "$socket" >"$2-prepared/vmm-binding"
-python3 -B "$base/scripts/zb-trace/stock/run-pilot.py" "$base/$2-prepared" "$base/$2-run" --service "$3" --deep --socket "$socket" --tb41-dir "$TB41_FIXTURE_DIR"
+python3 -B "$base/scripts/zb-trace/stock/run-pilot.py" "$base/$2-prepared" "$base/$2-run" --service "$3" "${opts[@]}" --socket "$socket" --tb41-dir "$TB41_FIXTURE_DIR"
+if [[ "$checkpoint" == 1 ]]; then sandbox=$(cat "$2-run/final-sandbox-id"); fi
+"$AENV_CLI" exec "$sandbox" runc exec --cwd "$(jq -er .workdir "$TB41_FIXTURE_DIR/metadata.json")" zb-workload bash -lc "$(jq -er .final_script "$TB41_FIXTURE_DIR/metadata.json")" >"$2-run/final-task-state.txt"
 read -r actual _ <"$2-run/output.sha256"
-test "$actual" = "$4"
+case "$task" in
+freecad-platform-drawing|freecad-spring-clip)
+    python3 -B "$base/scripts/zb-trace/stock/cad-check.py" "$TB41_FIXTURE_DIR" "$base/$2-run" "$AENV_CLI" "$sandbox" "$4"
+    ;;
+*) test "$actual" = "$4" ;;
+esac

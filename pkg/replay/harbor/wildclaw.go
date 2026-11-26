@@ -8,6 +8,7 @@ import (
 const (
 	wildClawCalendarDigest      = "105845c532ae7051e61f44a6c46367e63081d2973cdb5d8d057c3abc85c44180"
 	wildClawImageCategoryDigest = "2543f544fef10d6ee0da62095eb37bdfc9ba9f4d5998db798e7a54e85c0918ab"
+	wildClawPuzzleDigest        = "0f37ca65135cf0513ada9eef9fe1cc62dc8751cdc0f7fa872ad06d6e68e27709"
 	wildClawDatasetRevision     = "f2cafb4e53d0f5ae8edd2097c3b60276ecf2d04f"
 )
 

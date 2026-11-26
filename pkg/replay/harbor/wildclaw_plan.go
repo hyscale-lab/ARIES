@@ -1,6 +1,8 @@
 package harbor
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +35,7 @@ func LoadWildClawLive(trace []byte) (*Recording, error) {
 }
 
 func reviewedWildClawLive(sha string) bool {
-	return sha == wildClawCalendarDigest || sha == wildClawImageCategoryDigest
+	return sha == wildClawCalendarDigest || sha == wildClawImageCategoryDigest || sha == wildClawPuzzleDigest || sha == wildClawPDF || sha == wildClawConflicts
 }
 
 func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
@@ -56,6 +58,7 @@ func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
 		batches[batch.Request.Line] = batch
 	}
 	replies := map[int]Event{}
+	handles := map[string]int{}
 	var previous time.Time
 	for _, row := range s.Records {
 		if previous.IsZero() && row.Role != "user" {
@@ -100,7 +103,13 @@ func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
 				request.Wait, request.Basis = 0, "recorded_assistant_batch_no_subcall_spacing"
 			}
 			if !playback {
-				call, err := wildClawLiveCall(c)
+				var call replay.Call
+				var err error
+				if s.SHA256 == wildClawPDF || s.SHA256 == wildClawConflicts {
+					call, err = documentCall(c, handles)
+				} else {
+					call, err = wildClawLiveCall(c)
+				}
 				if err != nil {
 					return nil, fmt.Errorf("WildClaw source line %d, call %d: %w", row.Line, c.Sequence, err)
 				}
@@ -137,9 +146,17 @@ func wildClawLiveCall(c WildClawSourceCall) (replay.Call, error) {
 		if err := json.Unmarshal(c.Arguments, &args); err != nil {
 			return call, err
 		}
-		var content []struct{ Type, Text string }
+		var content []struct{ Type, Text, Data, MimeType string }
 		if err := json.Unmarshal(c.Reply.Content, &content); err != nil {
 			return call, err
+		}
+		if len(content) == 2 && content[0].Text == "Read image file [image/png]" && content[1].Type == "image" && content[1].MimeType == "image/png" && args.Path != "" {
+			raw, err := base64.StdEncoding.DecodeString(content[1].Data)
+			if err != nil || !bytes.HasPrefix(raw, []byte("\x89PNG\r\n\x1a\n")) {
+				return call, errors.New("invalid PNG attachment")
+			}
+			call.Operation, call.Path, call.ResponseCode, call.ResponseStdout = "ReadFile", args.Path, "image/png", []byte(content[1].Data)
+			break
 		}
 		if args.Path == "" || len(content) != 1 || content[0].Type != "text" {
 			return call, errors.New("expected a successful whole-file text read")
@@ -156,11 +173,18 @@ func wildClawLiveCall(c WildClawSourceCall) (replay.Call, error) {
 			return call, err
 		}
 		var details struct {
-			Status, Aggregated, CWD string
-			ExitCode                *int32 `json:"exitCode"`
+			Status, Aggregated, CWD, Error string
+			ExitCode                       *int32 `json:"exitCode"`
 		}
 		if err := json.Unmarshal(c.Reply.Details, &details); err != nil {
 			return call, err
+		}
+		if details.Status == "error" && details.ExitCode == nil && strings.HasSuffix(details.Error, "\n\nCommand not found") && args.Command != "" && args.Workdir != "" {
+			call.Operation, call.Script, call.Workdir = "Exec", args.Command, args.Workdir
+			call.ResponseCode, call.ExitCode = "command_not_found", 127
+			call.ResponseStdout = []byte(strings.TrimSuffix(details.Error, "\n\nCommand not found"))
+			call.YieldTime, call.Timeout = time.Duration(args.YieldMS)*time.Millisecond, time.Duration(args.Timeout)*time.Second
+			break
 		}
 		if args.Command == "" || args.Workdir == "" || details.Status != "completed" || details.ExitCode == nil || details.CWD != args.Workdir {
 			return call, errors.New("expected a completed foreground shell with its recorded working directory")
