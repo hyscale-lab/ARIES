@@ -24,7 +24,7 @@ else
 fi
 if pgrep -f "^$stack/replay/bitmap/firecracker " >/dev/null; then exit 1; fi
 if [[ "$node" == amd200 ]]; then
-    iptables -w -t mangle -L -v -n -x ZBS3HIST200
+    iptables -w -t mangle -L ZBS3HIST200 -v -n -x
     "$stack/replay/shard-history-network.sh" "$stack/replay/cni" remove
     if ip link show dev zbs3hist200 >/dev/null 2>&1; then exit 1; fi
     if systemctl is-active --quiet zb-shard-history-dns-amd200 zb-shard-history-https-amd200; then exit 1; fi
