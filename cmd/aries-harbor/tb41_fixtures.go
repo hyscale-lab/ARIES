@@ -74,7 +74,14 @@ func tb41SourceSetup(trial string, task taskSetup) taskSetup {
 		task.packagesSHA = "f2624f427abe6c6509eb55c4cedb3fe6cebbf03980eac44be71f5e19af8e4d49"
 		task.packagesField = "cad_python_pillow_archive_sha256"
 		task.initialCheck += cadPythonReady + cadPillowReady
-	case "08255123-7f37-4ac3-ad5a-ec7e9a4e3d39", "ce6044db-e5ea-430d-91e0-7272a0695992":
+	case "08255123-7f37-4ac3-ad5a-ec7e9a4e3d39":
+		task.packagesSHA = "3534cff3001530a11062e5fe27e2576b3ac19102d2cd449b26ea96f05a44d663"
+		task.packagesField = "cad_libgl_python_patch_archive_sha256"
+		task.initialCheck += cadPythonReady + cadQtReady + `
+test "$(command -v patch)" = /usr/bin/patch
+test "$(dpkg-query -W -f='${Version}' patch)" = 2.7.6-7
+patch --version | head -1`
+	case "ce6044db-e5ea-430d-91e0-7272a0695992":
 		task.packagesSHA = "0147cfc122120b0891434f43c9a81db9655cf7f4914d7704789116e54c953ba9"
 		task.packagesField = "cad_libgl_python_archive_sha256"
 		task.initialCheck += cadPythonReady + cadQtReady
