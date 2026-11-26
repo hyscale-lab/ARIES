@@ -308,8 +308,8 @@ func runGuestExec(ctx context.Context, cancel context.CancelCauseFunc, client ta
 }
 
 // guestTasksRunning checks the retained guest tasks through the guest agent.
-func (m *Manager) guestTasksRunning(ctx context.Context, request *proto.CreateVMRequest) (bool, error) {
-	id := request.VMID
+func (m *Manager) guestTasksRunning(ctx context.Context, checkpoint *checkpointState) (bool, error) {
+	id := checkpoint.Request.VMID
 	control, err := m.vmControl()
 	if err != nil {
 		return false, err
@@ -331,20 +331,20 @@ func (m *Manager) guestTasksRunning(ctx context.Context, request *proto.CreateVM
 	defer client.Close()
 	stopClose := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stopClose()
-	return guestTasksReady(ctx, taskAPI.NewTaskClient(client), request)
+	return guestTasksReady(ctx, taskAPI.NewTaskClient(client), checkpoint)
 }
 
-func guestTasksReady(ctx context.Context, guest taskAPI.TaskService, request *proto.CreateVMRequest) (bool, error) {
-	ids := []string{request.VMID}
-	if request.ContainerCount == 2 {
-		ids = append(ids, companionID(request.VMID))
+func guestTasksReady(ctx context.Context, guest taskAPI.TaskService, checkpoint *checkpointState) (bool, error) {
+	ids, err := checkpoint.taskIDs()
+	if err != nil {
+		return false, err
 	}
 	for _, taskID := range ids {
 		state, err := guest.State(ctx, &taskAPI.StateRequest{ID: taskID})
 		if err != nil {
 			return false, err
 		}
-		if state.Status != tasktypes.Status_RUNNING {
+		if state.Status != tasktypes.Status_RUNNING || (state.ID != "" || len(checkpoint.CompanionIDs) > 0) && state.ID != taskID {
 			return false, nil
 		}
 	}

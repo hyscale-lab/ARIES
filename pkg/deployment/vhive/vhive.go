@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,6 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
-	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/identifiers"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
@@ -74,6 +74,8 @@ type Options struct {
 	NativeCheckpoint bool
 	// CompanionImage runs the digest-qualified image's command as a second task in the VM.
 	CompanionImage string
+	// Companions configures named, digest-qualified companion tasks for one VM.
+	Companions []CompanionTask
 	// NativeReportingOnly requests a zero-target reporting balloon on the
 	// optimized runtime for the matched DAMON-disabled control.
 	NativeReportingOnly bool
@@ -150,6 +152,7 @@ func New(options Options) (*Manager, error) {
 	if err := validateOptions(options); err != nil {
 		return nil, err
 	}
+	options.Companions = cloneCompanionTasks(options.Companions)
 	if options.Logger == nil {
 		options.Logger = logrus.StandardLogger()
 	}
@@ -163,14 +166,8 @@ func New(options Options) (*Manager, error) {
 }
 
 func validateOptions(o Options) error {
-	if o.CompanionImage != "" {
-		if !o.NativeCheckpoint || !o.GuestTaskV3 {
-			return errors.New("a vHive companion requires native checkpoints and guest Task v3")
-		}
-		ref, err := imageReference(o.CompanionImage)
-		if _, ok := ref.(reference.Canonical); err != nil || !ok {
-			return errors.New("a vHive companion image requires a digest-qualified reference")
-		}
+	if err := validateCompanionOptions(o); err != nil {
+		return err
 	}
 	if o.NativeReportingOnly && !o.NativeCheckpoint {
 		return errors.New("native reporting control requires native checkpoints")
@@ -240,16 +237,15 @@ func (m *Manager) validateRequest(r deployment.Request) error {
 	if !identifier.MatchString(r.Name) || r.Image == "" {
 		return errors.New("vHive requires a runtime name and image")
 	}
-	if m.options.CompanionImage != "" {
-		if err := identifiers.Validate(companionID(r.Name)); err != nil {
+	for _, task := range configuredCompanions(m.options) {
+		if err := identifiers.Validate(r.Name + "-" + task.Role); err != nil {
 			return fmt.Errorf("invalid vHive companion identity: %w", err)
 		}
 	}
-	if _, ok := r.Labels[companionLabel]; ok {
-		return errors.New("vHive companion ownership labels are reserved")
-	}
-	if _, ok := r.Labels[ownerLabel]; ok {
-		return errors.New("vHive companion ownership labels are reserved")
+	for _, label := range []string{companionLabel, companionsLabel, ownerLabel} {
+		if _, ok := r.Labels[label]; ok {
+			return errors.New("vHive companion ownership labels are reserved")
+		}
 	}
 	if r.Labels["aries.managed"] != "true" || r.Labels["aries.kind"] != "task-container" || r.Labels["aries.run"] == "" || r.Labels["aries.task"] == "" {
 		return errors.New("vHive requires sandbox ownership labels")
@@ -291,8 +287,8 @@ func (m *Manager) vmRequest(r deployment.Request) *proto.CreateVMRequest {
 		// Explicit StopVM owns teardown, including partial task creation.
 		ExitAfterAllTasksDeleted: false,
 	}
-	if m.options.CompanionImage != "" {
-		request.ContainerCount = 2
+	if tasks := configuredCompanions(m.options); len(tasks) > 0 {
+		request.ContainerCount = int32(1 + len(tasks))
 	}
 	if m.options.NativeReportingOnly {
 		request.BalloonDevice = nativeReportingBalloon()
@@ -314,9 +310,14 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	if err != nil {
 		return "", err
 	}
-	var companionImage containerd.Image
-	if m.options.CompanionImage != "" {
-		companionImage, err = m.image(ctx, m.options.CompanionImage)
+	companionTasks := configuredCompanions(m.options)
+	bindings, err := companionBindings(companionTasks)
+	if err != nil {
+		return "", err
+	}
+	companionImages := make([]containerd.Image, len(bindings))
+	for i, binding := range bindings {
+		companionImages[i], err = m.image(ctx, binding.Image)
 		if err != nil {
 			return "", err
 		}
@@ -337,8 +338,14 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	labels := maps.Clone(r.Labels)
 	labels[configLabel] = string(encoded)
 	labels[stateLabel] = "reserved"
-	if companionImage != nil {
-		labels[companionLabel] = companionImage.Name()
+	if m.options.CompanionImage != "" {
+		labels[companionLabel] = bindings[0].Image
+	} else if len(bindings) > 0 {
+		value, err := json.Marshal(bindings)
+		if err != nil {
+			return "", err
+		}
+		labels[companionsLabel] = string(value)
 	}
 	container, err := m.client.NewContainer(ctx, r.Name, containerd.WithImage(image), containerd.WithContainerLabels(labels),
 		containerd.WithSnapshotter(m.options.Snapshotter), containerd.WithRuntime(runtimeName, nil))
@@ -353,12 +360,15 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	if err = m.validateStorage(ctx, r.Name, r.StorageMB); err != nil {
 		return r.Name, err
 	}
-	var companion containerd.Container
-	if companionImage != nil {
-		companion, err = m.prepareCompanion(ctx, r.Name, companionImage, labels)
+	companionContainers := make([]containerd.Container, 0, len(bindings))
+	var companionIDs []string
+	for i, binding := range bindings {
+		companion, err := m.prepareCompanion(ctx, r.Name, binding, companionTasks[i].Command, companionImages[i], labels)
 		if err != nil {
 			return r.Name, err
 		}
+		companionContainers = append(companionContainers, companion)
+		companionIDs = append(companionIDs, binding.id(r.Name))
 	}
 	control, err := m.vmControl()
 	if err != nil {
@@ -380,7 +390,7 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 			request.NetworkInterfaces = []*proto.FirecrackerNetworkInterface{iface}
 			request.NetNS = ns
 		}
-		if err = m.saveCheckpoint(r.Name, &checkpointState{Phase: "starting", Request: request}); err != nil {
+		if err = m.saveCheckpoint(r.Name, &checkpointState{Phase: "starting", Request: request, CompanionIDs: companionIDs}); err != nil {
 			return r.Name, err
 		}
 	}
@@ -399,17 +409,17 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	if err = task.Start(ctx); err != nil {
 		return r.Name, fmt.Errorf("start idle guest task: %w", err)
 	}
-	if companion != nil {
+	for _, companion := range companionContainers {
 		task, err := companion.NewTask(ctx, cio.NullIO)
 		if err != nil {
-			return r.Name, fmt.Errorf("create guest companion task: %w", err)
+			return r.Name, fmt.Errorf("create guest companion %s: %w", companion.ID(), err)
 		}
 		if err = task.Start(ctx); err != nil {
-			return r.Name, fmt.Errorf("start guest companion task: %w", err)
+			return r.Name, fmt.Errorf("start guest companion %s: %w", companion.ID(), err)
 		}
 	}
 	if m.options.IdleMode == "checkpoint" {
-		if err = m.saveCheckpoint(r.Name, &checkpointState{Phase: "running", Request: request}); err != nil {
+		if err = m.saveCheckpoint(r.Name, &checkpointState{Phase: "running", Request: request, CompanionIDs: companionIDs}); err != nil {
 			return r.Name, err
 		}
 	}
@@ -450,49 +460,12 @@ func companionSpecOptions(vmID string) []oci.SpecOpts {
 	}
 }
 
-func (m *Manager) prepareCompanion(ctx context.Context, vmID string, image containerd.Image, labels map[string]string) (containerd.Container, error) {
-	id := companionID(vmID)
-	owner := map[string]string{
-		ownerLabel: vmID, "aries.managed": "true", "aries.kind": "task-container", "aries.component": "companion",
-		"aries.run": labels["aries.run"], "aries.task": labels["aries.task"],
-	}
-	container, err := m.client.NewContainer(ctx, id, containerd.WithImage(image), containerd.WithContainerLabels(owner),
-		containerd.WithSnapshotter(m.options.Snapshotter), containerd.WithRuntime(runtimeName, nil))
-	if err != nil {
-		return nil, fmt.Errorf("reserve guest companion: %w", err)
-	}
-	if err = prepareTask(ctx, container, id, image, companionSpecOptions(vmID)); err != nil {
-		return nil, fmt.Errorf("prepare guest companion: %w", err)
-	}
-	return container, nil
-}
-
 func prepareTask(ctx context.Context, container containerd.Container, id string, image containerd.Image, spec []oci.SpecOpts) error {
 	if err := container.Update(ctx, containerd.UpdateContainerOpts(containerd.WithNewSnapshot(id, image))); err != nil {
 		return err
 	}
 	opts := append([]oci.SpecOpts{oci.WithImageConfig(image)}, spec...)
 	return container.Update(ctx, containerd.UpdateContainerOpts(containerd.WithNewSpec(opts...)))
-}
-
-func (m *Manager) ownedCompanion(ctx context.Context, main containers.Container) (containerd.Container, containers.Container, error) {
-	id := companionID(main.ID)
-	c, err := m.client.LoadContainer(ctx, id)
-	if err != nil {
-		return nil, containers.Container{}, err
-	}
-	info, err := c.Info(ctx)
-	if err != nil {
-		return nil, containers.Container{}, err
-	}
-	if info.ID != id || info.Runtime.Name != runtimeName || info.Snapshotter != m.options.Snapshotter ||
-		(info.SnapshotKey != "" && info.SnapshotKey != id) || info.Image != main.Labels[companionLabel] ||
-		info.Labels[ownerLabel] != main.ID || info.Labels["aries.managed"] != "true" ||
-		info.Labels["aries.kind"] != "task-container" || info.Labels["aries.component"] != "companion" ||
-		info.Labels["aries.run"] != main.Labels["aries.run"] || info.Labels["aries.task"] != main.Labels["aries.task"] {
-		return nil, containers.Container{}, errors.New("vHive companion ownership differs")
-	}
-	return c, info, nil
 }
 
 func (m *Manager) recoverCreate(ctx context.Context, r deployment.Request, cause error) (string, error) {
@@ -657,12 +630,31 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		}
 	}
 	objects := []any{info, spec}
-	if m.options.CompanionImage != "" || info.Labels[companionLabel] != "" {
-		expected, err := imageReference(m.options.CompanionImage)
-		if err != nil || info.Labels[companionLabel] != expected.String() {
-			return errors.New("vHive companion image identity differs")
+	companionTasks := configuredCompanions(m.options)
+	bindings, err := companionBindings(companionTasks)
+	if err != nil {
+		return err
+	}
+	stored, err := storedCompanions(info)
+	if err != nil || !slices.Equal(bindings, stored) {
+		return errors.Join(errors.New("vHive companion identities differ"), err)
+	}
+	if len(bindings) > 0 {
+		checkpoint, err := m.loadCheckpoint(id)
+		if err != nil {
+			return err
 		}
-		c, companion, err := m.ownedCompanion(ctx, info)
+		expectedIDs := []string{id}
+		for _, binding := range bindings {
+			expectedIDs = append(expectedIDs, binding.id(id))
+		}
+		actualIDs, err := checkpoint.taskIDs()
+		if err != nil || !slices.Equal(expectedIDs, actualIDs) {
+			return errors.Join(errors.New("vHive checkpoint companion identities differ"), err)
+		}
+	}
+	for i, binding := range bindings {
+		c, companion, err := m.ownedCompanion(ctx, info, binding)
 		if err != nil {
 			return err
 		}
@@ -676,7 +668,9 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		if err := validateGuestSpec(other, false); err != nil {
 			return err
 		}
+		expectedCommand := companionTasks[i].Command
 		if other.Annotations[vmAnnotation] != id || other.Process == nil || len(other.Process.Args) == 0 ||
+			len(expectedCommand) > 0 && !slices.Equal(other.Process.Args, expectedCommand) ||
 			spec.Linux.CgroupsPath != filepath.Join("/", m.options.Namespace, id) ||
 			other.Linux.CgroupsPath != filepath.Join("/", m.options.Namespace, companion.ID) {
 			return errors.New("vHive companion VM binding, command or cgroup differs")
@@ -684,7 +678,7 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		for _, guest := range []*specs.Spec{spec, other} {
 			for _, ns := range guest.Linux.Namespaces {
 				if ns.Type == specs.NetworkNamespace {
-					return errors.New("paired vHive tasks must share the VM network namespace")
+					return errors.New("vHive companion tasks must share the VM network namespace")
 				}
 			}
 		}
@@ -809,12 +803,20 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	if info.ID != id || info.Runtime.Name != runtimeName || info.Snapshotter != m.options.Snapshotter || info.Labels["aries.managed"] != "true" || info.Labels["aries.kind"] != "task-container" || info.Labels[ownerLabel] != "" {
 		return errors.New("refusing to remove unowned vHive runtime")
 	}
-	var companion containerd.Container
-	if info.Labels[companionLabel] != "" {
-		companion, _, err = m.ownedCompanion(ctx, info)
-		if err != nil && !errdefs.IsNotFound(err) {
+	bindings, err := storedCompanions(info)
+	if err != nil {
+		return err
+	}
+	companions := make([]containerd.Container, 0, len(bindings))
+	for _, binding := range bindings {
+		companion, _, err := m.ownedCompanion(ctx, info, binding)
+		if errdefs.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
 			return err
 		}
+		companions = append(companions, companion)
 	}
 	state := info.Labels[stateLabel]
 	if m.options.IdleMode == "checkpoint" {
@@ -854,8 +856,8 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	// returns an untyped socket-dial error rather than NotFound.
 	// The snapshot name is reserved even if its metadata Update response was
 	// lost. Remove it explicitly rather than relying on info.SnapshotKey.
-	if companion != nil {
-		if err := m.removeTaskAllocation(ctx, companionID(id), companion); err != nil {
+	for _, companion := range companions {
+		if err := m.removeTaskAllocation(ctx, companion.ID(), companion); err != nil {
 			return err
 		}
 	}

@@ -14,10 +14,8 @@ import (
 	"testing"
 	"time"
 
-	containerd "github.com/containerd/containerd"
 	taskv3 "github.com/containerd/containerd/api/runtime/task/v3"
-	"github.com/containerd/containerd/cio"
-	"github.com/containerd/containerd/oci"
+	"github.com/containerd/errdefs"
 	"github.com/containerd/ttrpc"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
@@ -78,10 +76,15 @@ func TestNativeNextJSThreeTasks(t *testing.T) {
 	const warehouse = "localhost/zb-nextjs-warehouse@sha256:decefdfc46bbed17ebdc58a58d0b220ae52d4c71b363ce42b58ecde17d309ba8"
 	deadline, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
-	m, err := New(Options{Socket: unit + "/containerd.sock", Namespace: "aries",
+	options := Options{Socket: unit + "/containerd.sock", Namespace: "aries",
 		CheckpointDir: fixture + "/checkpoints", ShimDir: fixture + "/shim",
 		IODir: unit + "/aries-io", IdleMode: "checkpoint", GuestTaskV3: true,
-		NativeCheckpoint: true, VCPUs: 2, MemoryMB: 4096})
+		NativeCheckpoint: true, VCPUs: 2, MemoryMB: 4096,
+		Companions: []CompanionTask{
+			{Role: "warehouse", Image: warehouse},
+			{Role: "health", Image: app, Command: []string{"/usr/local/bin/node", "-e", thirdTaskHealth}},
+		}}
+	m, err := New(options)
 	require(err)
 	t.Cleanup(func() {
 		if err := m.Close(); err != nil {
@@ -91,7 +94,9 @@ func TestNativeNextJSThreeTasks(t *testing.T) {
 	ctx := m.ctx(deadline)
 	id := fmt.Sprintf("zb-nextjs-three-%d", time.Now().UnixNano())
 	ids := []string{id, id + "-warehouse", id + "-health"}
-	req := deployment.Request{Name: id, Workdir: "/app"}
+	req := deployment.Request{Name: id, Image: app, Workdir: "/app", StorageMB: 15360, Entrypoint: []string{"/bin/sleep"},
+		Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "task-container",
+			"aries.component": "sandbox", "aries.run": id, "aries.task": "nextjs-native-three-fixture"}}
 	file, err := os.OpenFile(filepath.Join(stage, "events.jsonl"), os.O_EXCL|os.O_CREATE|os.O_WRONLY, 0600)
 	require(err)
 	t.Cleanup(func() {
@@ -106,60 +111,25 @@ func TestNativeNextJSThreeTasks(t *testing.T) {
 		require(log.Encode(map[string]any{"event": event, "monotonic_ns": at, "vm_id": id, "data": evidence}))
 	}
 
-	cfg := m.vmRequest(req)
-	cfg.ContainerCount = 3
-	control, err := m.vmControl()
-	require(err)
-	require(os.Mkdir(m.runtimeDir(id), 0700))
-	require(m.saveCheckpoint(id, &checkpointState{Phase: "starting", Request: cfg}))
-	var tasks []containerd.Container
-	t.Cleanup(func() {
-		ctx, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-		defer done()
-		if err := m.stopCheckpoint(ctx, id); err != nil {
-			t.Error(err)
-			return
-		}
-		for index, task := range tasks {
-			if err := m.removeTaskAllocation(ctx, ids[index], task); err != nil {
+	record("create_start", map[string]any{"configured_tasks": 3, "app_image": app, "warehouse_image": warehouse, "network_devices": 0})
+	got, err := m.Create(ctx, req)
+	if got != "" {
+		t.Cleanup(func() {
+			cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			defer done()
+			if err := m.Stop(cleanup, got); err != nil {
 				t.Error(err)
 				return
 			}
-		}
-		if err := os.RemoveAll(m.runtimeDir(id)); err != nil {
-			t.Error(err)
-			return
-		}
-		record("removed", ids)
-	})
-
-	record("create_start", map[string]any{"configured_tasks": cfg.ContainerCount, "app_image": app, "warehouse_image": warehouse, "network_devices": len(cfg.NetworkInterfaces)})
-	_, err = control.CreateVM(ctx, cfg)
+			requireThreeAllocationsAbsent(t, cleanup, m, ids)
+			record("removed", ids)
+		})
+	}
 	require(err)
-	require(os.MkdirAll(m.options.IODir, 0700))
-	roles := []struct {
-		image string
-		spec  []oci.SpecOpts
-	}{
-		{app, sandboxSpecOptions(deployment.Request{Name: id, Workdir: "/app", Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}})},
-		{warehouse, companionSpecOptions(id)},
-		{app, append(companionSpecOptions(id), oci.WithProcessArgs("/usr/local/bin/node", "-e", thirdTaskHealth))},
+	if got != id {
+		t.Fatal("Manager.Create changed the VM identity")
 	}
-	for index, role := range roles {
-		image, err := m.image(ctx, role.image)
-		require(err)
-		name := ids[index]
-		container, err := m.client.NewContainer(ctx, name, containerd.WithImage(image),
-			containerd.WithSnapshotter(m.options.Snapshotter), containerd.WithRuntime(runtimeName, nil))
-		require(err)
-		tasks = append(tasks, container)
-		require(prepareTask(ctx, container, name, image, role.spec))
-		require(m.validateStorage(ctx, name, 15360))
-		task, err := container.NewTask(ctx, cio.NullIO)
-		require(err)
-		require(task.Start(ctx))
-	}
-	require(m.saveCheckpoint(id, &checkpointState{Phase: "running", Request: cfg}))
+	require(m.Validate(ctx, id, req, nil))
 
 	health := func() json.RawMessage {
 		var result core.CommandResult
@@ -236,6 +206,62 @@ func TestNativeNextJSThreeTasks(t *testing.T) {
 		t.Fatal("native manifest changed during restore")
 	}
 	record("restore_complete", map[string]any{"task_state": after, "http": afterHealth, "host_processes": afterVMM, "manifest_sha256": digest})
+	require(m.Stop(ctx, id))
+	requireThreeAllocationsAbsent(t, ctx, m, ids)
+	record("success_allocations_removed", ids)
+
+	options.Companions[1].Command = []string{"/__aries_fixture_missing_command"}
+	failing, err := New(options)
+	require(err)
+	t.Cleanup(func() {
+		if err := failing.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	partialID := id + "-partial"
+	req.Name = partialID
+	req.Labels["aries.run"] = partialID
+	partialIDs := []string{partialID, partialID + "-warehouse", partialID + "-health"}
+	failed, failure := failing.Create(ctx, req)
+	if failed != "" {
+		t.Cleanup(func() {
+			cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			defer done()
+			if err := failing.Stop(cleanup, failed); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	if failed != partialID || failure == nil || !strings.Contains(failure.Error(), partialID+"-health") ||
+		!strings.Contains(failure.Error(), "/__aries_fixture_missing_command") {
+		t.Fatalf("partial fixture did not fail on the configured second companion: %q %v", failed, failure)
+	}
+	partial, err := failing.loadCheckpoint(partialID)
+	require(err)
+	if partial.Phase != "starting" || !reflect.DeepEqual(partial.CompanionIDs, partialIDs[1:]) {
+		t.Fatalf("partial creation did not persist the complete owned task set: %+v", partial)
+	}
+	record("expected_partial_failure", map[string]any{"task_ids": partialIDs, "error": failure.Error()})
+	require(failing.Stop(ctx, partialID))
+	require(failing.Stop(ctx, partialID))
+	requireThreeAllocationsAbsent(t, ctx, failing, partialIDs)
+	record("partial_allocations_removed", partialIDs)
+
+}
+
+func requireThreeAllocationsAbsent(t *testing.T, ctx context.Context, m *Manager, ids []string) {
+	t.Helper()
+	for _, id := range ids {
+		if _, err := m.client.LoadContainer(ctx, id); !errdefs.IsNotFound(err) {
+			t.Fatalf("container %s remains after cleanup: %v", id, err)
+		}
+		if _, err := m.client.SnapshotService(m.options.Snapshotter).Stat(ctx, id); !errdefs.IsNotFound(err) {
+			t.Fatalf("snapshot %s remains after cleanup: %v", id, err)
+		}
+	}
+	if _, err := os.Stat(m.runtimeDir(ids[0])); !os.IsNotExist(err) {
+		t.Fatalf("checkpoint state remains after cleanup: %v", err)
+	}
 }
 
 func readThreeNativeTasks(t *testing.T, ctx context.Context, m *Manager, id string, ids []string) []nativeHealthTask {

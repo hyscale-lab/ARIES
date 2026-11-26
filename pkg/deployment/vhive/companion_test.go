@@ -104,21 +104,132 @@ type companionGuest struct {
 }
 
 func (g companionGuest) State(_ context.Context, r *taskAPI.StateRequest) (*taskAPI.StateResponse, error) {
-	return &taskAPI.StateResponse{Status: g.status[r.ID]}, nil
+	return &taskAPI.StateResponse{ID: r.ID, Status: g.status[r.ID]}, nil
 }
 
 func TestGuestReadinessRequiresBothPairedTasks(t *testing.T) {
 	g := companionGuest{status: map[string]tasktypes.Status{"sandbox": tasktypes.Status_RUNNING}}
 	request := &proto.CreateVMRequest{VMID: "sandbox"}
-	if ready, err := guestTasksReady(t.Context(), g, request); err != nil || !ready {
+	if ready, err := guestTasksReady(t.Context(), g, &checkpointState{Request: request}); err != nil || !ready {
 		t.Fatalf("single task ready=%v err=%v", ready, err)
 	}
 	request.ContainerCount = 2
-	if ready, err := guestTasksReady(t.Context(), g, request); err != nil || ready {
+	if ready, err := guestTasksReady(t.Context(), g, &checkpointState{Request: request}); err != nil || ready {
 		t.Fatalf("missing companion ready=%v err=%v", ready, err)
 	}
 	g.status["sandbox-companion"] = tasktypes.Status_RUNNING
-	if ready, err := guestTasksReady(t.Context(), g, request); err != nil || !ready {
+	if ready, err := guestTasksReady(t.Context(), g, &checkpointState{Request: request}); err != nil || !ready {
 		t.Fatalf("paired tasks ready=%v err=%v", ready, err)
+	}
+}
+
+func TestExplicitCompanionOptions(t *testing.T) {
+	image := "docker.io/library/example@sha256:" + strings.Repeat("a", 64)
+	base := Options{NativeCheckpoint: true, GuestTaskV3: true}
+	for _, trial := range []struct {
+		name   string
+		tasks  []CompanionTask
+		legacy string
+		valid  bool
+	}{
+		{"two named companions", []CompanionTask{{Role: "warehouse", Image: image}, {Role: "health", Image: image, Command: []string{"node", "-e", "0"}}}, "", true},
+		{"duplicate role", []CompanionTask{{Role: "warehouse", Image: image}, {Role: "warehouse", Image: image}}, "", false},
+		{"invalid role", []CompanionTask{{Role: "../outside", Image: image}}, "", false},
+		{"mutable tag", []CompanionTask{{Role: "health", Image: "example:latest"}}, "", false},
+		{"empty argv zero", []CompanionTask{{Role: "health", Image: image, Command: []string{""}}}, "", false},
+		{"conflicting legacy", []CompanionTask{{Role: "health", Image: image}}, image, false},
+	} {
+		t.Run(trial.name, func(t *testing.T) {
+			o := base
+			o.Companions, o.CompanionImage = trial.tasks, trial.legacy
+			if err := validateCompanionOptions(o); (err == nil) != trial.valid {
+				t.Fatalf("expected valid=%v, got %v", trial.valid, err)
+			}
+		})
+	}
+}
+
+func TestExplicitCompanionsRetainOwnershipAcrossPartialFailure(t *testing.T) {
+	for _, failPreparation := range []bool{false, true} {
+		name := "second cleanup fails and retries"
+		if failPreparation {
+			name = "second snapshot update fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			const id = "sandbox"
+			const firstName = id + "-warehouse"
+			const secondName = id + "-health"
+			image := "docker.io/library/example@sha256:" + strings.Repeat("a", 64)
+			mainTask, firstTask, secondTask := &fakeTask{}, &fakeTask{}, &fakeTask{}
+			main, first, second := &fakeContainer{task: mainTask}, &fakeContainer{task: firstTask}, &fakeContainer{task: secondTask}
+			if failPreparation {
+				second.updateErr = errors.New("second snapshot response lost")
+			}
+			client := &fakeClient{containers: map[string]*fakeContainer{id: main, firstName: first, secondName: second}}
+			vm := &fakeVM{}
+			root := t.TempDir()
+			options := Options{Namespace: "aries", Snapshotter: "devmapper", IODir: root, CheckpointDir: root, IdleMode: "checkpoint", NativeCheckpoint: true,
+				GuestTaskV3: true, Logger: logrus.New(), Companions: []CompanionTask{{Role: "warehouse", Image: image}, {Role: "health", Image: image}}}
+			m := &Manager{client: client, vm: vm, options: options}
+			req := deployment.Request{Name: id, Image: "example:test", Entrypoint: []string{"/bin/sleep"},
+				Args: []string{"infinity"}, Labels: ownedContainer().info.Labels}
+			runtime, err := m.Create(t.Context(), req)
+			if runtime != id || (err != nil) != failPreparation {
+				t.Fatalf("create returned %q, %v", runtime, err)
+			}
+			bindings, readErr := storedCompanions(main.info)
+			if readErr != nil || len(bindings) != 2 || first.info.Labels[ownerLabel] != id || second.info.Labels[ownerLabel] != id {
+				t.Fatalf("ownership was not reserved for both companions: %v, %v", bindings, readErr)
+			}
+			if failPreparation {
+				if !errors.Is(err, second.updateErr) || vm.request != nil {
+					t.Fatalf("VM booted after failed allocation: %v, %v", vm.request, err)
+				}
+			} else {
+				state, err := m.loadCheckpoint(id)
+				if err != nil || vm.request.ContainerCount != 3 || mainTask.starts != 1 || firstTask.starts != 1 || secondTask.starts != 1 ||
+					!reflect.DeepEqual(state.CompanionIDs, []string{firstName, secondName}) {
+					t.Fatalf("three running tasks not persisted: %v, %v", state, err)
+				}
+			}
+
+			// Removal uses the original allocation labels after a manager restart.
+			options.Companions = nil
+			restarted := &Manager{client: client, vm: vm, options: options}
+			second.info.Labels[ownerLabel] = "different-VM"
+			if err := restarted.Stop(t.Context(), id); err == nil || first.removed || main.removed || vm.stops != 0 {
+				t.Fatalf("partial cleanup crossed an ownership boundary: %v", err)
+			}
+			second.info.Labels[ownerLabel] = id
+			second.deleteErr = errors.New("second companion metadata deletion failed")
+			if err := restarted.Stop(t.Context(), id); !errors.Is(err, second.deleteErr) || !first.removed || main.removed {
+				t.Fatalf("partial cleanup did not retain main ownership: %v", err)
+			}
+			second.deleteErr = nil
+			if err := restarted.Stop(t.Context(), id); err != nil || !second.removed || !main.removed {
+				t.Fatalf("retry did not finish cleanup: %v", err)
+			}
+			if err := restarted.Stop(t.Context(), id); err != nil ||
+				!reflect.DeepEqual(client.snapshots.keys, []string{firstName, secondName, secondName, id}) {
+				t.Fatalf("repeated cleanup=%v, removed snapshots=%v", err, client.snapshots.keys)
+			}
+		})
+	}
+}
+
+func TestGuestReadinessRequiresAllExplicitTasks(t *testing.T) {
+	checkpoint := &checkpointState{Request: &proto.CreateVMRequest{VMID: "sandbox", ContainerCount: 3},
+		CompanionIDs: []string{"sandbox-warehouse", "sandbox-health"}}
+	guest := companionGuest{status: map[string]tasktypes.Status{"sandbox": tasktypes.Status_RUNNING, "sandbox-warehouse": tasktypes.Status_RUNNING}}
+	if ready, err := guestTasksReady(t.Context(), guest, checkpoint); err != nil || ready {
+		t.Fatalf("checkpoint accepted only two running tasks: %v %v", ready, err)
+	}
+	guest.status["sandbox-health"] = tasktypes.Status_RUNNING
+	if ready, err := guestTasksReady(t.Context(), guest, checkpoint); err != nil || !ready {
+		t.Fatalf("three running tasks not ready: %v %v", ready, err)
+	}
+	checkpoint.CompanionIDs[1] = "sandbox-warehouse"
+	if ready, err := guestTasksReady(t.Context(), guest, checkpoint); err == nil || ready {
+		t.Fatalf("checkpoint accepted a duplicate: %v %v", ready, err)
 	}
 }

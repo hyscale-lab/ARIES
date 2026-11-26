@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-stage=/local/zb-nextjs-three-01
+stage=/local/zb-nextjs-manager-three-01
 runtime=/local/zb-nextjs-be1d1d11/runtime
 unit=fcmod-zepbound-nextjs191
 test "$(cat /var/emulab/boot/nodeid)" = amd191

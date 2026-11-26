@@ -26,6 +26,7 @@ type snapshotControl interface {
 }
 
 type checkpointState struct {
+	CompanionIDs        []string               `json:"companion_ids,omitempty"`
 	ContainerDiskSource string                 `json:"container_disk_source,omitempty"`
 	TaskRunning         bool                   `json:"task_running"`
 	Phase               string                 `json:"phase"`
@@ -34,6 +35,26 @@ type checkpointState struct {
 	Snapshot            string                 `json:"snapshot,omitempty"`
 	NativeDirectory     string                 `json:"native_directory,omitempty"`
 	Processes           []checkpointProcess    `json:"processes,omitempty"`
+}
+
+func (s *checkpointState) taskIDs() ([]string, error) {
+	id := s.Request.VMID
+	companions := s.CompanionIDs
+	if len(companions) == 0 && s.Request.ContainerCount == 2 {
+		// Existing checkpoints predate the explicit task list.
+		companions = []string{companionID(id)}
+	}
+	if len(companions)+1 != int(max(1, s.Request.ContainerCount)) {
+		return nil, errors.New("checkpoint companion count and identities differ")
+	}
+	seen := map[string]bool{}
+	for _, companion := range companions {
+		if !strings.HasPrefix(companion, id+"-") || !identifier.MatchString(companion) || seen[companion] {
+			return nil, errors.New("invalid or repeated checkpoint companion identity")
+		}
+		seen[companion] = true
+	}
+	return append([]string{id}, companions...), nil
 }
 
 type checkpointProcess struct {
@@ -82,6 +103,9 @@ func (m *Manager) loadCheckpoint(id string) (*checkpointState, error) {
 	}
 	if s.Request == nil || s.Request.VMID != id {
 		return nil, errors.New("checkpoint VM identity differs")
+	}
+	if _, err := s.taskIDs(); err != nil {
+		return nil, err
 	}
 	return &s, nil
 }
@@ -249,13 +273,13 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 		return err
 	}
 	endStage := core.TimeCommandStage(ctx, "checkpoint.inspect_task")
-	running, err := m.guestTasksRunning(ctx, s.Request)
+	running, err := m.guestTasksRunning(ctx, s)
 	endStage()
 	if err != nil {
 		return err
 	}
-	if s.Request.ContainerCount == 2 && !running {
-		return errors.New("both vHive tasks must be running before checkpoint")
+	if s.Request.ContainerCount > 1 && !running {
+		return errors.New("all vHive tasks must be running before checkpoint")
 	}
 	s.TaskRunning = running
 	if m.options.RestoreMemorySocket != "" {
@@ -440,13 +464,13 @@ func (m *Manager) restoreCheckpointVM(ctx context.Context, id string, s *checkpo
 	if err != nil {
 		return fmt.Errorf("restore vHive microVM: %w", err)
 	}
-	if s.Request.ContainerCount == 2 {
-		running, err := m.guestTasksRunning(ctx, s.Request)
+	if s.Request.ContainerCount > 1 {
+		running, err := m.guestTasksRunning(ctx, s)
 		if err != nil {
 			return fmt.Errorf("check restored vHive tasks: %w", err)
 		}
 		if !running {
-			return errors.New("both vHive tasks must be running after restore")
+			return errors.New("all vHive tasks must be running after restore")
 		}
 	}
 	s.Phase = "running"
@@ -481,7 +505,7 @@ func (m *Manager) checkpointRunning(ctx context.Context, id string) (bool, error
 	if s.Phase != "running" {
 		return false, fmt.Errorf("checkpoint in %s state", s.Phase)
 	}
-	return m.guestTasksRunning(m.ctx(ctx), s.Request)
+	return m.guestTasksRunning(m.ctx(ctx), s)
 }
 
 func processStart(pid int) (string, error) {

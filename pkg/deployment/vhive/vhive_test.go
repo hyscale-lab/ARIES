@@ -115,6 +115,8 @@ type fakeContainer struct {
 	updateErr error
 }
 
+func (c *fakeContainer) ID() string { return c.info.ID }
+
 func (c *fakeContainer) Update(context.Context, ...containerd.UpdateContainerOpts) error {
 	return c.updateErr
 }
