@@ -465,9 +465,18 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
 	}
+	if r.Task == "freight-dispatch-shift" {
+		// Original Harbor artifact for each source-specific dispatcher.
+		digest := map[string]string{
+			"3dc97e08-94f1-44a9-baa2-81629ba79eab": "80e2c0644bb5b7edacfce3445b23ca3995cc79fd6376b9a3cdcc3bcd0b442cbd",
+			"fa1d8385-d7d0-4701-b73e-024703e6b34a": "c9b3af973c3ae78b1f16e9a84066676136d6c62a6d1206ee260cabded38f6363",
+			"ea7c7508-199a-4a32-ac02-a17ae1a80cd1": "174c984b82d21161717fa4f31ac02983c95e4e08d9da85e56cdfb250a738de05",
+			"f482db32-1965-4c26-b403-9a6959d49457": "e2c172bba6c6b665c23ee9d1df425f079a6c913cfc3403bdba5af62d768466b9",
+			"09697b02-59a2-4588-b1f6-fab871a5c35e": "ea6329a2d1d960fb63c325af202120649f56226faea8a5adcf9b635e485c5023",
+		}[r.Trial]
+		cmd += "\necho '" + digest + "  /workspace/dispatch' | sha256sum -c -"
+	}
 	switch r.Trial {
-	case "3dc97e08-94f1-44a9-baa2-81629ba79eab":
-		cmd += "\necho '80e2c0644bb5b7edacfce3445b23ca3995cc79fd6376b9a3cdcc3bcd0b442cbd  /workspace/dispatch' | sha256sum -c -"
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:
