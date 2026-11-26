@@ -65,12 +65,25 @@ func tb41SourceSetup(trial string, task taskSetup) taskSetup {
 		task.packagesField = "music_fonts_wheels_archive_sha256"
 		task.initialCheck += "\ntest -d /usr/share/fonts/truetype/dejavu\ndpkg-query -W fonts-dejavu-core fonts-dejavu-mono"
 
-	case "9fd6a8b8-3075-4054-9caa-3aa13f6bd407", "9b95500e-748c-4b16-914d-eb4ce21c9773", "9f99d667-6eb7-450a-a715-2eb335095856":
+	case "9b95500e-748c-4b16-914d-eb4ce21c9773":
 		task.packagesSHA = "25a171383f021a29ad1b6028b77ef1a019e8b385e4b673acd763186ef8f5c892"
 		task.packagesField = "cad_pillow_wheel_archive_sha256"
-		task.initialCheck += `
-echo '23d27a3e0307ec2244cc51e7287b919aa68d097504ebe19df4e76a98a3eea5bd  /opt/zb-cad/wheels/pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl' | sha256sum -c -
-/opt/conda/bin/python -c 'import importlib.util; assert importlib.util.find_spec("PIL") is None'`
+		task.initialCheck += cadPillowReady
+	case "9fd6a8b8-3075-4054-9caa-3aa13f6bd407", "9f99d667-6eb7-450a-a715-2eb335095856":
+		task.packagesSHA = "f2624f427abe6c6509eb55c4cedb3fe6cebbf03980eac44be71f5e19af8e4d49"
+		task.packagesField = "cad_python_pillow_archive_sha256"
+		task.initialCheck += cadPythonReady + cadPillowReady
+	case "08255123-7f37-4ac3-ad5a-ec7e9a4e3d39", "ce6044db-e5ea-430d-91e0-7272a0695992":
+		task.packagesSHA = "0147cfc122120b0891434f43c9a81db9655cf7f4914d7704789116e54c953ba9"
+		task.packagesField = "cad_libgl_python_archive_sha256"
+		task.initialCheck += cadPythonReady + cadQtReady
+	case "a4d84523-40cc-4174-95ba-3b8db9883aee", "06c8cac1-50a8-4b51-933f-f221f143d7a2", "a9e95de2-9628-4159-9e65-d04c4e03c787":
+		task.packagesSHA = "b99b22d5b808b667b8dad5cf03a47d99100844fd17cdd737ada9264704f99990"
+		task.packagesField = "cad_libgl_archive_sha256"
+		task.initialCheck += cadQtReady
+	case "6c8b8d90-1910-46d9-a0a2-18a330d69a71":
+		// The recorded directory listing included private harness state.
+		task.initialCheck += "\nmkdir /tmp/codex-home\ntest -z \"$(ls -A /tmp/codex-home)\""
 
 	case "23163f44-25fb-47c7-8a9c-5aabc8e918f6", "c1962991-d260-46b5-8047-535da8dd7955",
 		"ecd96589-9286-4639-918e-d6a81933aa6f", "42a81732-26cc-4817-8e52-ae846d24410e":
@@ -112,3 +125,13 @@ readlink "$alias_dir/apply_patch"`
 
 const cadReady = `/opt/conda/bin/python -c 'import FreeCAD,sys; assert FreeCAD.Version()[:3]==["0","21","2"] and sys.version_info[:2]==(3,11)'
 ` + noShellPatch
+
+const cadPythonReady = `
+/usr/bin/python3 -c 'import importlib.util,sys; assert sys.version_info[:2]==(3,11) and importlib.util.find_spec("PIL") is None; print(sys.version)'`
+
+const cadQtReady = `
+/opt/conda/bin/python -c 'from PySide2.QtGui import QImage; assert not QImage(1,1,QImage.Format_RGB32).isNull()'`
+
+const cadPillowReady = `
+echo '23d27a3e0307ec2244cc51e7287b919aa68d097504ebe19df4e76a98a3eea5bd  /opt/zb-cad/wheels/pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl' | sha256sum -c -
+/opt/conda/bin/python -c 'import importlib.util; assert importlib.util.find_spec("PIL") is None'`
