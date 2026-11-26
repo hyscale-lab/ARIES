@@ -47,6 +47,18 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"embedding-drift-monitor": {
+		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
+		output: "drift_monitor/monitor.py",
+		initialCheck: `export LC_ALL=C
+test "$(sha256sum drift_monitor/*.py | sha256sum)" = 'a321e7570ddc8e9b6220dc3bd2e9c38b209eb49ab0398558e8dd521d0c27157c  -'
+test "$(git --version)" = 'git version 2.43.0'
+test ! -d .git
+if command -v python || command -v apply_patch; then exit 1; fi
+/usr/bin/python3 -c "import numpy, scipy; assert (numpy.__version__, scipy.__version__) == ('1.26.4', '1.11.4')"`,
+		inputCheck: `export LC_ALL=C
+test "$(sha256sum data/* | sha256sum)" = '6e411a090777800a3feede9bf824630790144ba7b3bb9d5c65d2b8ee39ef9718  -'`,
+	},
 	hofTopologyTask:            hofTopologyOfflineSetup,
 	bipedTask:                  bipedSetup,
 	pretrainShardTask:          pretrainShardSetup,
@@ -392,6 +404,11 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	}
 	if r.Task == "sanitize-git-repo" {
 		cmd += "\nfind . -type f -not -path './.git/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
+	}
+	if r.Task == "embedding-drift-monitor" {
+		cmd += `
+test "$(sha256sum drift_monitor/*.py | sha256sum)" != 'a321e7570ddc8e9b6220dc3bd2e9c38b209eb49ab0398558e8dd521d0c27157c  -'
+sha256sum drift_monitor/*.py`
 	}
 	if r.Task == bipedTask {
 		cmd += bipedFinalCheck
