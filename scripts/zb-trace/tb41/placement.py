@@ -74,12 +74,17 @@ def verify_vm_inventory(live, owners):
     check(live == set(owners), 'foreign or unverified VMM on the worker')
 
 
+def vmm_comm(name):
+    # The checkpoint restore copy is named .firecracker-restore-vmm; Linux comm has 15 bytes.
+    return name in ('firecracker', '.firecracker-re') or name.startswith('qemu-system')
+
+
 def inventory():
     live = set()
     for proc in Path('/proc').glob('[0-9]*/comm'):
         try:
             comm = proc.read_text().strip()
-            if comm == 'firecracker' or comm.startswith('qemu-system'):
+            if vmm_comm(comm):
                 pid = int(proc.parent.name)
                 live.add((pid, start_identity(pid)))
         except (FileNotFoundError, ProcessLookupError):
@@ -110,7 +115,8 @@ def inspect(unit, runtime, peer, require_pair=False, restored_api=None):
             argv = proc.joinpath('cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
             vm_id = path.parent.name.removeprefix('aries#')
             check('--id' in argv and argv[argv.index('--id') + 1] == vm_id and
-                  proc.joinpath('comm').read_text().strip() == 'firecracker', 'guest socket and VM identity differ')
+                  proc.joinpath('comm').read_text().strip() in ('firecracker', '.firecracker-re') and
+                  Path(argv[0]).name in ('firecracker', '.firecracker-restore-vmm'), 'guest socket and VM identity differ')
             if restored_api and cfg['unit'] == unit and path.samefile(restored_api):
                 matched_api = True
             tids = list((Path('/proc') / str(pid) / 'task').iterdir())
