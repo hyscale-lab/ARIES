@@ -72,6 +72,8 @@ type Options struct {
 	// NativeCheckpoint selects CheckpointVM and native artifact restore on the
 	// optimized firecracker-containerd runtime.
 	NativeCheckpoint bool
+	// NativeRestoreTimeoutSeconds overrides the start deadline for restoring a native artifact.
+	NativeRestoreTimeoutSeconds uint32
 	// CompanionImage runs the digest-qualified image's command as a second task in the VM.
 	CompanionImage string
 	// Companions configures named, digest-qualified companion tasks for one VM.
@@ -171,6 +173,9 @@ func validateOptions(o Options) error {
 	}
 	if o.NativeReportingOnly && !o.NativeCheckpoint {
 		return errors.New("native reporting control requires native checkpoints")
+	}
+	if o.NativeRestoreTimeoutSeconds > 0 && !o.NativeCheckpoint {
+		return errors.New("native restore timeout requires native checkpoints")
 	}
 	if o.NativeCheckpoint && (o.IdleMode != "checkpoint" || o.RestoreMemorySocket != "") {
 		return errors.New("native checkpoints require checkpoint mode and File-backed restore")
@@ -669,7 +674,7 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		if err != nil {
 			return err
 		}
-		if err := validateGuestSpec(other, false); err != nil {
+		if err := validateGuestSpec(other, companionTasks[i].PrivateHostsFile); err != nil {
 			return err
 		}
 		if err := validateCompanionShm(other, companionTasks[i].ShmSizeMiB); err != nil {

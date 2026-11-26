@@ -65,6 +65,7 @@ printf '\n127.0.0.1 event-feed\n' >> /etc/hosts
 python3 -c "import urllib.request as u; assert u.urlopen('http://event-feed:8080/health', timeout=5).status == 200"`,
 		inputCheck: `test "$(cd /app/packet && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum)" = 'cd80264da9db617a531055ef7c32c48bccdc0828957a15f9c48ad2d3748a2e0b  -'`,
 	},
+	"intrastat-meldung": intrastatSetup,
 	"embedding-drift-monitor": {
 		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
 		output: "drift_monitor/monitor.py",
@@ -131,6 +132,9 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 		return nextjsSourceSetup(r.Trial)
 	}
 	task, ok := taskSetups[r.Task]
+	if alias := intrastatAliases[r.Trial]; alias != "" {
+		task.initialCheck += strings.ReplaceAll(intrastatAliasSetup, "ALIAS", alias)
+	}
 	if r.Trial == "3102c53f-5ea4-45e6-b7bf-2ee5c8698518" {
 		// This recording invokes the original argv[0] patch alias by its full path.
 		task.initialCheck += `
@@ -277,7 +281,11 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 		}
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
-	if r.Task == hofTopologyTask {
+	if r.Task == "intrastat-meldung" {
+		if err := uploadPinned(ctx, m, id, packages, task.packagesSHA, "/tmp"); err != nil {
+			return "", nil, err
+		}
+	} else if r.Task == hofTopologyTask {
 		if err := stageHOFWheels(ctx, m, id, packages, task.packagesSHA); err != nil {
 			return "", nil, err
 		}
@@ -497,6 +505,16 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += "\necho '" + digest + "  /workspace/dispatch' | sha256sum -c -"
 	}
 	switch r.Trial {
+	case "cfff4007-c001-4e29-950d-eb1a1e8a7bb0":
+		cmd += intrastatFirstFinal
+	case "506d9672-f546-46ed-8232-37ed8009fe96":
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "0b56c06fde361bcedac3fa1634e2947fcc0e22a68e7257317c9ea703211bd6e9")
+	case "b2e0b98c-215e-48ab-aece-c16b1420b59a":
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "ec6857941506ecff75853f02372bbf3ac50b20cf802bfd0f8494036df585e0e4")
+	case "0e67fd64-d0a0-4afb-9afe-17e48f2f0719":
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "3ff63377a34299c22028fc2f4c25fc6554ab4eb3af15448199de77deb30c2d60")
+	case "1a3d9576-5102-4784-a660-6129aedee85c":
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "6c6d600f157417e8f6d29c909ec54720342f6660ad9be1c7c738d5614dd797dc")
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:
