@@ -228,6 +228,11 @@
         "trial": "de8880d4-7cdf-4a12-9106-2d8547a3ab52",
         "trajectory_sha256": "16901d6390c52db05c4dc2f3a8fa1422e8195efedfd8c795d7caa5470338c219",
         "rollout_sha256": "9a0aad51b3458aaafffe46438906b77fbafc332120d9e796308d1d886337cb7b"
+      },
+      {
+        "trial": "1d577700-1aa3-4bf8-a92e-d0bb6dea1925",
+        "trajectory_sha256": "172002a0da22484c55ff7a2375cd9f91493fb0fdfa07d04e4d3a85a15b0ebed5",
+        "rollout_sha256": "f466c6d0cb103fb204d7ee69462fc4742b7587781b192a9eed460a1974b9c3f4"
       }
     ]
   },

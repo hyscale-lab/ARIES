@@ -59,6 +59,16 @@ var tb41PatchAliases = map[string]string{
 
 func tb41SourceSetup(trial string, task taskSetup) taskSetup {
 	switch trial {
+	case "1d577700-1aa3-4bf8-a92e-d0bb6dea1925":
+		task.initialCheck += `
+install -d -m 0700 /tmp/codex-home
+test -z "$(ls -A /tmp/codex-home)"
+test -x /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex
+test ! -e /tmp/training_before_repair
+test ! -e /tmp/protected-training-files.sha256
+test ! -e repair_training_data.py
+test ! -e data/train.sha256.json
+test ! -e pretrain_recovered.log`
 	case "a27cb98a-fce4-4f32-b6b3-7f923ae19176":
 		task.initialCheck += "\nmkdir -p /tmp/codex-home/skills\ntest -z \"$(ls -A /tmp/codex-home/skills)\""
 	case "b763a908-c85a-451f-94fc-3727a75d1ef0":
