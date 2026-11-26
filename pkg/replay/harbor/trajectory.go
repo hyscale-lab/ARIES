@@ -350,52 +350,6 @@ func equalJSON(a, b []byte) bool {
 	return reflect.DeepEqual(left, right)
 }
 
-var interceptedPatchDirs = map[string]string{
-	"call_xBwrVyeC9cAFq7JPbTWEzfn2": "/app",
-	"call_9NDBlJmYPJuRyh4FmxW63hwQ": "/app",
-	"call_I508KaehdTRMQyViU5jl9KZ0": "/app",
-	"call_XJy4ZphLiGhrtkJvcwQ0whoi": "/app",
-	"call_T4guAViYNCoy6x8AhUcRk0Ol": "/app",
-	"call_uWoDRNhz1zCkvG2SRnl3BfZz": "/app",
-	"call_8GEGWXdrXh3Lzsl1YO3USPPE": "/app",
-	"call_GlxbHkDI0B4pemOVXtaQ2iJA": "/app",
-	"call_VUx6ZM69llmYcf4fnTweo8Iz": "/app",
-	"call_0CYorN8YDjtAiGkCSpQdTShg": "/app",
-	"call_MKtTAPoiY8P1IwNrOm8EgtDl": "/app",
-	"call_9WdLaxgtDzQKDwPArbzjG358": "/app",
-	"call_8TwZxyyXu6LeS6IEWg3VNeAJ": "/app",
-	"call_CsHHPLbgnM9SKfiDNGPVASoe": "/app",
-	"call_lfoI9q8fXepl6cTe6DFdopFw": "/app",
-	"call_HcjMUdXQbuhgquLSLyZGEqiH": "/app",
-	"call_oUz1FMM5aO0vjrMrKvCcmpjN": "/app",
-	"call_1zmklztkjVEgzl5x24uH2gEx": "/app",
-	"call_WoIitjb4mDQY8viyLWdpEPxj": "/app",
-	"call_2Y9eeYs4q2dPiKRS6dF9bnAS": "/app",
-	"call_mhxbOXNUtUl9kxLCaRYVVK3E": "/app",
-	"call_5ZxflhqiRQR6xuFjOuy848zb": "/app",
-	"call_uTYuir3bN0AdKxSPlTUoVpLc": "/tmp",
-	"call_pzdaK5lgqxXR6Rddv4QXXCi6": "/tmp",
-	"call_STu77C7RXD6l1VwAZ99JVkbN": "/app",
-	"call_T6t7JKXq1JQyKQEa4KEtiBOb": "/app",
-	"call_M4n6xPzCAFt1LWL3t4DB8MxQ": "/app",
-	"call_G9ew1gg3fn0dNjJbnoGs9LOK": "/app",
-	"call_1mmBRZnC25qV95nuyoyhciWu": "/app",
-	"call_nQ01ul1qMIfnPO9K066yLciD": "/app",
-	"call_2GtFc6dT13ItHjghnp0cqs9y": "/app",
-	"call_On6hZ1wLdLJ9DAyoTrFUaWJL": "/app",
-	"call_yjQZF0xGnNmWWvsghae77z5A": "/app",
-	"call_mgTX7OhZhGImHfqYYPPhqDEz": "/app",
-	"call_v2QjdIl1wianORfHKd723J9C": "/app",
-	"call_HEXtUnt6M36dD20bcLBfLDWQ": "/app",
-	"call_UAXWLijmE367lu9fSoL3S0vB": "/app",
-	"call_OkziUhlh3GurnJQyTZNcWsMb": "/app",
-	"call_NVOMrI2qPuwyHSwp7NwRQlUe": "/app",
-	"call_IE9ScyjJimnGHeZE2bkrNnb3": "/app",
-	"call_bCT0sqjc6iYS56w84pr5971x": "/app",
-	"call_UC3vxgQW6z62zq0FMZb4CPoj": "/app",
-	"call_RTcHiO18ijJM5uSk5yxa47ZK": "/app",
-}
-
 func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence uint64) (replay.Call, error) {
 	if c.call.Name == "write_stdin" {
 		return processPoll(c, origin, ts, sequence)
@@ -418,17 +372,23 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 	if args.Workdir == "" {
 		args.Workdir = defaultDir
 	}
-	// These reviewed pure heredoc patches were intercepted by Codex and
-	// returned the native patch tool's nested envelope instead of a shell status.
-	if patchDir, intercepted := interceptedPatchDirs[c.call.ID]; intercepted {
-		const responseHeader = "Wall time: 0.0000 seconds\nOutput:\nExit code: 0\nWall time: 0 seconds\nOutput:\n"
-		body, ok := strings.CutPrefix(c.output, responseHeader)
+	// Codex emits the nested patch envelope when it intercepts a pure heredoc.
+	const patchResponse = "Wall time: 0.0000 seconds\nOutput:\nExit code: 0\nWall time: 0 seconds\nOutput:\n"
+	if body, nested := strings.CutPrefix(c.output, patchResponse); nested {
 		patch, opened := strings.CutPrefix(args.Cmd, "apply_patch <<'PATCH'\n")
 		patch, closed := strings.CutSuffix(patch, "\nPATCH")
-		if !ok || !opened || !closed || args.Workdir != patchDir {
-			return replay.Call{}, errors.New("unexpected source patch delivery")
+		if !opened || !closed || !path.IsAbs(args.Workdir) || path.Clean(args.Workdir) != args.Workdir ||
+			!strings.HasPrefix(patch, "*** Begin Patch\n") || !strings.HasSuffix(patch, "\n*** End Patch") ||
+			strings.Contains(patch, "\nPATCH\n") || !strings.HasPrefix(body, "Success. Updated the following files:\n") {
+			return replay.Call{}, fmt.Errorf("step %d has unexpected source patch delivery", c.step)
 		}
 		return replay.Call{Operation: "ApplyPatch", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Body: []byte(patch), ResponseStdout: []byte(body)}, nil
+	}
+	if strings.HasPrefix(c.output, "apply_patch verification failed: ") {
+		return replay.Call{}, fmt.Errorf("step %d requires native patch verification", c.step)
+	}
+	if strings.HasPrefix(c.output, execFailurePrefix) {
+		return replay.Call{}, fmt.Errorf("step %d has an unsupported native exec failure", c.step)
 	}
 	// Codex uses the same initial window regardless of the eventual source reply.
 	yield := uint64(10000)
