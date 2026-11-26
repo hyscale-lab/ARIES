@@ -54,6 +54,7 @@ var tb41PatchAliases = map[string]string{
 	"9fb8d078-0d6a-4629-bcac-1d246656345f": "jRd0KF",
 	"3494bc2e-744c-4565-b6d7-90c7894218f1": "ynSWtA",
 	"742a1a2c-24e5-41dc-83ab-745b7a50a392": "rziLTy",
+	"6d75b013-821a-49ba-b20e-97d3b5c06633": "6zirgA",
 }
 
 func tb41SourceSetup(trial string, task taskSetup) taskSetup {
