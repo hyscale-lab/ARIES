@@ -66,3 +66,61 @@ assert stable == '166fa61ed631d20a3000d7af3f941e72a06698300a61400e8a86c85e11fbc9
 print('/workspace/out/reconciliation.json stable fields: OK')
 PYINTRA
 `
+
+const intrastatLaterFinal = `
+python - <<'PYINTRA'
+import datetime as dt
+import email.utils
+import hashlib
+import json
+import re
+from pathlib import Path
+
+root = Path('/workspace/out')
+memo = json.loads((root / 'reconciliation.json').read_bytes())
+written = dt.datetime.fromisoformat(memo['written_at'])
+assert written.utcoffset() == dt.timedelta(0)
+records = memo.get('archive_files') or memo.get('archive_artifacts')
+if records is None:
+    if 'archive' in memo:
+        records = memo['archive']['filing_artifacts']
+    else:
+        records = [r for f in memo['filings'].values() for r in f['artifacts'].values()]
+archives = [r for r in records if 'sha256' in r]
+assert len(archives) == 4
+for r in archives:
+    path = r.get('path') or r['archive_path']
+    filename = Path(path).name
+    assert filename.endswith(('.pdf', '.xml'))
+    digest = r['sha256']
+    assert re.fullmatch('[a-f0-9]{64}', digest)
+    matches = [p for p in root.rglob('*' + Path(path).suffix) if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() == digest]
+    assert matches, 'no matching live document: ' + filename
+    size = matches[0].stat().st_size
+    assert r.get('bytes', size) == size
+    if 'read_back_headers' in r:
+        headers = r['read_back_headers']
+        assert int(headers['Content-Length']) == r['bytes']
+        stamp = email.utils.parsedate_to_datetime(headers['Date'])
+        assert abs((stamp - written).total_seconds()) < 3600
+        headers['Date'] = '<HTTP response time>'
+        headers['Content-Length'] = '<verified file size>'
+        r['put_response'] = json.loads(r['put_response'])
+    if 'bytes' in r:
+        r['bytes'] = '<verified file size>'
+    print('live archive digest', filename, digest)
+    r['sha256'] = '<verified live digest>'
+
+stamp_pattern = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)')
+def stable_stamp(match):
+    stamp = dt.datetime.fromisoformat(match[0].replace('Z', '+00:00'))
+    # The fixed effective dates and service observations outside this session remain literal.
+    return '<session timestamp>' if abs((stamp - written).total_seconds()) < 3600 else match[0]
+
+encoded = json.dumps(memo, sort_keys=True, separators=(',', ':'))
+actual = hashlib.sha256(stamp_pattern.sub(stable_stamp, encoded).encode()).hexdigest()
+print('reconciliation stable fields', actual)
+assert actual == 'EXPECTED_STABLE'
+print('/workspace/out/reconciliation.json stable fields: OK')
+PYINTRA
+`

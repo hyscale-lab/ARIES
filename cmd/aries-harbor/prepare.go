@@ -468,13 +468,13 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	case "cfff4007-c001-4e29-950d-eb1a1e8a7bb0":
 		cmd += intrastatFirstFinal
 	case "506d9672-f546-46ed-8232-37ed8009fe96":
-		cmd += "\necho 'a20c1dc1a57e21a88ca4bc3b6a1e8cbd841e35259a97b29ec7169dca7791751b  /workspace/out/reconciliation.json' | sha256sum -c -"
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "0b56c06fde361bcedac3fa1634e2947fcc0e22a68e7257317c9ea703211bd6e9")
 	case "b2e0b98c-215e-48ab-aece-c16b1420b59a":
-		cmd += "\necho '5bc363aacd0316dde574115bd82f6fd0d6acfa90af3594ba97c18a47a58bc4c2  /workspace/out/reconciliation.json' | sha256sum -c -"
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "ec6857941506ecff75853f02372bbf3ac50b20cf802bfd0f8494036df585e0e4")
 	case "0e67fd64-d0a0-4afb-9afe-17e48f2f0719":
-		cmd += "\necho 'ebe7931a7f45f4ce7dea71c76d6f70cbec6d0fe0b44f8d7950cdf132638c8a54  /workspace/out/reconciliation.json' | sha256sum -c -"
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "3ff63377a34299c22028fc2f4c25fc6554ab4eb3af15448199de77deb30c2d60")
 	case "1a3d9576-5102-4784-a660-6129aedee85c":
-		cmd += "\necho '19384fcae8dccc78d2dd4cbb8695e101485f5ded049cb4b882dee10c2369da3b  /workspace/out/reconciliation.json' | sha256sum -c -"
+		cmd += strings.ReplaceAll(intrastatLaterFinal, "EXPECTED_STABLE", "6c6d600f157417e8f6d29c909ec54720342f6660ad9be1c7c738d5614dd797dc")
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:
