@@ -19,7 +19,7 @@ peer=${ZB_TB41_PEER_UNIT:-}
 sampler=${ZB_TB41_SAMPLER:-$trace/sample.py}
 if [[ -n "$peer" ]]; then
     flock -sn 8
-    export ZB_TB41_PLACEMENT_SAMPLER="$sampler"
+    export ZB_TB41_PLACEMENT=colocated ZB_TB41_PLACEMENT_SAMPLER="$sampler"
     sampler="$trace/placement-sampler"
     python3 -B "$trace/placement.py" "$unit" "$runtime" "$peer" >"$out/placement.json"
 else
