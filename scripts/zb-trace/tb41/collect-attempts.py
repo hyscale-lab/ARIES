@@ -26,7 +26,7 @@ def collect(host, cache, results, stage='/local/zb-tb41-cohort/runs'):
             cache.mkdir(parents=True,exist_ok=True)
             with TemporaryDirectory(dir=cache) as tmp:
                 path=Path(tmp)
-                with subprocess.Popen([*command,f'sudo tar czf - -C {stage} {run} {name} {run}.driver'],stdout=subprocess.PIPE) as proc:
+                with subprocess.Popen([*command,f'sudo nice -n 19 ionice -c 3 tar czf - -C {stage} {run} {name} {run}.driver'],stdout=subprocess.PIPE) as proc:
                     with tarfile.open(fileobj=proc.stdout,mode='r|gz') as archive:
                         for info in archive:
                             if not (info.isfile() or info.isdir()):
