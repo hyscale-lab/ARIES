@@ -13,7 +13,9 @@ case "$trial" in
 esac
 bridge=zbpayments198
 sidecars="$out.sidecars"
-mkdir -m 0700 "$sidecars"
+[[ "$out" =~ -[0-9]{2}$ ]]
+network_prefix="zbp${trial:0:4}${out: -2}"
+mkdir -m 0700 "$sidecars" "$sidecars/runc"
 runc=("$runtime/bin/runc" --root "$sidecars/runc")
 
 # The bridge has no host addresses or uplink. The VM's nominal gateway is unassigned.
@@ -24,11 +26,11 @@ created=()
 finish() {
     rc=$?
     trap - EXIT
-    for name in "${created[@]}"; do
-        if "${runc[@]}" state "$name" >/dev/null 2>&1; then
-            "${runc[@]}" delete --force "$name" || rc=1
+    for item in "${created[@]}"; do
+        if "${runc[@]}" state "zbp-$item" >/dev/null 2>&1; then
+            "${runc[@]}" delete --force "zbp-$item" || rc=1
         fi
-        ip netns delete "$name" || rc=1
+        ip netns delete "$network_prefix${item:0:1}" || rc=1
     done
     ip link delete "$bridge" || rc=1
     "${runc[@]}" list --format json >"$sidecars/remaining.json" || rc=1
@@ -45,14 +47,14 @@ ip link set "$bridge" up
 test -z "$(ip -o addr show dev "$bridge")"
 
 for item in kafka customer seeder; do
-    name="zbp-$item"
+    name="$network_prefix${item:0:1}"
     case "$item" in
         kafka) last=2 ;;
         customer) last=3 ;;
         seeder) last=4 ;;
     esac
     ip netns add "$name"
-    created+=("$name")
+    created+=("$item")
     ip link add "$name" type veth peer name eth0 netns "$name"
     ip link set "$name" master "$bridge"
     ip link set "$name" up
