@@ -114,6 +114,9 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 		return nextjsSourceSetup(r.Trial)
 	}
 	task, ok := taskSetups[r.Task]
+	if alias := intrastatAliases[r.Trial]; alias != "" {
+		task.initialCheck += strings.ReplaceAll(intrastatAliasSetup, "ALIAS", alias)
+	}
 	if r.Trial == "3102c53f-5ea4-45e6-b7bf-2ee5c8698518" {
 		// This recording invokes the original argv[0] patch alias by its full path.
 		task.initialCheck += `
@@ -464,6 +467,14 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	switch r.Trial {
 	case "cfff4007-c001-4e29-950d-eb1a1e8a7bb0":
 		cmd += "\necho '43aa929ede833faa97e5806adf8aa477520940d4a2384d17d0bbd3b17f6116ef  /workspace/out/reconciliation.json' | sha256sum -c -"
+	case "506d9672-f546-46ed-8232-37ed8009fe96":
+		cmd += "\necho 'a20c1dc1a57e21a88ca4bc3b6a1e8cbd841e35259a97b29ec7169dca7791751b  /workspace/out/reconciliation.json' | sha256sum -c -"
+	case "b2e0b98c-215e-48ab-aece-c16b1420b59a":
+		cmd += "\necho '5bc363aacd0316dde574115bd82f6fd0d6acfa90af3594ba97c18a47a58bc4c2  /workspace/out/reconciliation.json' | sha256sum -c -"
+	case "0e67fd64-d0a0-4afb-9afe-17e48f2f0719":
+		cmd += "\necho 'ebe7931a7f45f4ce7dea71c76d6f70cbec6d0fe0b44f8d7950cdf132638c8a54  /workspace/out/reconciliation.json' | sha256sum -c -"
+	case "1a3d9576-5102-4784-a660-6129aedee85c":
+		cmd += "\necho '19384fcae8dccc78d2dd4cbb8695e101485f5ded049cb4b882dee10c2369da3b  /workspace/out/reconciliation.json' | sha256sum -c -"
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:
