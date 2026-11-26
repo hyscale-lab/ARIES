@@ -29,3 +29,40 @@ const intrastatAliasSetup = `
 mkdir -p /root/.codex/tmp/arg0/ALIAS
 ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex /root/.codex/tmp/arg0/ALIAS/apply_patch
 test -x /root/.codex/tmp/arg0/ALIAS/apply_patch`
+
+const intrastatFirstFinal = `
+python - <<'PYINTRA'
+import datetime, hashlib, json
+from pathlib import Path
+
+root = Path('/workspace/out')
+memo = json.loads((root / 'reconciliation.json').read_bytes())
+def utc(value):
+    stamp = datetime.datetime.fromisoformat(value)
+    assert stamp.utcoffset() == datetime.timedelta(0)
+    return '<UTC timestamp>'
+for ticket in memo['tickets']:
+    ticket['ts'] = utc(ticket['ts'])
+memo['written_at'] = utc(memo['written_at'])
+times = {f['direction']: f['filed_at'] for f in memo['filings']}
+for filing in memo['filings']:
+    filing['filed_at'] = utc(filing['filed_at'])
+for entry in memo['archive_manifest']:
+    name = Path(entry['path']).name
+    direction = name.split('-', 1)[0]
+    assert entry['metadata']['X-DMS-Filed-At'] == times[direction]
+    entry['metadata']['X-DMS-Filed-At'] = utc(times[direction])
+    body = (root / name).read_bytes()
+    assert entry['bytes'] == len(body) and entry['sha256'] == hashlib.sha256(body).hexdigest()
+    if name.endswith('-receipt.pdf'):
+        assert body.startswith(b'%PDF') and b'%%EOF' in body
+    else:
+        assert name.endswith('-filed.xml')
+    print('live-archive', name, entry['sha256'], len(body))
+    del entry['sha256'], entry['bytes']
+stable = hashlib.sha256(json.dumps(memo, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+print('reconciliation stable fields', stable)
+assert stable == '166fa61ed631d20a3000d7af3f941e72a06698300a61400e8a86c85e11fbc9f0'
+print('/workspace/out/reconciliation.json stable fields: OK')
+PYINTRA
+`

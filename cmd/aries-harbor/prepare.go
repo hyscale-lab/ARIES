@@ -466,7 +466,7 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	}
 	switch r.Trial {
 	case "cfff4007-c001-4e29-950d-eb1a1e8a7bb0":
-		cmd += "\necho '43aa929ede833faa97e5806adf8aa477520940d4a2384d17d0bbd3b17f6116ef  /workspace/out/reconciliation.json' | sha256sum -c -"
+		cmd += intrastatFirstFinal
 	case "506d9672-f546-46ed-8232-37ed8009fe96":
 		cmd += "\necho 'a20c1dc1a57e21a88ca4bc3b6a1e8cbd841e35259a97b29ec7169dca7791751b  /workspace/out/reconciliation.json' | sha256sum -c -"
 	case "b2e0b98c-215e-48ab-aece-c16b1420b59a":
