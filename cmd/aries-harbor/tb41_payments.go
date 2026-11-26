@@ -42,7 +42,8 @@ test -x /root/.codex/tmp/arg0/CAPTURED_ALIAS/apply_patch
 `
 
 const paymentsWheelCheck = `
-test "$(python -m pip config get global.no-index)" = true
+python -m pip config list | grep -Fx "global.no-index='true'"
+python -m pip config list | grep -Fx "global.find-links='/opt/payments-wheels'"
 python -c 'from importlib.util import find_spec; assert find_spec("orjson") is None and find_spec("zstandard") is None'
 sha256sum -c <<'ARIESPAYMENTSWHEELS'
 b48f59114fe318f33bbaee8ebeda696d8ccc94c9e90bc27dbe72153094e26f41  /opt/payments-wheels/orjson-3.10.15-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
