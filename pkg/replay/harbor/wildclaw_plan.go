@@ -135,6 +135,10 @@ func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
 	return r, nil
 }
 
+// The pinned OpenClaw exec tool uses these defaults when the source omitted both fields.
+const openClawDefaultYieldMS = 10000
+const openClawDefaultTimeoutSeconds = 1800
+
 func wildClawLiveCall(c WildClawSourceCall, sessionCWD string) (replay.Call, error) {
 	call := replay.Call{ToolCallID: c.ID, Sequence: c.Sequence}
 	if c.Reply == nil || c.Reply.IsError == nil || *c.Reply.IsError {
@@ -169,6 +173,7 @@ func wildClawLiveCall(c WildClawSourceCall, sessionCWD string) (replay.Call, err
 			YieldMS          int `json:"yieldMs"`
 			Timeout          int
 		}
+		args.YieldMS, args.Timeout = openClawDefaultYieldMS, openClawDefaultTimeoutSeconds
 		if err := json.Unmarshal(c.Arguments, &args); err != nil {
 			return call, err
 		}

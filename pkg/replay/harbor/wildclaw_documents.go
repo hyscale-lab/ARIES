@@ -32,6 +32,9 @@ func documentCall(c WildClawSourceCall, handles map[string]int, sessionCWD strin
 		ExitCode                      *int32
 	}
 	var content []struct{ Type, Text string }
+	if c.Name == "exec" {
+		args.YieldMS, args.Timeout = openClawDefaultYieldMS, openClawDefaultTimeoutSeconds
+	}
 	if err := json.Unmarshal(c.Arguments, &args); err != nil {
 		return call, err
 	}

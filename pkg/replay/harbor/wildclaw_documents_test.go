@@ -15,6 +15,10 @@ func TestDocumentPollBindsOriginalOpenClawName(t *testing.T) {
 	if err != nil || missing.Workdir != "/root" || missing.ExitCode != 127 {
 		t.Fatal(missing, err)
 	}
+	omitted, err := documentCall(call("exec", `{"command":"true","workdir":"/root"}`, `{"status":"completed","cwd":"/root","exitCode":0,"aggregated":"ok"}`), nil, "/root")
+	if err != nil || omitted.YieldTime != 10*time.Second || omitted.Timeout != 30*time.Minute {
+		t.Fatalf("pinned OpenClaw defaults: %+v %v", omitted, err)
+	}
 	handles := map[string]int{}
 	launch, err := documentCall(call("exec", `{"command":"true","yieldMs":1000,"timeout":120}`, `{"status":"running","sessionId":"marine-haven","pid":152,"cwd":"/root"}`), handles, "/root")
 	if err != nil || launch.Workdir != "/root" || launch.Operation != "StartProcess" || launch.SourceHandle != "marine-haven" || launch.ExitCode != ProcessRunning || launch.YieldTime != time.Second {
