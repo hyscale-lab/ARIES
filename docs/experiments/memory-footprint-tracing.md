@@ -347,3 +347,12 @@ repository changes. The exact original Firecracker delta and dependency pins
 remain the recovery reference; the separately versioned optimization overlay
 is explicit in its manifest. No private worker artifact is required as a build
 or collection input.
+
+For the reviewed TB 4.1 shard retries, `shard-rerun.sh` keeps the original
+guest commands, tool dispatches and runnable gaps. The two-thread diagnostic
+sets `OMP_NUM_THREADS=2` in the workload environment and records a restored
+guest readback. The third original can load a public certificate scoped to its
+private historical HTTPS network. The source curl commands fetch the pinned
+responses during replay. The original complete Gutenberg digest is unknown.
+After the runner verifies the private raw archive, use `retire-shard-repair.sh`
+to remove the owned service, thin pool and worker stage.
