@@ -221,7 +221,7 @@ func uploadPinned(ctx context.Context, m *vhive.Manager, id, file, expected, dir
 	return m.UploadArchive(ctx, id, dir, r)
 }
 
-func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages, curlPackages, grpcTools, hfHarness string) (string, any, error) {
+func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, tools, packages, curlPackages, grpcTools, hfHarness, shardSciPy string) (string, any, error) {
 	if r.Task == "fix-git" {
 		out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python3", Args: []string{"-c", initialGitState}, Dir: r.Workdir})
 		if err != nil || !json.Valid([]byte(out)) {
@@ -291,6 +291,15 @@ ARIESPATH`}})
 		}
 	}
 	initial := task.initialCheck
+	if shardSciPy != "" {
+		if _, err := checked(ctx, m, id, core.Command{Path: "/usr/bin/install", Args: []string{"-d", pretrainShardWheelDirectory}}); err != nil {
+			return "", nil, err
+		}
+		if err := uploadPinned(ctx, m, id, shardSciPy, pretrainShardSciPyArchive, pretrainShardWheelDirectory); err != nil {
+			return "", nil, err
+		}
+		initial += pretrainShardSciPyReady
+	}
 	if hfHarness != "" {
 		if err := prepareHFInspection(ctx, m, id, hfHarness); err != nil {
 			return "", nil, err
@@ -339,6 +348,9 @@ rg --version | head -1`
 		pkgField = "ubuntu_packages_sha256"
 	}
 	details := map[string]string{"codex_prefix_sha256": codexPrefixSHA, pkgField: task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}
+	if shardSciPy != "" {
+		details["scipy_wheel_archive_sha256"] = pretrainShardSciPyArchive
+	}
 	if hfHarness != "" {
 		details["curated_plugins_commit"] = hfPluginsCommit
 		details["curated_plugins_archive_sha256"] = hfPluginsArchive
@@ -477,6 +489,9 @@ sha256sum drift_monitor/*.py`
 		cmd += bipedFinalCheck
 	}
 	if r.Task == pretrainShardTask {
+		if r.Trial == pretrainShardSciPyTrial {
+			cmd += pretrainShardSciPyFinal
+		}
 		cmd += pretrainShardFinal
 	}
 	if r.Task == vppLossTask {

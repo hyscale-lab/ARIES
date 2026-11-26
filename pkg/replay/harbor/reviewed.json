@@ -243,7 +243,8 @@
       "write_stdin"
     ],
     "effects": [
-      "Inspect, reconstruct, and validate local numerical token shards. Train two CPU ranks on private data over loopback and write model checkpoints and a recovery report."
+      "Inspect, reconstruct, and validate local numerical token shards. Train two CPU ranks on private data over loopback and write model checkpoints and a recovery report.",
+      "The fifth source installs and removes a date-matched SciPy wheel using unchanged pip commands and no external guest network."
     ],
     "trials": [
       {
@@ -260,6 +261,11 @@
         "trial": "1d577700-1aa3-4bf8-a92e-d0bb6dea1925",
         "trajectory_sha256": "172002a0da22484c55ff7a2375cd9f91493fb0fdfa07d04e4d3a85a15b0ebed5",
         "rollout_sha256": "f466c6d0cb103fb204d7ee69462fc4742b7587781b192a9eed460a1974b9c3f4"
+      },
+      {
+        "trial": "14bdc7ee-84ce-4083-8e4c-c093b1551fca",
+        "trajectory_sha256": "f7bcdf2d92ebdc6e3872a89d6ae009afd5cfbe5631321f074f0e16bd05e7e14c",
+        "rollout_sha256": "de77959479938a2f08a50f6ff03bb5fd4c6fa68e1aa464261a40df53316ab8d1"
       }
     ]
   },
