@@ -1,5 +1,32 @@
 [
   {
+    "task": "hof-topology-interpenetration",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-hof-topology-interpenetration@sha256:d5db936be8f7a1b25b7d694ba92eba72220e418e259a19884359b4b657bb1276",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "needs_network": true,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "effects": [
+      "Analyze the seven local crystal structures, install the scientific Python wheels and the dated Ubuntu JRE, and retrieve public Gavrog release metadata, the Systre JAR and Java source. Final readback verifies both downloaded input files."
+    ],
+    "trials": [
+      {
+        "trial": "27c84b6a-af43-4332-9ba4-0f70ab1e160d",
+        "trajectory_sha256": "7f75b23fcde6a90ecb346a94f92a434536d395ed02c0343d3a7a2af3389a4c85",
+        "rollout_sha256": "3b9d5fb337080112bd12ac3641704f67aea505501751a7106823f826d229bb82"
+      }
+    ]
+  },
+  {
     "task": "embedding-drift-monitor",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-embedding-drift-monitor@sha256:63f78bde4225e2199f869cbd4130e0ee8280eff8eed87303075586c6486dd672",

@@ -8,6 +8,7 @@ import (
 )
 
 const hofTopologyTask = "hof-topology-interpenetration"
+const hofSystreTrial = "27c84b6a-af43-4332-9ba4-0f70ab1e160d"
 const hofTopologyOfflineTrial = "aabc93fe-c1d8-4e28-af4b-e4e9bcee0540"
 
 // The pinned wheel set is a dated reconstruction. It preserves in-session

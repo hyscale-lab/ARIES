@@ -117,6 +117,10 @@ mkdir -p /root/.codex/tmp/arg0/codex-arg0PK2zte
 ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch
 test -x /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch`
 	}
+	if r.Trial == hofSystreTrial {
+		task.initialCheck = strings.ReplaceAll(task.initialCheck, "codex-arg02OZDT5", "codex-arg0w7w0OR")
+		task.initialCheck += financialAptSetup(financialAptProfile{Snapshot: "20260831T073500Z"})
+	}
 	if r.Task == "git-leak-recovery" {
 		task.initialCheck += gitRecoveryTemp(r.Trial)
 	}
@@ -233,7 +237,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 		}
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
-	if r.Trial == hofTopologyOfflineTrial {
+	if r.Trial == hofTopologyOfflineTrial || r.Trial == hofSystreTrial {
 		if err := stageHOFWheels(ctx, m, id, packages); err != nil {
 			return "", nil, err
 		}
@@ -412,6 +416,15 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	if r.Task == "sanitize-git-repo" {
 		cmd += "\nfind . -type f -not -path './.git/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
 	}
+	if r.Trial == hofSystreTrial {
+		cmd += `
+sha256sum -c <<'SYSTRE'
+0d272e98a1a21669bc67a809b95c014ba2a2fb39a6fd2147039201216ab0d48d  /app/solution/tools/Systre.jar
+e09244a29e8299ea7e47e6d10778c1cfecc49bbab77ee702ce592662715fcb60  /app/solution/tools/SystreCmdline.java
+SYSTRE
+java -version
+dpkg-query -W openjdk-21-jre-headless default-jre-headless`
+	}
 	if r.Task == "embedding-drift-monitor" {
 		cmd += `
 test "$(sha256sum drift_monitor/*.py | sha256sum)" != 'a321e7570ddc8e9b6220dc3bd2e9c38b209eb49ab0398558e8dd521d0c27157c  -'
@@ -506,6 +519,13 @@ with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/I
 	}
 	if task == financialTask {
 		python = "/usr/bin/python3"
+	}
+	if recording.Trial == hofSystreTrial {
+		python = "/opt/venv/bin/python"
+		probe = `import json,socket,urllib.request
+hosts = ["api.github.com","github.com","raw.githubusercontent.com","release-assets.githubusercontent.com","snapshot.ubuntu.com"]
+with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/ubuntu/20260831T073500Z/dists/noble/InRelease",method="HEAD"),timeout=15) as response:
+    print(json.dumps({"snapshot_status":response.status,"addresses":{h:sorted({a[4][0] for a in socket.getaddrinfo(h,443)}) for h in hosts}}))`
 	}
 	if task == datasetTask {
 		// This recording times both mutable API URLs at step 7. Its own guest

@@ -16,6 +16,9 @@ while IFS=$'\t' read -r task original source python codex os image_helper; do
     [[ "$codex" == - ]] || flags+=(-codex-tools "$stage/fixtures/$codex")
     [[ "$os" == - ]] || flags+=(-os-tools "$stage/fixtures/$os")
     [[ -z "$image_helper" || "$image_helper" == - ]] || flags+=(-image-helper "$stage/fixtures/$image_helper")
+    if [[ "$original" == 27c84b6a-af43-4332-9ba4-0f70ab1e160d ]]; then
+        flags+=(-cni-network zbhof183 -cni-conf-dir "$stage/cni/conf" -cni-cache-dir "$stage/cni/cache" -cni-bin-dir "$stage/cni/bin")
+    fi
     status=0
     ZB_SOURCE_DIR="$stage/sources/$source" ZB_GUEST_PYTHON="$python" \
         bash "$stage/zb-trace/tb41/pilot.sh" "$stage" "$runtime" "$unit" traced "$out" "${flags[@]}" >"$out.driver" 2>&1 || status=$?
