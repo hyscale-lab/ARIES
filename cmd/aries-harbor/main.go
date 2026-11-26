@@ -386,7 +386,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		if err != nil {
 			return err
 		}
-		if r.Trial == "be1d1d11-8af3-404e-9238-e4597b6552e2" {
+		if r.Task == nextjsTask {
 			groups.python = "/opt/aries-python/bin/python3"
 		}
 		groups.onlyInterruptible = !groupMode
