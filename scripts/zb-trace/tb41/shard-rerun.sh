@@ -9,7 +9,7 @@ unit="fcmod-zepbound-$node-shard-repair"
 runtime="$stack/runtime"
 stage="$stack/replay"
 case "$source" in
-    1ef39d1f|1d577700|14bdc7ee) ;;
+    1ef39d1f|1d577700|14bdc7ee|9c75c09e) ;;
     *) exit 2 ;;
 esac
 case "$arm" in
@@ -23,6 +23,13 @@ mkdir -p "$stack/runs"
 flags=(-codex-tools "$stage/fixtures/codex-harbor-tools.tar.gz" -os-tools "$stage/fixtures/circuit-patch-debs.tar.gz")
 if [[ "$source" == 14bdc7ee ]]; then
     flags+=(-shard-scipy-wheel "$stage/fixtures/shard-wave5-scipy.tar.gz")
+fi
+if [[ "$source" == 9c75c09e ]]; then
+    [[ "$node" == amd200 ]]
+    cni="$stage/cni"
+    flags+=(-cni-network zb-shard-history-200 -cni-conf-dir "$cni/conf"
+            -cni-cache-dir "$cni/cache" -cni-bin-dir "$cni/bin"
+            -shard-history-ca "$cni/cert.pem")
 fi
 if [[ "$arm" == omp-two ]]; then
     flags+=(-diagnostic-shard-omp-two)

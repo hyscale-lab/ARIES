@@ -90,6 +90,7 @@ func command(ctx context.Context) error {
 	osTools := flag.String("os-tools", "", "pinned task-specific offline package archive")
 	shardSciPy := flag.String("shard-scipy-wheel", "", "pinned local SciPy wheel archive for the fifth pretraining shard source")
 	shardOMP := flag.Bool("diagnostic-shard-omp-two", false, "use two OpenMP threads per rank in a reviewed shard replay diagnostic")
+	shardHistoryCA := flag.String("shard-history-ca", "", "TLS certificate for the reviewed third shard original download fixture")
 	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
 	probe := flag.String("guest-probe", "", "optional guest telemetry executable for diagnostic runs")
 	sampler := flag.String("sampler", "", "host sample_vmm.py")
@@ -286,6 +287,9 @@ func command(ctx context.Context) error {
 	if *shardOMP && (r.Task != pretrainShardTask || !pretrainShardTimingTrial(r.Trial)) {
 		return errors.New("two OpenMP threads require a reviewed shard timing diagnostic")
 	}
+	if *shardHistoryCA != "" && (r.Trial != pretrainShardLiveTrial || o.CNINetwork != pretrainShardHistoryNetwork) {
+		return errors.New("the historical download fixture requires its reviewed source and isolated network")
+	}
 	if (*sampler == "") != (*samples == "") {
 		return errors.New("provide -sampler and -samples together")
 	}
@@ -307,10 +311,10 @@ func command(ctx context.Context) error {
 	if *periodicSocket != "" && (*observer != "" || *intraStep != 0 || *probe != "") {
 		return errors.New("periodic collector owns all trace boundaries")
 	}
-	return native(ctx, o, r, *image, *periodicSocket, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *shardSciPy, *paymentsVerifier, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, *shardOMP, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *periodicSocket, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *curlPackages, *grpcTools, *hfHarness, *imageHelper, *videoIPP, *shardSciPy, *shardHistoryCA, *paymentsVerifier, *videoDifferences, *processDrift, *relaxedML, *timingAudit, *bnFit, *opamLog, *opamPID, useGroups, *grpcNetDiag, *routeOnly, *ipv4Addrs, *storage, *hfHostCPU, *shardOMP, sourceCPU, *torchGloo, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, periodicSocket, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP, shardSciPy, paymentsVerifier string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, shardOMP, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, periodicSocket, observer, sampler, samples, rg, probe, codexTools, osTools, curlPackages, grpcTools, hfHarness, imageHelper, videoIPP, shardSciPy, shardHistoryCA, paymentsVerifier string, videoDifferences, processDrift, relaxedML, timingAudit, bnFit, opamLog, opamPID, groupMode, grpcNetDiag, routeOnly, ipv4Addrs bool, storage, hfHostCPU int, shardOMP, sourceCPU bool, torchGloo string, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -341,6 +345,9 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if shardOMP {
 		req.Env = []string{"OMP_NUM_THREADS=2"}
 	}
+	if shardHistoryCA != "" {
+		req.Env = append(req.Env, "CURL_CA_BUNDLE="+pretrainShardHistoryCAPath)
+	}
 	req.PrivateHostsFile = r.Task == claimsTask || r.Task == paymentsTask || r.Task == "intrastat-meldung" || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	if r.Task == "freight-dispatch-shift" {
 		req.PrivateHostsFile = true
@@ -368,6 +375,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if err = m.Validate(validateCtx, id, req, nil); err != nil {
 		logErr := log.Encode(map[string]any{"event": "validation_error", "error": err.Error(), "command_timing": timings.Snapshot()})
 		return errors.Join(err, logErr)
+	}
+	if shardHistoryCA != "" {
+		if err := stageShardHistoryCA(ctx, m, id, shardHistoryCA, log); err != nil {
+			return err
+		}
 	}
 	imageHelperSHA := "b06faaf4f96c04e41d6808ee8e38317ea1fd19c68b20693b2045c8fe7e712bc9"
 	if r.Task == claimsTask || r.Task == "music-harmony" || r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
