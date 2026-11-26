@@ -43,6 +43,28 @@ scripts/harbor-replay/run-traced.sh ./bin/aries-harbor scripts/zb-trace /path/to
 
 ## Terminal-Bench 4.1 replay pilot
 
+The medical claims first wave binds the source trajectory and rollout for
+trial `a6bd7657` to the three digest-pinned published images. The workspace
+uses the benchmark's synthetic seed. The main task reaches it through a
+task-private `workspace` alias on loopback, and Chromium opens the same server
+on the private VM network. The companion runs the published entrypoint with a
+resolvable private hostname for TigerVNC and a fresh Chromium profile
+initialized to load the configured workspace directly. The fixture resolves
+the pinned MCP package from the published image's installed files. The readiness check
+requires the original frontend asset, a clean synthetic case index, a Chromium tab,
+CDP and Playwright SSE before snapshot and after restore. Final readback
+checks the original engine hash, the local saved decisions and their counts.
+
+For this worker, the [provisioner](../../scripts/zb-trace/tb41/fixtures/claims-wave1-provision-amd183.sh)
+creates a separate 20 GiB devmapper runtime from the quiet v5 stack. Stage the
+[image pins](../../scripts/zb-trace/tb41/fixtures/claims-wave1-images.tsv) as
+`images.tsv` and the source pair as `source/{trajectory,rollout}` in
+`/local/zb-tb41-medical-wave1`. Stage the built `aries-harbor`, `zb-trace`
+scripts with `tb41/native-deep-scan`, and the campaign bitmap VMM at
+`bitmap/firecracker`. Then run the
+[driver](../../scripts/zb-trace/tb41/fixtures/claims-wave1-amd183.sh) under the
+same placement locks and collect the redacted trace.
+
 The 4.1 cohort pilot uses the [original `roy-polymorph-cn` trial](https://hub.harborframework.com/jobs/a538f69d-7756-444a-9dfe-43a0ab10b3a8/trials/d16a13fe-8381-4594-b6f6-60bb6f3aa660) from the Terminal-Bench 4.0 job that Harbor regraded. ARIES pins the original artifact pair, source job and row, and the OCI manifest rebuilt from the [original task Dockerfile and data](https://github.com/harbor-framework/terminal-bench/tree/452bf305c6daa62fc59061d22133a7cbc7c1572e/tasks/roy-polymorph-cn). Import the digest-qualified image into the selected containerd namespace before starting the pilot. Guest readiness verifies the task inputs, virtual environment, first-run output paths and the absence of the command that produced the recorded exit 2. The five guest replies should be `0, 0, 0, 2, 0` in source order. One recorded web action and the plan updates remain host-side timeline events.
 
 ```sh

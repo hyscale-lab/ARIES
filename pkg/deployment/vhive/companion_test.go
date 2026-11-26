@@ -158,6 +158,8 @@ func TestExplicitCompanionOptions(t *testing.T) {
 		{"mutable tag", []CompanionTask{{Role: "health", Image: "example:latest"}}, "", false},
 		{"empty argv zero", []CompanionTask{{Role: "health", Image: image, Command: []string{""}}}, "", false},
 		{"negative shared memory size", []CompanionTask{{Role: "browser", Image: image, ShmSizeMiB: -1}}, "", false},
+		{"loopback hostname", []CompanionTask{{Role: "browser", Image: image, Hostname: "localhost"}}, "", true},
+		{"invalid hostname", []CompanionTask{{Role: "browser", Image: image, Hostname: "bad/name"}}, "", false},
 		{"conflicting legacy", []CompanionTask{{Role: "health", Image: image}}, image, false},
 	} {
 		t.Run(trial.name, func(t *testing.T) {

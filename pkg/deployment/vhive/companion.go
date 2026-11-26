@@ -25,7 +25,8 @@ type CompanionTask struct {
 	Role       string
 	Image      string
 	Command    []string
-	ShmSizeMiB int64 // Zero keeps containerd's default /dev/shm size.
+	Hostname   string // Empty uses the guest's default UTS hostname.
+	ShmSizeMiB int64  // Zero keeps containerd's default /dev/shm size.
 }
 
 type companionBinding struct {
@@ -63,6 +64,9 @@ func companionBindings(tasks []CompanionTask) ([]companionBinding, error) {
 		bindings = append(bindings, companionBinding{Role: task.Role, Image: task.Image})
 		if task.ShmSizeMiB < 0 || task.ShmSizeMiB > math.MaxInt64/(1024*1024) {
 			return nil, fmt.Errorf("vHive companion %q has an invalid /dev/shm size", task.Role)
+		}
+		if task.Hostname != "" && (len(task.Hostname) > 64 || identifiers.Validate(task.Hostname) != nil) {
+			return nil, fmt.Errorf("vHive companion %q has an invalid hostname", task.Role)
 		}
 		if len(task.Command) != 0 && task.Command[0] == "" {
 			return nil, fmt.Errorf("vHive companion %q has an empty command", task.Role)
@@ -133,6 +137,9 @@ func (m *Manager) prepareCompanion(ctx context.Context, vmID string, binding com
 	opts := companionSpecOptions(vmID, task.ShmSizeMiB)
 	if len(task.Command) > 0 {
 		opts = append(opts, oci.WithProcessArgs(task.Command...))
+	}
+	if task.Hostname != "" {
+		opts = append(opts, oci.WithLinuxNamespace(specs.LinuxNamespace{Type: specs.UTSNamespace}), oci.WithHostname(task.Hostname))
 	}
 	if err = prepareTask(ctx, container, id, image, opts); err != nil {
 		return nil, fmt.Errorf("prepare guest companion %s: %w", binding.Role, err)

@@ -240,6 +240,9 @@ func command(ctx context.Context) error {
 	if o.CompanionImage != requiredCompanion {
 		return fmt.Errorf("companion image differs from the source fixture for trial %s", r.Trial)
 	}
+	if r.Task == claimsTask {
+		o.Companions = claimsCompanions
+	}
 	if r.NeedsNetwork != (o.CNINetwork != "") {
 		return fmt.Errorf("source %s requires guest network enabled=%t", r.Trial, r.NeedsNetwork)
 	}
@@ -318,7 +321,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if videoIPP != "" {
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
 	}
-	req.PrivateHostsFile = r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
+	req.PrivateHostsFile = r.Task == claimsTask || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
@@ -429,6 +432,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if err = log.Encode(map[string]any{"event": event, "begin_monotonic_ns": prepBegin, "end_monotonic_ns": prepEnd, "state": state}); err != nil {
 		return err
 	}
+	if r.Task == claimsTask {
+		if err := claimsReady(ctx, m, id, "before_snapshot", log); err != nil {
+			return err
+		}
+	}
 	if err = verifyVideoRuntime(ctx, m, id, videoIPP, "before_snapshot", log); err != nil {
 		return err
 	}
@@ -479,6 +487,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	}
 	if err = lifecycle("restore_complete"); err != nil {
 		return err
+	}
+	if r.Task == claimsTask {
+		if err := claimsReady(ctx, m, id, "after_restore", log); err != nil {
+			return err
+		}
 	}
 	if err = verifyVideoRuntime(ctx, m, id, videoIPP, "after_restore", log); err != nil {
 		return err

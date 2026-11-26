@@ -1,5 +1,27 @@
 [
   {
+    "task": "medical-claims-processing",
+    "workdir": "/app",
+    "image": "docker.io/harborframework/terminal-bench@sha256:dc51c3e3da8c9b5758b095543f94f4c5082ff401a8d63414a2898708e787d541",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 16384,
+    "storage_mib": 20480,
+    "needs_network": false,
+    "tools": ["exec_command", "update_plan", "view_image"],
+    "effects": [
+      "Read the synthetic invoices, rule seeds and test cases from the isolated workspace. Modify only the task-local engine and use the documented local engine, reseed and decision APIs. Display the local invoice screenshots. Record output counts and hashes without retaining case contents."
+    ],
+    "trials": [
+      {
+        "trial": "a6bd7657-0446-44ec-86ff-18eccf0382f0",
+        "trajectory_sha256": "fb36938173ed876775d63bab3987ba7e2cd690e4f8fa9ae7afff4738014ebdb1",
+        "rollout_sha256": "93b40fb0593fc647b221b9ba1e1edc2b7447e2aabe1bb3047d86eaec20cde257"
+      }
+    ]
+  },
+  {
     "task": "nextjs-performance",
     "workdir": "/app",
     "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",

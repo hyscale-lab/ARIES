@@ -47,6 +47,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	claimsTask: claimsSetup,
 	"embedding-drift-monitor": {
 		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
 		output: "drift_monitor/monitor.py",
@@ -545,6 +546,9 @@ sha256sum drift_monitor/*.py`
 	}
 	if r.Task == datasetTask {
 		cmd += datasetFinal
+	}
+	if r.Task == claimsTask {
+		cmd += claimsFinal
 	}
 	if r.Task == "compile-compcert" {
 		cmd += "\n" + compilerResult(r.Trial)

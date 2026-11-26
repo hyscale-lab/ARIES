@@ -676,11 +676,13 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 			return fmt.Errorf("vHive companion %q: %w", binding.Role, err)
 		}
 		expectedCommand := companionTasks[i].Command
+		expectedHostname := companionTasks[i].Hostname
 		if other.Annotations[vmAnnotation] != id || other.Process == nil || len(other.Process.Args) == 0 ||
 			len(expectedCommand) > 0 && !slices.Equal(other.Process.Args, expectedCommand) ||
+			expectedHostname != "" && other.Hostname != expectedHostname ||
 			spec.Linux.CgroupsPath != filepath.Join("/", m.options.Namespace, id) ||
 			other.Linux.CgroupsPath != filepath.Join("/", m.options.Namespace, companion.ID) {
-			return errors.New("vHive companion VM binding, command or cgroup differs")
+			return errors.New("vHive companion VM binding, command, hostname or cgroup differs")
 		}
 		for _, guest := range []*specs.Spec{spec, other} {
 			for _, ns := range guest.Linux.Namespaces {
