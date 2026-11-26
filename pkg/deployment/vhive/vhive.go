@@ -363,7 +363,7 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	companionContainers := make([]containerd.Container, 0, len(bindings))
 	var companionIDs []string
 	for i, binding := range bindings {
-		companion, err := m.prepareCompanion(ctx, r.Name, binding, companionTasks[i].Command, companionImages[i], labels)
+		companion, err := m.prepareCompanion(ctx, r.Name, binding, companionTasks[i], companionImages[i], labels)
 		if err != nil {
 			return r.Name, err
 		}
@@ -453,11 +453,15 @@ func sandboxSpecOptions(r deployment.Request) []oci.SpecOpts {
 
 func companionID(vmID string) string { return vmID + "-companion" }
 
-func companionSpecOptions(vmID string) []oci.SpecOpts {
-	return []oci.SpecOpts{
+func companionSpecOptions(vmID string, shmSizeMiB int64) []oci.SpecOpts {
+	opts := []oci.SpecOpts{
 		oci.WithAnnotations(map[string]string{vmAnnotation: vmID}),
 		firecrackeroci.WithVMNetwork,
 	}
+	if shmSizeMiB > 0 {
+		opts = append(opts, oci.WithDevShmSize(shmSizeMiB*1024))
+	}
+	return opts
 }
 
 func prepareTask(ctx context.Context, container containerd.Container, id string, image containerd.Image, spec []oci.SpecOpts) error {
@@ -667,6 +671,9 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		}
 		if err := validateGuestSpec(other, false); err != nil {
 			return err
+		}
+		if err := validateCompanionShm(other, companionTasks[i].ShmSizeMiB); err != nil {
+			return fmt.Errorf("vHive companion %q: %w", binding.Role, err)
 		}
 		expectedCommand := companionTasks[i].Command
 		if other.Annotations[vmAnnotation] != id || other.Process == nil || len(other.Process.Args) == 0 ||

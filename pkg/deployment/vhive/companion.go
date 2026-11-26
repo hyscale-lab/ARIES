@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/containerd/containerd/identifiers"
 	"github.com/containerd/containerd/oci"
 	"github.com/distribution/reference"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const companionsLabel = "aries.vhive.companions"
@@ -20,9 +22,10 @@ const companionsLabel = "aries.vhive.companions"
 // CompanionTask is a trusted provider configuration, outside the guest tool
 // contract. An empty Command uses the digest-qualified image command.
 type CompanionTask struct {
-	Role    string
-	Image   string
-	Command []string
+	Role       string
+	Image      string
+	Command    []string
+	ShmSizeMiB int64 // Zero keeps containerd's default /dev/shm size.
 }
 
 type companionBinding struct {
@@ -58,6 +61,9 @@ func companionBindings(tasks []CompanionTask) ([]companionBinding, error) {
 	var bindings []companionBinding
 	for _, task := range tasks {
 		bindings = append(bindings, companionBinding{Role: task.Role, Image: task.Image})
+		if task.ShmSizeMiB < 0 || task.ShmSizeMiB > math.MaxInt64/(1024*1024) {
+			return nil, fmt.Errorf("vHive companion %q has an invalid /dev/shm size", task.Role)
+		}
 		if len(task.Command) != 0 && task.Command[0] == "" {
 			return nil, fmt.Errorf("vHive companion %q has an empty command", task.Role)
 		}
@@ -113,7 +119,7 @@ func storedCompanions(info containers.Container) ([]companionBinding, error) {
 	return bindings, nil
 }
 
-func (m *Manager) prepareCompanion(ctx context.Context, vmID string, binding companionBinding, command []string, image containerd.Image, labels map[string]string) (containerd.Container, error) {
+func (m *Manager) prepareCompanion(ctx context.Context, vmID string, binding companionBinding, task CompanionTask, image containerd.Image, labels map[string]string) (containerd.Container, error) {
 	id := binding.id(vmID)
 	owner := map[string]string{
 		ownerLabel: vmID, "aries.managed": "true", "aries.kind": "task-container", "aries.component": "companion",
@@ -124,14 +130,27 @@ func (m *Manager) prepareCompanion(ctx context.Context, vmID string, binding com
 	if err != nil {
 		return nil, fmt.Errorf("reserve guest companion %s: %w", binding.Role, err)
 	}
-	opts := companionSpecOptions(vmID)
-	if len(command) > 0 {
-		opts = append(opts, oci.WithProcessArgs(command...))
+	opts := companionSpecOptions(vmID, task.ShmSizeMiB)
+	if len(task.Command) > 0 {
+		opts = append(opts, oci.WithProcessArgs(task.Command...))
 	}
 	if err = prepareTask(ctx, container, id, image, opts); err != nil {
 		return nil, fmt.Errorf("prepare guest companion %s: %w", binding.Role, err)
 	}
 	return container, nil
+}
+
+func validateCompanionShm(spec *specs.Spec, sizeMiB int64) error {
+	if sizeMiB == 0 {
+		return nil
+	}
+	want := fmt.Sprintf("size=%dk", sizeMiB*1024)
+	for _, mount := range spec.Mounts {
+		if mount.Destination == "/dev/shm" && mount.Type == "tmpfs" && mount.Source == "shm" && slices.Contains(mount.Options, want) {
+			return nil
+		}
+	}
+	return fmt.Errorf("vHive companion /dev/shm differs from configured size %d MiB", sizeMiB)
 }
 
 func (m *Manager) ownedCompanion(ctx context.Context, main containers.Container, binding companionBinding) (containerd.Container, containers.Container, error) {

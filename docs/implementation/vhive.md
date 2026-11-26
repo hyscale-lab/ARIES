@@ -108,6 +108,11 @@ commands to continue; runtime removal owns termination. Tool output retains the
 normal deadlines and output bounds. File transfers use guest `tar` and `stat`;
 images must provide these, `/bin/sh` and `/bin/sleep`.
 
+Trusted callers of the vHive Manager can set `CompanionTask.ShmSizeMiB` to
+size an individual companion's private `/dev/shm` tmpfs. For example, set it
+to 1024 for a browser companion that requires 1 GiB. Zero uses containerd's
+default size.
+
 The bridge validates the exact runtime, guest VM binding, component, run, task
 and logical running state before granting borrowed execution. Persistent mode
 needs only containerd execution access. Checkpoint mode also needs VM control

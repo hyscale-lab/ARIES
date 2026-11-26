@@ -76,24 +76,44 @@ func TestCompanionAllocationAndCleanup(t *testing.T) {
 	}
 }
 
-func TestCompanionSpecKeepsDistinctCgroupsAndSharedNetwork(t *testing.T) {
+func TestCompanionSpecKeepsDistinctCgroupsAndPrivateShm(t *testing.T) {
 	const id = "sandbox"
 	m := &Manager{options: Options{Namespace: "aries"}}
 	r := deployment.Request{Name: id, Entrypoint: []string{"/bin/sleep"}}
-	ids := []string{id, companionID(id)}
-	for i, opts := range [][]oci.SpecOpts{sandboxSpecOptions(r), companionSpecOptions(id)} {
-		taskID := ids[i]
-		spec, err := oci.GenerateSpec(m.ctx(t.Context()), nil, &containers.Container{ID: taskID}, opts...)
+	for _, task := range []struct {
+		id   string
+		opts []oci.SpecOpts
+		size string
+	}{
+		{id, sandboxSpecOptions(r), "size=65536k"},
+		{companionID(id), companionSpecOptions(id, 0), "size=65536k"},
+		{id + "-browser", companionSpecOptions(id, 1024), "size=1048576k"},
+	} {
+		spec, err := oci.GenerateSpec(m.ctx(t.Context()), nil, &containers.Container{ID: task.id}, task.opts...)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if spec.Annotations[vmAnnotation] != id || spec.Linux.CgroupsPath != filepath.Join("/aries", taskID) {
-			t.Fatalf("task %q: vm=%q cgroup=%q", taskID, spec.Annotations[vmAnnotation], spec.Linux.CgroupsPath)
+		if spec.Annotations[vmAnnotation] != id || spec.Linux.CgroupsPath != filepath.Join("/aries", task.id) {
+			t.Fatalf("task %q: vm=%q cgroup=%q", task.id, spec.Annotations[vmAnnotation], spec.Linux.CgroupsPath)
 		}
 		for _, ns := range spec.Linux.Namespaces {
 			if ns.Type == specs.NetworkNamespace {
-				t.Fatalf("task %q has a private network namespace", taskID)
+				t.Fatalf("task %q has a private network namespace", task.id)
 			}
+		}
+		var shm []specs.Mount
+		for _, mount := range spec.Mounts {
+			if mount.Destination == "/dev/shm" {
+				shm = append(shm, mount)
+			}
+		}
+		want := []specs.Mount{{Destination: "/dev/shm", Source: "shm", Type: "tmpfs",
+			Options: []string{"nosuid", "noexec", "nodev", "mode=1777", task.size}}}
+		if !reflect.DeepEqual(shm, want) {
+			t.Fatalf("task %q /dev/shm mounts = %#v, want %#v", task.id, shm, want)
+		}
+		if err := validateCompanionShm(spec, 1024); (err == nil) != (task.id == id+"-browser") {
+			t.Fatalf("task %q: unexpected custom /dev/shm validation result %v", task.id, err)
 		}
 	}
 }
@@ -137,6 +157,7 @@ func TestExplicitCompanionOptions(t *testing.T) {
 		{"invalid role", []CompanionTask{{Role: "../outside", Image: image}}, "", false},
 		{"mutable tag", []CompanionTask{{Role: "health", Image: "example:latest"}}, "", false},
 		{"empty argv zero", []CompanionTask{{Role: "health", Image: image, Command: []string{""}}}, "", false},
+		{"negative shared memory size", []CompanionTask{{Role: "browser", Image: image, ShmSizeMiB: -1}}, "", false},
 		{"conflicting legacy", []CompanionTask{{Role: "health", Image: image}}, image, false},
 	} {
 		t.Run(trial.name, func(t *testing.T) {
