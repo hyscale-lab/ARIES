@@ -21,7 +21,11 @@ if [[ -n "$helper" ]]; then
     container chmod 755 /usr/local/bin/aries-harbor-image
 fi
 packages=$(jq -r .packages_sha256 "$meta")
-if [[ -n "$packages" ]]; then
+if [[ "$(jq -er .task "$meta")" == hof-topology-interpenetration ]]; then
+    : "${TB41_PACKAGE_ARCHIVE:?}"
+    guest mkdir -p /workload/rootfs/opt/zb-hof
+    upload_archive "$TB41_PACKAGE_ARCHIVE" "$packages" /workload/rootfs/opt/zb-hof
+elif [[ -n "$packages" ]]; then
     : "${TB41_PACKAGE_ARCHIVE:?}"
     guest mkdir /workload/rootfs/tmp/aries-guest-offline-packages
     upload_archive "$TB41_PACKAGE_ARCHIVE" "$packages" /workload/rootfs/tmp/aries-guest-offline-packages

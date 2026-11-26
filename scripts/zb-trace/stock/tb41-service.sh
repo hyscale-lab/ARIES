@@ -15,6 +15,15 @@ case "$arm" in
     pack) cp pack.toml "$cfg";;
     *) exit 2;;
 esac
+if [[ "$task" == freight-dispatch-shift || "$task" == hof-topology-interpenetration ]]; then
+    fixture_helper=freight-companion.sh
+    if [[ "$task" == hof-topology-interpenetration ]]; then fixture_helper=hof-network.sh; fi
+    sha256sum "$cfg" "$task"/{trajectory,rollout,metadata.json} server-bundle/server \
+        server-bundle/deps/firecracker/1.15.1-patch-v2/firecracker cli-bundle/aenv runc smoke.sh \
+        aries-agentenv-replay native-deep-scan zb-guest prepare-pilot.sh tb41-{ready,arm}.sh \
+        scripts/zb-trace/stock/"$fixture_helper" scripts/zb-trace/stock/{tb41-service.sh,run-pilot.py,deep.py,checkpoint.py,host_sample.py,guest-ticks.py} \
+        >"$label.deployment-at-launch.txt"
+fi
 digest=$(jq -er .image_digest "$task/metadata.json")
 if [[ ! -e "$task.tar" ]]; then
     python3 -B scripts/zb-trace/stock/stock-store-archive.py "$TB41_IMAGE_STORE" "$digest" "$task.tar"
@@ -22,8 +31,12 @@ fi
 unshare --mount --net --propagation private /bin/bash "$b/smoke.sh" "$label" serve "$b/$cfg" >"$label.service.log" 2>&1 &
 launcher=$!
 pid=
+hof_proxies=()
 end_service() {
     if [[ -n "$pid" && "$(readlink "/proc/$pid/exe")" == "$b/server-bundle/server" ]]; then kill -TERM "$pid"; fi
+    for proxy in "${hof_proxies[@]}"; do
+        if [[ "$(ps -o ppid= -p "$proxy" | tr -d ' ')" == "$$" ]]; then kill -TERM "$proxy" || true; fi
+    done
     wait "$launcher" || true
 }
 trap end_service EXIT
@@ -34,6 +47,10 @@ for _ in $(seq 60); do
 done
 pid=$(cat "$label/server.pid")
 ns=(nsenter -t "$pid" -n -m --)
+if [[ "$task" == hof-topology-interpenetration ]]; then
+    source "$b/scripts/zb-trace/stock/hof-network.sh"
+    hof_start_endpoints "$label" "$pid"
+fi
 reg="$b/server-bundle/deps/regctl/v0.11.5/regctl"
 export REGCTL_CONFIG="$b/registry/regctl.json"
 platform=$digest

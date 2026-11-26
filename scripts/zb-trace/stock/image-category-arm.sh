@@ -13,6 +13,14 @@ case "$task" in
     image-category) service="image-$1-$2"; source_sha=2543f544fef10d6ee0da62095eb37bdfc9ba9f4d5998db798e7a54e85c0918ab; cache="$base/image-cache";;
     link-pix) service="puz-$1-$2"; source_sha=0f37ca65135cf0513ada9eef9fe1cc62dc8751cdc0f7fa872ad06d6e68e27709
         trace="$base/02_Code_Intelligence_task_9_link_a_pix_color_easy_zh.jsonl"; cache="$base/live/home/image-cache";;
+    social-[2-6]) service="sc${task#social-}-$1-$2"; cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache"
+        case "$task" in
+            social-2) source_sha=0f72cc52fae9f4eeb833fcad744dc7af0e8f9f8717038cf54dc59849732aed15; trace="$base/03_Social_Interaction_task_2_chat_action_extraction.jsonl";;
+            social-3) source_sha=4d94b36f689fd172277244f8542f630bb91e33a6235c95f1a337c9a6f5359ff0; trace="$base/03_Social_Interaction_task_3_chat_multi_step_reasoning.jsonl";;
+            social-4) source_sha=167633cdb65195ec4678a81f5ab3820a7cc14cffd2ca8cb64944cbda62148556; trace="$base/03_Social_Interaction_task_4_chat_thread_consolidation.jsonl";;
+            social-5) source_sha=1b2d1be3129789ab9a5f81dcd4f2949a7d2391fda68bbbe735d1941af3fbb8ee; trace="$base/03_Social_Interaction_task_5_chat_escalation_routing.jsonl";;
+            social-6) source_sha=66f0fee0f3847dccfdecf1687ffdc3104b9d9a5d323dc71bfb0116e69871064d; trace="$base/03_Social_Interaction_task_6_chat_cross_dept_update_zh.jsonl";;
+        esac;;
     schedule-edit|trash-fixture|chapter-summary)
         case "$task" in
             schedule-edit) prefix=se; suffix=4_authority; source_sha=b81663dd33480607ca01403d075a5a2cfa10a1fce0945df9d0c17cb9ac597f25;;
@@ -115,6 +123,8 @@ if [[ "$task" == link-pix ]]; then
     if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
     aenv exec "$sandbox" runc exec zb-workload python3 -c 'from PIL import Image; import hashlib; im=Image.open("/tmp_workspace/results/result.png"); assert im.size==(600,600) and im.mode=="RGB"; print(hashlib.sha256(im.tobytes()).hexdigest())' >"$run/traced/pixel-sha256"
     python3 "$here/link-pix-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == social-[2-6] ]]; then
+    python3 "$here/social-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapter-summary ]]; then
     python3 "$here/local-files-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then

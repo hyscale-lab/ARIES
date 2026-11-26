@@ -19,6 +19,9 @@ tb41)
     cpus=$(jq -er .cpus "$meta")
     memory=$(jq -er .memory_mib "$meta")
     workdir=$(jq -er .workdir "$meta")
+    if [[ -f "${run%-prepared}.deployment-at-launch.txt" ]]; then
+        cp "${run%-prepared}.deployment-at-launch.txt" "$run/deployment-at-launch.txt"
+    fi
     if [[ "$(jq -er .task "$meta")" == freight-dispatch-shift ]]; then
         freight_helper="$(dirname "$0")/scripts/zb-trace/stock/freight-companion.sh"
         feed_image=$("$freight_helper" image "$run")
@@ -38,7 +41,7 @@ pdf-digest|conflicting-handling)
     [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
-schedule-edit|trash-fixture|chapter-summary)
+social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
@@ -82,7 +85,7 @@ if task=='roy':
     env.extend(['VIRTUAL_ENV=/opt/venv','DEBIAN_FRONTEND=noninteractive'])
 if task in {'pdf-digest','conflicting-handling'}:
     env.extend(['PIP_NO_INDEX=1','PIP_FIND_LINKS=/tmp/document-wheels'])
-if task in {'tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling'}:
+if task.startswith('social-') or task in {'tb41', 'image-category', 'link-pix','pdf-digest','conflicting-handling','schedule-edit','trash-fixture','chapter-summary'}:
     # Match the source Docker default capability set in the nested workload container.
     caps=['CAP_'+name for name in 'CHOWN DAC_OVERRIDE FOWNER FSETID KILL SETGID SETUID SETPCAP NET_BIND_SERVICE NET_RAW SYS_CHROOT MKNOD AUDIT_WRITE SETFCAP'.split()]
     c['process']['capabilities'].update(bounding=caps,effective=caps,permitted=caps)
@@ -98,7 +101,9 @@ assert 'network' in {ns['type'] for ns in c['linux']['namespaces']}
 (p/'config.json').write_text(json.dumps(c))
 PY
 "$AENV_CLI" upload "$sandbox" "$run/config.json" /workload/config.json
-if [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
+if [[ "$task" == social-[2-6] ]]; then
+    "$(dirname "$0")/social-fixture.sh" "$task" upload "$sandbox"
+elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
     "$(dirname "$0")/document-fixture.sh" "$task" upload "$sandbox"
 elif [[ "$task" == calendar ]]; then
     for file in calendar.ics constraints.yaml meeting_requests.json; do
@@ -109,7 +114,7 @@ elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapt
     local_fixture="/local/zb-study3-stock/local-sol/$task"
     (cd "$local_fixture" && sha256sum -c environment.sha256)
     "$AENV_CLI" upload "$sandbox" "$local_fixture/environment.tar" /tmp/local-environment.tar
-    guest sh -ec 'cd /workload/rootfs/tmp_workspace; tar xf /tmp/local-environment.tar; rm /tmp/local-environment.tar'
+    guest sh -ec 'cd /workload/rootfs/tmp_workspace; tar --no-same-owner -xf /tmp/local-environment.tar; rm /tmp/local-environment.tar'
     if [[ "$task" == chapter-summary ]]; then
         guest sh -ec 'cd /workload/rootfs; test ! -e tmp_workspace/linux_summary.md; test -r tmp_workspace/chapter_0_introduction_linux_os.md; if ! test -e root/USER.md; then cp tmp_workspace/USER.md root/USER.md; fi'
     fi
@@ -137,6 +142,8 @@ if [[ "$task" == tb41 ]]; then
     "$(dirname "$0")/tb41-ready.sh" "$sandbox" "$TB41_FIXTURE_DIR"
 elif [[ "$task" == roy ]]; then
     guest runc exec zb-workload sh -ec 'cd /app; export LC_ALL=C; test "$(sha256sum data/*.mol data/TB3_Conf_Properties.csv | sha256sum)" = "236aeefd45cca191035b28b385bc8226eca7b4c2bf8fb1d8966bfd7b8f288bb4  -"; test -d /results; test ! -e /results/TB3_Conf_Answers.csv; test ! -e fit_roy.py; ! command -v apply_patch; test "$(command -v python)" = /opt/venv/bin/python; python -c "import sys,importlib.util as u,importlib.metadata as m; assert sys.version_info[:2]==(3,11) and u.find_spec(\"sklearn\") is None; assert [m.version(k) for k in (\"pandas\",\"numpy\",\"scipy\",\"rdkit\")]==[\"3.0.3\",\"2.4.6\",\"1.17.1\",\"2026.3.2\"]"'
+elif [[ "$task" == social-[2-6] ]]; then
+    "$(dirname "$0")/social-fixture.sh" "$task" ready "$sandbox" >"$run/social-ready.txt"
 elif [[ "$task" == pdf-digest || "$task" == conflicting-handling ]]; then
     "$(dirname "$0")/document-fixture.sh" "$task" ready "$sandbox"
 elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapter-summary ]]; then

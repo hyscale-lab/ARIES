@@ -11,6 +11,10 @@ import (
 
 func exportStockFixture(r *harbor.Recording, w io.Writer) error {
 	switch r.Task {
+	case hofTopologyTask:
+		if r.Trial != hofReleaseTrial {
+			return fmt.Errorf("stock HOF network fixture requires trial %s", hofReleaseTrial)
+		}
 	case "wal-recovery-ordering", "session-window-debug", "cargo-flight-dispatch", "mvcc-lsm-compaction",
 		"freight-dispatch-shift", "embedding-drift-monitor", bipedTask, vppLossTask, soundCascadeTask, "coq-block-bound", pretrainShardTask,
 		"freecad-platform-drawing", "freecad-spring-clip", "music-harmony":

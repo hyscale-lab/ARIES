@@ -17,6 +17,7 @@ const fs = require("fs");
 const [op, raw] = process.argv.slice(1);
 const {path, content, oldText, newText} = JSON.parse(raw);
 if (op === "WriteFile") {
+  fs.mkdirSync(require("path").dirname(path), {recursive:true});
   fs.writeFileSync(path, content, "utf8");
   console.log("Successfully wrote " + content.length + " bytes to " + path);
 } else {
