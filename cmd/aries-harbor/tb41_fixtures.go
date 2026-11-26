@@ -56,6 +56,11 @@ var tb41PatchAliases = map[string]string{
 	"742a1a2c-24e5-41dc-83ab-745b7a50a392": "rziLTy",
 	"6d75b013-821a-49ba-b20e-97d3b5c06633": "6zirgA",
 	pretrainShardLiveTrial:                 "zWAhk1",
+
+	"16f06a85-5b3e-43db-babc-8d2cf1d31497": "hNolZh",
+	"0829d780-a19e-4717-90d5-1664514bb797": "eTxIsb",
+	"2b3984d8-7648-4dfb-bd50-2a99957679c9": "FKbvCi",
+	"e42bf0ae-155f-48f2-a656-40a3dcc3870c": "tziohC",
 }
 
 func tb41SourceSetup(trial string, task taskSetup) taskSetup {
