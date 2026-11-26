@@ -120,7 +120,7 @@ mkdir -p /root/.codex/tmp/arg0/codex-arg0PK2zte
 ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch
 test -x /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch`
 	}
-	if r.Trial == hofSystreTrial || r.Trial == hofExperimentalTrial || r.Trial == hofGavrogTrial {
+	if r.Trial == hofSystreTrial || r.Trial == hofExperimentalTrial || r.Trial == hofGavrogTrial || r.Trial == hofReleaseTrial {
 		alias := "codex-arg0w7w0OR"
 		if r.Trial == hofExperimentalTrial {
 			alias = "codex-arg0baCVWK"
@@ -130,10 +130,17 @@ test -x /root/.codex/tmp/arg0/codex-arg0PK2zte/apply_patch`
 		if r.Trial == hofGavrogTrial {
 			alias = "codex-arg0OtJsdz"
 		}
+		if r.Trial == hofReleaseTrial {
+			alias = "codex-arg0vcHD7F"
+		}
 		task.initialCheck = strings.ReplaceAll(task.initialCheck, "codex-arg02OZDT5", alias)
 		task.initialCheck += financialAptSetup(financialAptProfile{Snapshot: "20260831T073500Z"})
 		if r.Trial == hofGavrogTrial {
 			task.initialCheck += hofGavrogGitSetup
+		}
+		if r.Trial == hofReleaseTrial {
+			// Prime the signed indexes so package installation rather than index transfer drives the short JRE poll.
+			task.initialCheck += "\napt-get -o APT::Update::Error-Mode=any update -qq"
 		}
 	}
 	if r.Task == "git-leak-recovery" {
@@ -449,6 +456,9 @@ cd /app/solution
 	if r.Trial == hofGavrogTrial {
 		cmd += hofGavrogFinal
 	}
+	if r.Trial == hofReleaseTrial {
+		cmd += hofReleaseFinal
+	}
 	if r.Trial == hofSystreTrial {
 		cmd += `
 sha256sum -c <<'SYSTRE'
@@ -553,7 +563,7 @@ with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/I
 	if task == financialTask {
 		python = "/usr/bin/python3"
 	}
-	if recording.Trial == hofSystreTrial || recording.Trial == hofExperimentalTrial || recording.Trial == hofGavrogTrial {
+	if recording.Trial == hofSystreTrial || recording.Trial == hofExperimentalTrial || recording.Trial == hofGavrogTrial || recording.Trial == hofReleaseTrial {
 		python = "/opt/venv/bin/python"
 		probe = `import json,socket,urllib.request
 hosts = ["api.github.com","github.com","raw.githubusercontent.com","release-assets.githubusercontent.com","snapshot.ubuntu.com"]

@@ -108,6 +108,33 @@
     ]
   },
   {
+    "task": "hof-topology-interpenetration",
+    "workdir": "/app",
+    "image": "docker.io/library/zb-tb41-hof-topology-interpenetration@sha256:d5db936be8f7a1b25b7d694ba92eba72220e418e259a19884359b4b657bb1276",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "needs_network": true,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "effects": [
+      "Analyze seven local CIFs with the original scientific Python commands, keep the original RCSR site-status request, retrieve the public Gavrog archive and release metadata, install the dated Ubuntu JRE and retrieve Systre 19.6.0. Verify archive and JAR bytes, the release consumer output and all seven scientific results."
+    ],
+    "trials": [
+      {
+        "trial": "c22b32e9-ecfd-4900-a5b9-5947a63f5eea",
+        "trajectory_sha256": "c342ea098b8c84a8d4cc3699e829d683183005ac61dd880f4343d60512f0743e",
+        "rollout_sha256": "ca8603ff5b54e80e1d4296ef56e63cd8f2d3055c3820feec3b7dbe3fa329aaa1"
+      }
+    ]
+  },
+  {
     "task": "embedding-drift-monitor",
     "workdir": "/app",
     "image": "docker.io/library/zb-tb41-embedding-drift-monitor@sha256:63f78bde4225e2199f869cbd4130e0ee8280eff8eed87303075586c6486dd672",
