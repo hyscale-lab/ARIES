@@ -38,7 +38,7 @@ for ns in $namespaces; do
     tasks=$("$runtime/bin/firecracker-ctr" -a "$socket" -n "$ns" tasks ls -q)
     [[ -z "$tasks" ]]
 done
-if [[ -z "$peer" ]] && { pgrep -x firecracker >/dev/null || pgrep -x qemu-system-x86 >/dev/null; }; then
+if [[ -z "$peer" ]] && { pgrep -x 'firecracker|[.]firecracker-re|qemu-system-x86' >/dev/null; }; then
     echo "another VM is active on the assigned solo worker" >&2
     exit 1
 fi

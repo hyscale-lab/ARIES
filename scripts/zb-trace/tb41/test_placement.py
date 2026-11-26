@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from placement import partitions, verify_vm_inventory
+from placement import partitions, verify_vm_inventory, vmm_comm
 
 
 class PlacementTest(unittest.TestCase):
@@ -30,6 +30,11 @@ class PlacementTest(unittest.TestCase):
             inspect.assert_called_once_with('service-A', Path('/runtime'), 'service-B', restored_api=Path('/guest.sock'))
             execute.assert_called_once_with(sys.executable, [sys.executable, '-u', '/actual/sample.py', '/guest.sock'])
             self.assertEqual(json.loads((Path(tmp) / 'placement-live.json').read_text()), {'service':'service-A'})
+
+    def test_created_and_restored_vm_process_names(self):
+        for name in ['firecracker', '.firecracker-re', 'qemu-system-x86']:
+            self.assertTrue(vmm_comm(name))
+        self.assertFalse(vmm_comm('firecracker-cont'))
 
     def test_foreign_and_reused_pid(self):
         live = {(14, 500), (18, 600)}
