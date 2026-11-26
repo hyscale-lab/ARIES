@@ -22,7 +22,7 @@ func nextjsSourceSetup(trial string) (taskSetup, bool) {
 		return setup, true
 	case nextjsWave4Trial:
 		setup := nextjsDatedSetup("2026-08-31T09:10:10.480Z", "20260831T091010Z")
-		setup.initialCheck += nextjsWave4PatchAlias
+		setup.initialCheck += nextjsWave4PatchAlias + "\napt-get -o APT::Update::Error-Mode=any update -qq\n" + nextjsChromiumArchiveCache
 		return setup, true
 	case nextjsWave5Trial:
 		return nextjsDatedSetup("2026-08-31T07:12:18.292Z", "20260831T071218Z"), true
@@ -52,16 +52,20 @@ printf '%s\n' 'export npm_config_before=2026-08-31T08:03:11.700Z' > /etc/profile
 sed -i 's/20260831T100834Z/20260831T080311Z/g' /etc/apt/sources.list.d/debian.sources
 `
 
-const nextjsWave2Python = `
-test ! -e /tmp/apply_patch
-# The original first Chromium launch found GLib and then failed on libnspr4.
-apt-get -o APT::Update::Error-Mode=any update -qq
-DEBIAN_FRONTEND=noninteractive apt-get -qq -y --no-install-recommends install libglib2.0-0
+const nextjsChromiumArchiveCache = `
 # Keep signed archives available across the recorded apt update's docker-clean hook.
 mkdir -p /var/cache/aries-apt/archives/partial
 printf '%s\n' 'Dir::Cache::archives "/var/cache/aries-apt/archives";' > /etc/apt/apt.conf.d/99aries-cache
 apt-get -qq -y --no-install-recommends --download-only install xvfb fonts-noto-color-emoji fonts-unifont libfontconfig1 libfreetype6 xfonts-scalable fonts-liberation fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf fonts-freefont-ttf libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
 test -s "$(find /var/cache/aries-apt/archives -name 'libnspr4_*.deb' -print -quit)"
+`
+
+const nextjsWave2Python = `
+test ! -e /tmp/apply_patch
+# The original first Chromium launch found GLib and then failed on libnspr4.
+apt-get -o APT::Update::Error-Mode=any update -qq
+DEBIAN_FRONTEND=noninteractive apt-get -qq -y --no-install-recommends install libglib2.0-0
+` + nextjsChromiumArchiveCache + `
 test -e /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0
 if ldconfig -p | grep -q 'libnspr4\.so'; then exit 1; fi
 test ! -e /usr/local/bin/python3
