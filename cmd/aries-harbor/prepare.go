@@ -56,6 +56,15 @@ test ! -e .git
 mkdir -p /tmp/codex-home
 ` + noShellPatch,
 	},
+	"freight-dispatch-shift": {
+		output: "/workspace/dispatch",
+		initialCheck: `test ! -e /workspace/dispatch
+test ! -e /app/packet/events
+test -z "${DISPATCH_EVENT_API_TOKEN+x}"
+printf '\n127.0.0.1 event-feed\n' >> /etc/hosts
+python3 -c "import urllib.request as u; assert u.urlopen('http://event-feed:8080/health', timeout=5).status == 200"`,
+		inputCheck: `test "$(cd /app/packet && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum)" = 'cd80264da9db617a531055ef7c32c48bccdc0828957a15f9c48ad2d3748a2e0b  -'`,
+	},
 	"embedding-drift-monitor": {
 		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
 		output: "drift_monitor/monitor.py",
@@ -475,6 +484,17 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 			"ef50d0ac-9de1-4c3d-b320-3312179b5ca1": "b0ce0d81f7f00162d58f3571b42124488921731fd4d50390972160700232840a",
 		}[r.Trial]
 		cmd += "\nexport LC_ALL=C\nsha256sum Makefile crash_report.txt include/mvcc_lsm/* src/* tests/* | tee /dev/stderr | sha256sum | grep -Fx '" + want + "  -'"
+	}
+	if r.Task == "freight-dispatch-shift" {
+		// Original Harbor artifact for each source-specific dispatcher.
+		digest := map[string]string{
+			"3dc97e08-94f1-44a9-baa2-81629ba79eab": "80e2c0644bb5b7edacfce3445b23ca3995cc79fd6376b9a3cdcc3bcd0b442cbd",
+			"fa1d8385-d7d0-4701-b73e-024703e6b34a": "c9b3af973c3ae78b1f16e9a84066676136d6c62a6d1206ee260cabded38f6363",
+			"ea7c7508-199a-4a32-ac02-a17ae1a80cd1": "174c984b82d21161717fa4f31ac02983c95e4e08d9da85e56cdfb250a738de05",
+			"f482db32-1965-4c26-b403-9a6959d49457": "e2c172bba6c6b665c23ee9d1df425f079a6c913cfc3403bdba5af62d768466b9",
+			"09697b02-59a2-4588-b1f6-fab871a5c35e": "ea6329a2d1d960fb63c325af202120649f56226faea8a5adcf9b635e485c5023",
+		}[r.Trial]
+		cmd += "\necho '" + digest + "  /workspace/dispatch' | sha256sum -c -"
 	}
 	switch r.Trial {
 	case nextjsTrial:

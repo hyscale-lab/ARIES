@@ -45,6 +45,51 @@
     ]
   },
   {
+    "task": "freight-dispatch-shift",
+    "workdir": "/workspace",
+    "image": "docker.io/harborframework/terminal-bench@sha256:f9ffe49f11bcc6e77e33fd1bacd0a60027547526d716575c71e52517ac96daf8",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Read the supplied dispatch packet, construct a local scheduler and exercise the recorded self-contained loopback tests."
+    ],
+    "trials": [
+      {
+        "trial": "3dc97e08-94f1-44a9-baa2-81629ba79eab",
+        "trajectory_sha256": "75c107cf57838084a878b35f85dc63a9728628393a9bf024389988b9a40a8f78",
+        "rollout_sha256": "bb9fadbaa58d27e2303f0ebea49e732fef643e3db7a7ef5fef35db84a1b439b3"
+      },
+      {
+        "trial": "fa1d8385-d7d0-4701-b73e-024703e6b34a",
+        "trajectory_sha256": "9608586b29c936f380fcf5fe0c794e9c3d50065b81ef3af58ad922414ff16cc5",
+        "rollout_sha256": "4d7eceddbb8536243ea37d17d60fb4feb0c69039f07cca1c608c97b157b82d84"
+      },
+      {
+        "trial": "ea7c7508-199a-4a32-ac02-a17ae1a80cd1",
+        "trajectory_sha256": "e8ee0a2ec016b9263f5efe2f892e0a4475f332331c5cff8f49788f776f5c0bf7",
+        "rollout_sha256": "b2b483cc2c97f338902e2de0ed7ba7925b28bb2e379a9771328bd722647dacfe"
+      },
+      {
+        "trial": "f482db32-1965-4c26-b403-9a6959d49457",
+        "trajectory_sha256": "a274f4f5db9b337f9f8eb6713b083bb9d0791a1e9253c366a819f219879dfbe5",
+        "rollout_sha256": "c1ca311908f350d8ba528be87d704e45db0dae79b3f2a932c72a0408dc70d11b"
+      },
+      {
+        "trial": "09697b02-59a2-4588-b1f6-fab871a5c35e",
+        "trajectory_sha256": "bd30aa7f4fa5abe96097a650568358897d84bc6362ab710ae9977364631324f8",
+        "rollout_sha256": "659537d1e4d394f0253c11cbe9c8fa4598ea7356fd2904448e7e48fe64072ca8"
+      }
+    ]
+  },
+  {
     "task": "nextjs-performance",
     "workdir": "/app",
     "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",
