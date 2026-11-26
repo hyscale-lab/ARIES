@@ -10,6 +10,7 @@ import (
 
 const paymentsTask = "payments-pipeline-fix"
 const paymentsFirstTrial = "4d316e1a-590b-41e6-8a2d-a55a895af680"
+const paymentsLauncherTrial = "4df3e44e-0549-4a45-ac27-619c8b3d12f9"
 const paymentsWheelTrial = "73d8a7b2-71f4-4245-938e-1cb6a8bbc545"
 const paymentsVerifierName = "aries-payments-verify-patch"
 const paymentsVerifierSHA = "ddd8bb602ef5e6d075fe88169a2bd49c4b4ed35a3700001d7a0cfa26dce771f6"
@@ -57,6 +58,13 @@ ln -s /root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modu
 test -x /root/.codex/tmp/arg0/CAPTURED_ALIAS/apply_patch
 `
 
+const paymentsCodexLauncher = `
+launcher=/root/.nvm/versions/node/v22.23.2/bin/codex
+test -x "$launcher"
+ln -s "$launcher" /usr/local/bin/codex
+test -x /usr/local/bin/codex
+`
+
 const paymentsWheelCheck = `
 python -m pip config list | grep -Fx "global.no-index='true'"
 python -m pip config list | grep -Fx "global.find-links='/opt/payments-wheels'"
@@ -72,6 +80,8 @@ func paymentsSourceSetup(trial string) taskSetup {
 	switch trial {
 	case paymentsFirstTrial:
 		task.initialCheck += strings.ReplaceAll(paymentsPatchAlias, "CAPTURED_ALIAS", "codex-arg0BJn4iX")
+	case paymentsLauncherTrial:
+		task.initialCheck += paymentsWheelCheck + paymentsCodexLauncher
 	case paymentsWheelTrial:
 		task.initialCheck += paymentsWheelCheck + strings.ReplaceAll(paymentsPatchAlias, "CAPTURED_ALIAS", "codex-arg0GbnyWR")
 	case harbor.PaymentsRejectedPatchTrial, harbor.PaymentsRejectedNestedPatchTrial:
