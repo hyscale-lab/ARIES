@@ -16,7 +16,10 @@ def read(path):
 
 
 def counters(run, start, events):
-    for host in read(run / "host.jsonl"):
+    host_path = run / "host.jsonl"
+    if not host_path.exists() and not Path(str(host_path)+".gz").exists():
+        host_path = run.parent / "host-samples.jsonl"
+    for host in read(host_path):
         row = {"stream":"host","t_ns":host["begin_ns"]-start}
         for name, item in [("vmm",host),("recording_vmm",host.get("recording_vmm",{}))]:
             row[name] = {k:item.get(k) for k in ("generation","rss_bytes","pss_bytes","cpu_ticks","cpu_cores","status")}
