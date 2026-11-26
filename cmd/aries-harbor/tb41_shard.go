@@ -52,8 +52,23 @@ for chunk in chunks:
 assert Path("data/val/val.bin").stat().st_size == 206400
 print("train_chunks", 20, "validation_bytes", 206400)
 PYSHARD
-` + noShellPatch + "\n" + pretrainShardGit,
+` + noShellPatch + "\n" + pretrainShardGit + "\n" + pretrainShardLoopback,
 }
+
+// Torch's localhost rendezvous advertises the VM hostname to both local ranks.
+const pretrainShardLoopback = `python - <<'PYSHARDHOST'
+from pathlib import Path
+import socket
+
+name = socket.gethostname()
+assert name and all(c.isascii() and (c.isalnum() or c in ".-") for c in name), name
+with Path("/etc/hosts").open("a") as hosts:
+    hosts.write(f"\n127.0.0.1 localhost {name}\n")
+for alias in ("localhost", name):
+    address = socket.gethostbyname(alias)
+    assert address == "127.0.0.1", (alias, address)
+    print("Gloo rendezvous hostname:", alias, address)
+PYSHARDHOST`
 
 // Both recordings name these commits in later tools. Recreate the embedded
 // repository from the verified worktree and its source commit dates.
