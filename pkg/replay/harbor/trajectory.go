@@ -1,4 +1,4 @@
-// Package harbor binds Codex ATIF steps to native rollout events for guest replay.
+// Package harbor binds reviewed native recording events to plans for guest replay.
 package harbor
 
 import (
@@ -55,18 +55,27 @@ type sourceStep struct {
 // Event points into the retained rollout, which preserves original message,
 // reasoning, plan update, and tool payloads without copying them to run logs.
 type Event struct {
-	ParallelSize int           `json:"parallel_size,omitempty"`
-	Line         int           `json:"rollout_line"`
-	SourceTime   time.Time     `json:"source_time"`
-	Kind         string        `json:"kind"`
-	Role         string        `json:"role,omitempty"`
-	Step         int           `json:"step_id,omitempty"`
-	CallID       string        `json:"call_id,omitempty"`
-	Sequence     uint64        `json:"guest_sequence,omitempty"`
-	Wait         time.Duration `json:"modeled_wait_ns"`
-	Basis        string        `json:"wait_basis"`
-
+	SourceSequence       uint64        `json:"source_sequence,omitempty"`
+	SourceReplyStatus    string        `json:"source_reply_status,omitempty"`
+	SourceReplyError     *bool         `json:"source_reply_is_error,omitempty"`
+	Unanswered           bool          `json:"unanswered,omitempty"`
+	ParallelSize         int           `json:"parallel_size,omitempty"`
+	Line                 int           `json:"rollout_line"`
+	SourceTime           time.Time     `json:"source_time"`
+	Kind                 string        `json:"kind"`
+	Role                 string        `json:"role,omitempty"`
+	Step                 int           `json:"step_id,omitempty"`
+	CallID               string        `json:"call_id,omitempty"`
+	SourceRecordID       string        `json:"source_record_id,omitempty"`
+	SourceParentID       string        `json:"source_parent_id,omitempty"`
+	Sequence             uint64        `json:"guest_sequence,omitempty"`
+	Wait                 time.Duration `json:"modeled_wait_ns"`
+	Basis                string        `json:"wait_basis"`
 	VerificationInterval time.Duration `json:"recorded_verification_ns,omitempty"`
+}
+
+func (e Event) isToolReply() bool {
+	return e.Kind == "function_call_output" || e.Kind == "toolResult"
 }
 
 type workload struct {
@@ -89,25 +98,27 @@ type workload struct {
 }
 
 type Recording struct {
-	EndingProcessSessions []int       `json:"ending_process_sessions,omitempty"`
-	NeedsNetwork          bool        `json:"needs_network"`
-	VCPUs                 int         `json:"vcpus"`
-	MemoryMiB             int         `json:"memory_mib"`
-	StorageMiB            int         `json:"storage_mib"`
-	Task                  string      `json:"task"`
-	Workdir               string      `json:"workdir"`
-	Image                 string      `json:"image"`
-	ReviewedEffects       []string    `json:"reviewed_effects"`
-	Trial                 string      `json:"trial_id"`
-	Job                   string      `json:"job_id"`
-	Row                   string      `json:"row_id"`
-	Session               string      `json:"session_id"`
-	Model                 string      `json:"model"`
-	TrajectoryHash        string      `json:"trajectory_sha256"`
-	RolloutHash           string      `json:"rollout_sha256"`
-	Steps                 []Step      `json:"steps"`
-	Events                []Event     `json:"events"`
-	Plan                  replay.Plan `json:"-"`
+	SourcePlayback        bool           `json:"source_playback,omitempty"`
+	OpenClawTrace         *OpenClawTrace `json:"openclaw_trace,omitempty"`
+	EndingProcessSessions []int          `json:"ending_process_sessions,omitempty"`
+	NeedsNetwork          bool           `json:"needs_network"`
+	VCPUs                 int            `json:"vcpus"`
+	MemoryMiB             int            `json:"memory_mib"`
+	StorageMiB            int            `json:"storage_mib"`
+	Task                  string         `json:"task"`
+	Workdir               string         `json:"workdir"`
+	Image                 string         `json:"image"`
+	ReviewedEffects       []string       `json:"reviewed_effects"`
+	Trial                 string         `json:"trial_id"`
+	Job                   string         `json:"job_id"`
+	Row                   string         `json:"row_id"`
+	Session               string         `json:"session_id"`
+	Model                 string         `json:"model"`
+	TrajectoryHash        string         `json:"trajectory_sha256"`
+	RolloutHash           string         `json:"rollout_sha256"`
+	Steps                 []Step         `json:"steps"`
+	Events                []Event        `json:"events"`
+	Plan                  replay.Plan    `json:"-"`
 }
 
 func digest(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }

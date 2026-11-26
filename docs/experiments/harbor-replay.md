@@ -41,6 +41,24 @@ scripts/harbor-replay/run-traced.sh ./bin/aries-harbor scripts/zb-trace /path/to
     -checkpoint-dir "$CHECKPOINT_DIR" -shim-dir "$SHIM_DIR" -io-dir "$IO_DIR"
 ```
 
+## WildClawBench OpenClaw v3 sessions
+
+Use one native session JSONL file per invocation. Each invocation starts the replay clock at the user prompt. The reader retains the earlier session metadata.
+
+```sh
+bin/aries-harbor -wildclaw session.jsonl
+bin/aries-harbor -wildclaw session.jsonl -wildclaw-mode timeline > source-receipts.jsonl
+bin/aries-harbor -wildclaw session.jsonl -wildclaw-mode live-plan > plan.json
+```
+
+The default prints the timeline immediately. In timeline mode, `harbor.Run` sleeps for recorded inter-event gaps and emits source receipts. Batched requests share their assistant timestamp. Replies retain their native order, including numeric HTTP statuses. An interrupted session ends at its last observed event, with any unanswered call identified. These intervals include harness overhead. The trace does not measure model inference or guest CPU time separately.
+
+For programmatic use, `harbor.ParseWildClawSource` exposes request arguments and raw reply content and details. `harbor.LoadWildClawTimeline` returns an observation-only recording for the shared runner. `harbor.LoadWildClawLive` produces an executable recording for the two reviewed Sol source digests, calendar scheduling and image categorization. Supply a prepared sandbox and the `Exec`, `Boundary` and `Record` hooks to `harbor.Run` for live operation. Live scheduling retains the inter-turn gaps and uses the actual tool completion time. The published score in a plan describes the source session. `-wildclaw-calendar` retains the original calendar-only plan inspector.
+
+For a reviewed live plan, `go run ./cmd/wildclaw-docker session.jsonl DISPOSABLE_CONTAINER` runs the recorded tools in a caller-prepared Docker container. Supply the matching task files and shell environment before replay.
+
+The optional cohort tests take `WILDCLAW_SOL_TRACE_DIR` and use the bundled inventory by default. Set `WILDCLAW_SOL_INVENTORY` to override its path. Set `WILDCLAW_CALENDAR_TRACE` for the roughly 103-second calendar clock test.
+
 ## Terminal-Bench 4.1 replay pilot
 
 The medical claims first wave binds the source trajectory and rollout for

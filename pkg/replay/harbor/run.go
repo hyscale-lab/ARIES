@@ -31,42 +31,50 @@ type Hooks struct {
 }
 
 type Receipt struct {
-	ProcessTiming    *core.CommandTiming `json:"guest_process_timing,omitempty"`
-	SourceYieldMS    int64               `json:"source_yield_ms,omitempty"`
-	SourceCallID     string              `json:"source_call_id,omitempty"`
-	SourceKind       string              `json:"source_kind,omitempty"`
-	ParallelSize     int                 `json:"parallel_size,omitempty"`
-	Event            string              `json:"event"`
-	Phase            string              `json:"phase,omitempty"`
-	Triggers         []string            `json:"triggers,omitempty"`
-	PauseAckNS       int64               `json:"pause_ack_monotonic_ns,omitempty"`
-	ResumeRequestNS  int64               `json:"resume_request_monotonic_ns,omitempty"`
-	RunnableTargetNS *int64              `json:"target_runnable_ns,omitempty"`
-	RunnableActualNS *int64              `json:"actual_runnable_ns,omitempty"`
-	SessionID        int                 `json:"source_process_session_id,omitempty"`
-	PipeInterrupt    bool                `json:"pipe_interrupt,omitempty"`
-	DiagnosticID     int                 `json:"diagnostic_process_id,omitempty"`
-	Operation        string              `json:"operation,omitempty"`
-	StatusBasis      string              `json:"status_basis,omitempty"`
-	Time             int64               `json:"monotonic_ns"`
-	Step             int                 `json:"step_id,omitempty"`
-	Line             int                 `json:"rollout_line,omitempty"`
-	Sequence         uint64              `json:"sequence,omitempty"`
-	Basis            string              `json:"basis,omitempty"`
-	RequestedNS      int64               `json:"requested_ns,omitempty"`
-	Exit             *int                `json:"exit_code,omitempty"`
-	Expected         *int32              `json:"expected_exit_code,omitempty"`
-	StdoutSHA        string              `json:"stdout_sha256,omitempty"`
-	StderrSHA        string              `json:"stderr_sha256,omitempty"`
-	Stdout           string              `json:"stdout,omitempty"`
-	Stderr           string              `json:"stderr,omitempty"`
-	OutputComparison string              `json:"output_comparison,omitempty"`
-	SourceOutputSHA  string              `json:"source_output_sha256,omitempty"`
-	CaptureEndNS     int64               `json:"capture_end_monotonic_ns,omitempty"`
-	CaptureIndex     int                 `json:"capture_index,omitempty"`
-	NativeError      string              `json:"native_error,omitempty"`
-
-	SourceVerificationNS int64 `json:"source_verification_ns,omitempty"`
+	SourcePlayback       bool                `json:"source_playback,omitempty"`
+	SourceTraceStatus    string              `json:"source_trace_status,omitempty"`
+	SourceTime           time.Time           `json:"source_time,omitzero"`
+	SourceRole           string              `json:"source_role,omitempty"`
+	SourceReplyStatus    string              `json:"source_reply_status,omitempty"`
+	SourceReplyError     *bool               `json:"source_reply_is_error,omitempty"`
+	Unanswered           bool                `json:"unanswered,omitempty"`
+	ProcessTiming        *core.CommandTiming `json:"guest_process_timing,omitempty"`
+	SourceYieldMS        int64               `json:"source_yield_ms,omitempty"`
+	SourceCallID         string              `json:"source_call_id,omitempty"`
+	SourceRecordID       string              `json:"source_record_id,omitempty"`
+	SourceParentID       string              `json:"source_parent_id,omitempty"`
+	SourceKind           string              `json:"source_kind,omitempty"`
+	ParallelSize         int                 `json:"parallel_size,omitempty"`
+	Event                string              `json:"event"`
+	Phase                string              `json:"phase,omitempty"`
+	Triggers             []string            `json:"triggers,omitempty"`
+	PauseAckNS           int64               `json:"pause_ack_monotonic_ns,omitempty"`
+	ResumeRequestNS      int64               `json:"resume_request_monotonic_ns,omitempty"`
+	RunnableTargetNS     *int64              `json:"target_runnable_ns,omitempty"`
+	RunnableActualNS     *int64              `json:"actual_runnable_ns,omitempty"`
+	SessionID            int                 `json:"source_process_session_id,omitempty"`
+	PipeInterrupt        bool                `json:"pipe_interrupt,omitempty"`
+	DiagnosticID         int                 `json:"diagnostic_process_id,omitempty"`
+	Operation            string              `json:"operation,omitempty"`
+	StatusBasis          string              `json:"status_basis,omitempty"`
+	Time                 int64               `json:"monotonic_ns"`
+	Step                 int                 `json:"step_id,omitempty"`
+	Line                 int                 `json:"rollout_line,omitempty"`
+	Sequence             uint64              `json:"sequence,omitempty"`
+	Basis                string              `json:"basis,omitempty"`
+	RequestedNS          int64               `json:"requested_ns,omitempty"`
+	Exit                 *int                `json:"exit_code,omitempty"`
+	Expected             *int32              `json:"expected_exit_code,omitempty"`
+	StdoutSHA            string              `json:"stdout_sha256,omitempty"`
+	StderrSHA            string              `json:"stderr_sha256,omitempty"`
+	Stdout               string              `json:"stdout,omitempty"`
+	Stderr               string              `json:"stderr,omitempty"`
+	OutputComparison     string              `json:"output_comparison,omitempty"`
+	SourceOutputSHA      string              `json:"source_output_sha256,omitempty"`
+	CaptureEndNS         int64               `json:"capture_end_monotonic_ns,omitempty"`
+	CaptureIndex         int                 `json:"capture_index,omitempty"`
+	NativeError          string              `json:"native_error,omitempty"`
+	SourceVerificationNS int64               `json:"source_verification_ns,omitempty"`
 }
 
 func Clock() (int64, error) {
@@ -98,13 +106,13 @@ func compareOutput(source []byte, result core.CommandResult) string {
 	return "differed"
 }
 
-// Run follows source order, substituting live elapsed time for each recorded
-// guest call interval. There is no verifier, benchmark deadline or LLM client.
+// Run follows source order. SourcePlayback keeps the recorded intervals and emits
+// observations only. Live plans substitute the guest's elapsed tool intervals.
 func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 	if h.DiagnosticVideoImages && r.Task != "video-processing" {
 		return errors.New("unreviewed video diagnostic")
 	}
-	if h.Exec == nil || (h.Boundary == nil && h.Periodic == nil) || h.Record == nil {
+	if (!r.SourcePlayback && h.Exec == nil) || (h.Boundary == nil && h.Periodic == nil) || h.Record == nil {
 		return errors.New("missing replay hooks")
 	}
 	if err := h.IntraTool.Validate(r); err != nil {
@@ -120,6 +128,10 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		}
 		h.clock = newReplayClock(sessionStart)
 	}
+	sessionReceipt := Receipt{Event: "session_start", Time: sessionStart, SourcePlayback: r.SourcePlayback}
+	if r.OpenClawTrace != nil {
+		sessionReceipt.SourceTraceStatus = r.OpenClawTrace.Status
+	}
 	defer func() {
 		// A failed initial capture may have acquired observers that still need release.
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
@@ -131,10 +143,11 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 			runErr = errors.Join(runErr, clockErr, h.markTraceBlocked(h.clock.cursor, end, "session-end", 0))
 		}
 		if runErr == nil {
-			runErr = emit(h, Receipt{Event: "session_end"})
+			sessionReceipt.Event = "session_end"
+			runErr = emit(h, sessionReceipt)
 		}
 	}()
-	if err := h.Record(Receipt{Event: "session_start", Time: sessionStart}); err != nil {
+	if err := h.Record(sessionReceipt); err != nil {
 		return err
 	}
 	if err := h.boundary(ctx, "session-start", 0, sessionStart); err != nil {
@@ -149,6 +162,9 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		if err != nil {
 			return err
 		}
+		if r.SourcePlayback {
+			continue
+		}
 		if e.ParallelSize > 1 {
 			end := i + 2*e.ParallelSize
 			if end > len(r.Events) {
@@ -160,7 +176,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 			i = end - 1
 			continue
 		}
-		if e.Kind != "exec_command" && e.Kind != "view_image" && e.Kind != "write_stdin" {
+		if e.Sequence == 0 || e.isToolReply() {
 			continue
 		}
 		call := r.Plan.Calls[e.Sequence-1]
@@ -213,11 +229,24 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 	return nil
 }
 
+func sourceReceipt(e Event) Receipt {
+	receipt := Receipt{Event: "source_event", SourceKind: e.Kind, SourceCallID: e.CallID, SourceRecordID: e.SourceRecordID, SourceParentID: e.SourceParentID, Line: e.Line, Step: e.Step, Sequence: e.Sequence, Basis: e.Basis, ParallelSize: e.ParallelSize, RequestedNS: int64(e.Wait)}
+	if e.SourceRecordID != "" {
+		receipt.SourceTime, receipt.SourceRole = e.SourceTime, e.Role
+		receipt.SourceReplyStatus, receipt.SourceReplyError = e.SourceReplyStatus, e.SourceReplyError
+		receipt.Unanswered = e.Unanswered
+		if e.SourceSequence != 0 {
+			receipt.Sequence = e.SourceSequence
+		}
+	}
+	return receipt
+}
+
 func recordSourceEvent(ctx context.Context, h Hooks, e Event) (Receipt, error) {
-	receipt := Receipt{Event: "source_event", SourceKind: e.Kind, SourceCallID: e.CallID, Line: e.Line, Step: e.Step, Sequence: e.Sequence, Basis: e.Basis, ParallelSize: e.ParallelSize, SourceVerificationNS: int64(e.VerificationInterval)}
+	receipt := sourceReceipt(e)
+	receipt.SourceVerificationNS = int64(e.VerificationInterval)
 	if e.Wait > 0 {
 		receipt.Event = "wait_start"
-		receipt.RequestedNS = int64(e.Wait)
 		if h.clock == nil {
 			if err := emit(h, receipt); err != nil {
 				return receipt, err
@@ -304,6 +333,9 @@ func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	if call.Operation == VerifyPatch {
 		receipt.StatusBasis = "read_only_patch_verification"
 	}
+	if call.Operation == "ReadFile" {
+		receipt.StatusBasis = "recorded_successful_file_read_without_process_exit"
+	}
 
 	return receipt
 }
@@ -315,7 +347,9 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 	receipt.ProcessTiming = out.Timing
 	receipt.SourceYieldMS = call.YieldTime.Milliseconds()
 	receipt.Exit = &out.ExitCode
-	receipt.Expected = &call.ExitCode
+	if call.Operation != "ReadFile" {
+		receipt.Expected = &call.ExitCode
+	}
 	receipt.Stdout = out.Stdout
 	receipt.Stderr = out.Stderr
 	receipt.StdoutSHA = digest([]byte(out.Stdout))

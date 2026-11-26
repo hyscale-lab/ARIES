@@ -60,6 +60,9 @@ func main() {
 func command(ctx context.Context) error {
 	atif := flag.String("trajectory", "", "original Harbor agent/trajectory.json")
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
+	wildSource := flag.String("wildclaw", "", "WildClawBench OpenClaw session JSONL")
+	wildMode := flag.String("wildclaw-mode", "", "inspect, timeline (paced source receipts), or live-plan")
+	wildClaw := flag.String("wildclaw-calendar", "", "inspect the reviewed WildClawBench Sol OpenClaw JSONL and plan")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
 	periodicSocket := flag.String("periodic-socket", "", "native page collector socket for ten-second runnable and transition captures, or observer-light for the paired clock control")
@@ -115,6 +118,40 @@ func command(ctx context.Context) error {
 	flag.IntVar(&o.VCPUs, "vcpus", 0, "guest CPUs")
 	flag.IntVar(&o.MemoryMB, "memory-mib", 0, "guest memory")
 	flag.Parse()
+	if *wildSource != "" {
+		var otherFlag bool
+		flag.Visit(func(f *flag.Flag) { otherFlag = otherFlag || (f.Name != "wildclaw" && f.Name != "wildclaw-mode") })
+		if otherFlag || flag.NArg() != 0 {
+			return errors.New("-wildclaw accepts only -wildclaw-mode")
+		}
+		mode := *wildMode
+		if mode == "" {
+			mode = "inspect"
+		}
+		return wildClawCommand(ctx, *wildSource, mode, os.Stdout)
+	}
+	if *wildMode != "" {
+		return errors.New("-wildclaw-mode requires -wildclaw")
+	}
+	if *wildClaw != "" {
+		var otherFlag bool
+		flag.Visit(func(f *flag.Flag) { otherFlag = otherFlag || f.Name != "wildclaw-calendar" })
+		if otherFlag || flag.NArg() != 0 {
+			return errors.New("-wildclaw-calendar is a standalone source-plan inspection; native VM execution is unavailable")
+		}
+		data, err := os.ReadFile(*wildClaw)
+		if err != nil {
+			return err
+		}
+		r, err := harbor.LoadWildClawCalendar(data)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			*harbor.Recording
+			Plan replay.Plan `json:"plan"`
+		}{r, r.Plan})
+	}
 	t, err := os.ReadFile(*atif)
 	if err != nil {
 		return err

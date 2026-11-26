@@ -17,6 +17,7 @@ type Call struct {
 	SessionID      int           `json:"session_id,omitempty"`
 	PipeInterrupt  bool          `json:"pipe_interrupt,omitempty"`
 	YieldTime      time.Duration `json:"yield_time,omitempty"`
+	Timeout        time.Duration `json:"timeout,omitempty"`
 	Operation      string        `json:"operation"`
 	Sequence       uint64        `json:"sequence"`
 	StartOffset    time.Duration `json:"start_offset"`
