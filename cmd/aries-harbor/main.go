@@ -234,7 +234,7 @@ func command(ctx context.Context) error {
 		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
 	}
 	requiredCompanion := ""
-	if r.Trial == "be1d1d11-8af3-404e-9238-e4597b6552e2" {
+	if r.Task == nextjsTask {
 		requiredCompanion = "localhost/zb-nextjs-warehouse@sha256:decefdfc46bbed17ebdc58a58d0b220ae52d4c71b363ce42b58ecde17d309ba8"
 	}
 	if o.CompanionImage != requiredCompanion {

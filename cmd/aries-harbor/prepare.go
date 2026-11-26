@@ -110,7 +110,7 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	if r.Task == nextjsTask {
-		return nextjsSetup, r.Trial == nextjsTrial
+		return nextjsSourceSetup(r.Trial)
 	}
 	task, ok := taskSetups[r.Task]
 	if r.Trial == "3102c53f-5ea4-45e6-b7bf-2ee5c8698518" {
@@ -442,8 +442,8 @@ printf '%s\n' 'SOURCE_TEMPLATE -> SOURCE_DIR'`
 
 func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder, grpcTools bool) error {
 	task := taskSetups[r.Task]
-	if r.Trial == nextjsTrial {
-		task = nextjsSetup
+	if r.Task == nextjsTask {
+		task, _ = nextjsSourceSetup(r.Trial)
 	}
 	begin, err := harbor.Clock()
 	if err != nil {
@@ -453,8 +453,11 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
 	}
-	if r.Trial == nextjsTrial {
+	switch r.Trial {
+	case nextjsTrial:
 		cmd += nextjsFinalCheck
+	case nextjsWave2Trial:
+		cmd += nextjsWave2FinalCheck
 	}
 	if r.Task == "sanitize-git-repo" {
 		cmd += "\nfind . -type f -not -path './.git/*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum"
@@ -604,13 +607,13 @@ with urllib.request.urlopen(urllib.request.Request("https://snapshot.ubuntu.com/
 		python, probe = "/usr/bin/python3", torchNetworkProbe
 	}
 	command := core.Command{Path: python, Args: []string{"-c", probe}}
-	if recording.Trial == nextjsTrial {
+	if recording.Task == nextjsTask {
 		command = core.Command{Path: "/usr/local/bin/node", Args: []string{"-e", nextjsHealthCheck}}
 	}
 	out, err := checked(ctx, m, id, command)
 	end, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil || !json.Valid([]byte(out)) {
-		if recording.Trial == nextjsTrial {
+		if recording.Task == nextjsTask {
 			return errors.Join(errors.New("warehouse companion health readback failed"), err, clockErr)
 		}
 		return errors.Join(errors.New("public dependency route/DNS/TLS readback failed"), err, clockErr)
