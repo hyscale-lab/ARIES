@@ -414,7 +414,11 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 		return err
 	}
 	if s.NativeDirectory != "" {
-		return m.restoreCheckpointVM(ctx, id, s, nativeRestoreRequest(id, s))
+		request := nativeRestoreRequest(id, s)
+		if m.options.NativeRestoreTimeoutSeconds > 0 {
+			request.TimeoutSeconds = m.options.NativeRestoreTimeoutSeconds
+		}
+		return m.restoreCheckpointVM(ctx, id, s, request)
 	}
 	request := pb.Clone(s.Request).(*proto.CreateVMRequest)
 	request.LoadSnapshot = true
@@ -621,7 +625,12 @@ func (m *Manager) stopCheckpointProcesses(ctx context.Context, id string, s *che
 	defer endAbsence()
 	// The native paused-VM stop returns Internal after force termination. Accept
 	// it only once both recorded process identities are positively absent.
-	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	exitTimeout := 10 * time.Second
+	if m.options.NativeCheckpoint && len(m.options.Companions) >= 5 {
+		// The shim must release all companion drives after stopping the paused VM.
+		exitTimeout = 2 * time.Minute
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, exitTimeout)
 	defer cancel()
 	for {
 		err = confirmCheckpointProcesses(s.Processes)

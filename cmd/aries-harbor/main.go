@@ -239,6 +239,7 @@ func command(ctx context.Context) error {
 	}
 	if r.Task == "intrastat-meldung" {
 		o.Companions = intrastatCompanions()
+		o.NativeRestoreTimeoutSeconds = 600
 	}
 	if o.CompanionImage != requiredCompanion {
 		return fmt.Errorf("companion image differs from the source fixture for trial %s", r.Trial)
