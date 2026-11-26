@@ -25,7 +25,8 @@ cat > /etc/pip.conf <<'ARIESPIP'
 no-index = true
 find-links = file://` + pretrainShardWheelDirectory + `
 ARIESPIP
-test "$(pip config get global.no-index)" = true
+pip config list | grep -Fx "global.no-index='true'"
+pip config list | grep -Fx "global.find-links='file://` + pretrainShardWheelDirectory + `'"
 printf '%s\n' 'SciPy initially absent; pinned wheel available with pip index disabled'`
 
 var pretrainShardSetup = taskSetup{
