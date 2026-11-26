@@ -9,15 +9,35 @@
     "memory_mib": 16384,
     "storage_mib": 20480,
     "needs_network": false,
-    "tools": ["exec_command", "update_plan", "view_image"],
+    "tools": ["exec_command", "update_plan", "view_image", "web_search_call"],
     "effects": [
-      "Read the synthetic invoices, rule seeds and test cases from the isolated workspace. Modify only the task-local engine and use the documented local engine, reseed and decision APIs. Display the local invoice screenshots. Record output counts and hashes without retaining case contents."
+      "Read the synthetic invoices, rule seeds and test cases from the isolated workspace. Modify only the task-local engine and use the documented local engine, reseed and decision APIs. Display the local invoice screenshots. Public fee-schedule searches remain host events. Record output counts and hashes without retaining case contents."
     ],
     "trials": [
       {
         "trial": "a6bd7657-0446-44ec-86ff-18eccf0382f0",
         "trajectory_sha256": "fb36938173ed876775d63bab3987ba7e2cd690e4f8fa9ae7afff4738014ebdb1",
         "rollout_sha256": "93b40fb0593fc647b221b9ba1e1edc2b7447e2aabe1bb3047d86eaec20cde257"
+      },
+      {
+        "trial": "1192d7de-0841-46ad-9681-e2182e41779f",
+        "trajectory_sha256": "18ba27027ad338e636842e4488b00eb8265d1db5d91616d20f353de24eeaa78a",
+        "rollout_sha256": "dcba3e746e6003a42db6e14cee1ef278ee0396498d78d02b0f32009d1afcfab6"
+      },
+      {
+        "trial": "8ccd323f-c137-4c6d-8e3a-0ff5f4a5be8e",
+        "trajectory_sha256": "cbe9ba83b360aff195fc37638ab8a2419d7f80650dbea11f2328e8b72f6d7afe",
+        "rollout_sha256": "028e89a07eab0013afb647a157e123da66ddc7d6bd47bf5c144c4d3392cb189c"
+      },
+      {
+        "trial": "10847ae2-517c-431f-8301-8c745cf55852",
+        "trajectory_sha256": "c82ff15d7bccb782ff6da2c86d12da4dfa1a633d25d184b5cc01bdd67ec9d52b",
+        "rollout_sha256": "095cc7ec2ddadd2c622fd88823460b4838b28b387658d8b1ec2e5ba835f84f20"
+      },
+      {
+        "trial": "32c76faf-7d3f-49a3-8e2b-52bc82a0d3dd",
+        "trajectory_sha256": "4058a6b31649d4907513a50d01b0d48241ad830ceb60cd7d665c5c99e56ff4c5",
+        "rollout_sha256": "e0162849257561fb71a34c39d8eccb6d418392528b2ebac8d6176505a011ae03"
       }
     ]
   },

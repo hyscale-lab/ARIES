@@ -43,6 +43,9 @@ test ! -e Main.vo
 }
 
 var tb41PatchAliases = map[string]string{
+	"1192d7de-0841-46ad-9681-e2182e41779f": "Ij6fnl",
+	"10847ae2-517c-431f-8301-8c745cf55852": "HfIuul",
+	"32c76faf-7d3f-49a3-8e2b-52bc82a0d3dd": "TVQhvb",
 	"bd4fd537-e83d-4864-a71d-d6e4911288e4": "BYIvm9",
 	"a2334355-6f34-41d5-9499-dc4873806dfb": "xtwPGq",
 	"a4d84523-40cc-4174-95ba-3b8db9883aee": "QBVFWp",
@@ -132,7 +135,8 @@ git --version`
 		task.initialCheck += `
 test "$(git --version)" = 'git version 2.47.3'
 git --version`
-	case "bc842776-b412-4c72-8cc4-508c45838176", "e06d4044-711f-464c-819a-167164b8f3a2":
+	case "bc842776-b412-4c72-8cc4-508c45838176", "e06d4044-711f-464c-819a-167164b8f3a2",
+		"32c76faf-7d3f-49a3-8e2b-52bc82a0d3dd":
 		task.initialCheck += "\n" + sourceHarnessDirectory
 	}
 	suffix := tb41PatchAliases[trial]

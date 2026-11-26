@@ -548,7 +548,11 @@ sha256sum drift_monitor/*.py`
 		cmd += datasetFinal
 	}
 	if r.Task == claimsTask {
-		cmd += claimsFinal
+		check, err := claimsFinalCheck(r.Trial)
+		if err != nil {
+			return err
+		}
+		cmd += check
 	}
 	if r.Task == "compile-compcert" {
 		cmd += "\n" + compilerResult(r.Trial)
