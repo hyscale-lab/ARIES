@@ -54,6 +54,8 @@ the pinned MCP package from the published image's installed files. The readiness
 requires the original frontend asset, a clean synthetic case index, a Chromium tab,
 CDP and Playwright SSE before snapshot and after restore. Final readback
 checks the original engine hash, the local saved decisions and their counts.
+The claims fixture permits up to ten minutes for native restore to copy and
+verify three 20 GiB task drives and 16 GiB of guest memory before collection.
 
 For this worker, the [provisioner](../../scripts/zb-trace/tb41/fixtures/claims-wave1-provision-amd183.sh)
 creates a separate 20 GiB devmapper runtime from the quiet v5 stack. Stage the

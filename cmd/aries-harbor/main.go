@@ -242,6 +242,7 @@ func command(ctx context.Context) error {
 	}
 	if r.Task == claimsTask {
 		o.Companions = claimsCompanions
+		o.NativeRestoreTimeoutSeconds = 600
 	}
 	if r.NeedsNetwork != (o.CNINetwork != "") {
 		return fmt.Errorf("source %s requires guest network enabled=%t", r.Trial, r.NeedsNetwork)
