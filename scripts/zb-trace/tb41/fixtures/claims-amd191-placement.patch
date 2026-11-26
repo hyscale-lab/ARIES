@@ -1,0 +1,45 @@
+--- a/scripts/zb-trace/tb41/fixtures/claims-wave1-provision-amd183.sh
++++ b/scripts/zb-trace/tb41/fixtures/claims-wave1-provision-amd183.sh
+@@ -1,16 +1,17 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+-test "$(cat /var/emulab/boot/nodeid)" = amd183
++test "$(cat /var/emulab/boot/nodeid)" = amd191
+ stage=/local/zb-tb41-medical-wave1
+-donor=/local/zb-v5-matched-deep/runtime
++donor=/local/zb-tb41-biped.hqQzNA/runtime
+ runtime="$stage/runtime"
+-unit=fcmod-zepbound-amd183-medical-wave1
+-donor_unit=fcmod-zepbound-amd183-v5-deep
++unit=fcmod-zepbound-amd191-medical-wave1
++donor_unit=fcmod-zepbound-amd191-biped
+ socket="/run/$unit/containerd.sock"
+ 
+ mkdir -m 0700 "$runtime"
+ ln -s "$donor/bin" "$runtime/bin"
+ ln -s "$donor/common-vmlinux.bin" "$runtime/common-vmlinux.bin"
++ln -s "$donor/common-rootfs.ext4" "$runtime/common-rootfs.ext4"
+ ln -s "$donor/jailer.json" "$runtime/jailer.json"
+ mkdir "$runtime"/{thinpool,shim,checkpoints,devmapper}
+ sed "s,$donor,$runtime,g" "$donor/runtime.json" > "$runtime/runtime.json"
+--- a/scripts/zb-trace/tb41/fixtures/claims-wave1-amd183.sh
++++ b/scripts/zb-trace/tb41/fixtures/claims-wave1-amd183.sh
+@@ -2,15 +2,15 @@
+ set -euo pipefail
+ umask 077
+ stage=/local/zb-tb41-medical-wave1
+-donor=/local/zb-tb41-cohort/wave10
+-test "$(cat /var/emulab/boot/nodeid)" = amd183
++donor=/local/zb-tb41-biped.hqQzNA
++test "$(cat /var/emulab/boot/nodeid)" = amd191
+ cd "$stage"
+ for executable in bitmap/firecracker aries-harbor fixtures/aries-harbor-image zb-trace/tb41/{native-deep-scan,bin/cg-exec,bin/cg-stats}; do
+     test -x "$executable" || { echo "Missing staged executable: $executable" >&2; exit 1; }
+ done
+ export ZB_SOURCE_DIR="$stage/source" ZB_GUEST_PYTHON=/usr/local/bin/python3 ZB_SCAN_THREADS=2
+ status=0
+-bash "$stage/zb-trace/tb41/pilot.sh" "$stage" "$stage/runtime" fcmod-zepbound-amd183-medical-wave1 traced "$stage/run" \
++bash "$stage/zb-trace/tb41/pilot.sh" "$stage" "$stage/runtime" fcmod-zepbound-amd191-medical-wave1 traced "$stage/run" \
+     -codex-tools "$donor/fixtures/codex-harbor-tools.tar.gz" \
+     -image-helper "$stage/fixtures/aries-harbor-image" > "$stage/driver.log" 2>&1 || status=$?
+ printf '%s\n' "$status" > "$stage/driver.exit"

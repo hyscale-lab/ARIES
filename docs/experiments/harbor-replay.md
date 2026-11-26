@@ -68,6 +68,14 @@ helpers, and the campaign bitmap VMM at
 [driver](../../scripts/zb-trace/tb41/fixtures/claims-wave1-amd183.sh) under the
 same placement locks and collect the redacted trace.
 
+Waves two through five each use their own source hashes and original engine
+and decision export. The driver verifies the live invoice bytes with the
+same PNG codec as the recorded Codex attachment. The
+[amd189 placement patch](../../scripts/zb-trace/tb41/fixtures/claims-amd189-placement.patch)
+and [amd191 placement patch](../../scripts/zb-trace/tb41/fixtures/claims-amd191-placement.patch)
+show the worker-specific donor paths. Each placement builds its own thin
+pool, imports the same three images, and uses the same quiet guest root.
+
 The 4.1 cohort pilot uses the [original `roy-polymorph-cn` trial](https://hub.harborframework.com/jobs/a538f69d-7756-444a-9dfe-43a0ab10b3a8/trials/d16a13fe-8381-4594-b6f6-60bb6f3aa660) from the Terminal-Bench 4.0 job that Harbor regraded. ARIES pins the original artifact pair, source job and row, and the OCI manifest rebuilt from the [original task Dockerfile and data](https://github.com/harbor-framework/terminal-bench/tree/452bf305c6daa62fc59061d22133a7cbc7c1572e/tasks/roy-polymorph-cn). Import the digest-qualified image into the selected containerd namespace before starting the pilot. Guest readiness verifies the task inputs, virtual environment, first-run output paths and the absence of the command that produced the recorded exit 2. The five guest replies should be `0, 0, 0, 2, 0` in source order. One recorded web action and the plan updates remain host-side timeline events.
 
 ```sh

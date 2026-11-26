@@ -1,0 +1,46 @@
+--- a/scripts/zb-trace/tb41/fixtures/claims-wave1-provision-amd183.sh
++++ b/scripts/zb-trace/tb41/fixtures/claims-wave1-provision-amd183.sh
+@@ -1,11 +1,11 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+-test "$(cat /var/emulab/boot/nodeid)" = amd183
++test "$(cat /var/emulab/boot/nodeid)" = amd189
+ stage=/local/zb-tb41-medical-wave1
+-donor=/local/zb-v5-matched-deep/runtime
++donor=/local/zb-v5-ord-189-deep/runtime
+ runtime="$stage/runtime"
+-unit=fcmod-zepbound-amd183-medical-wave1
+-donor_unit=fcmod-zepbound-amd183-v5-deep
++unit=fcmod-zepbound-amd189-medical-wave1
++donor_unit=fcmod-zepbound-amd189-deep-v5
+ socket="/run/$unit/containerd.sock"
+ 
+ mkdir -m 0700 "$runtime"
+@@ -13,7 +13,7 @@
+ ln -s "$donor/common-vmlinux.bin" "$runtime/common-vmlinux.bin"
+ ln -s "$donor/jailer.json" "$runtime/jailer.json"
+ mkdir "$runtime"/{thinpool,shim,checkpoints,devmapper}
+-sed "s,$donor,$runtime,g" "$donor/runtime.json" > "$runtime/runtime.json"
++sed -e "s,$donor,$runtime,g" -e "s,212713ac6777110d6d4f173c2d828aba730ecd55f8407f0dac65158f64a44169,8674edc4b2578075ca405699ea23339559f76bae7aea9038c6d96511e8963cf5,g" -e "s,41b95db3d00598282056b05003b356f391f013632a731f365bc0ce4a795695e1,4f48362409e1bb93fadd07b503502134cd105b8eddab8916bd78a26f7c8cba20,g" "$donor/runtime.json" > "$runtime/runtime.json"
+ sed -e "s,$donor,$runtime,g" -e "s,$donor_unit,$unit,g" -e 's,10737418240,21474836480,g' "$donor/containerd.toml" > "$runtime/containerd.toml"
+ python3 - "$runtime/runtime.json" "$runtime/containerd.toml" <<'PY'
+ import json, sys, tomllib
+--- a/scripts/zb-trace/tb41/fixtures/claims-wave1-amd183.sh
++++ b/scripts/zb-trace/tb41/fixtures/claims-wave1-amd183.sh
+@@ -3,14 +3,14 @@
+ umask 077
+ stage=/local/zb-tb41-medical-wave1
+ donor=/local/zb-tb41-cohort/wave10
+-test "$(cat /var/emulab/boot/nodeid)" = amd183
++test "$(cat /var/emulab/boot/nodeid)" = amd189
+ cd "$stage"
+ for executable in bitmap/firecracker aries-harbor fixtures/aries-harbor-image zb-trace/tb41/{native-deep-scan,bin/cg-exec,bin/cg-stats}; do
+     test -x "$executable" || { echo "Missing staged executable: $executable" >&2; exit 1; }
+ done
+ export ZB_SOURCE_DIR="$stage/source" ZB_GUEST_PYTHON=/usr/local/bin/python3 ZB_SCAN_THREADS=2
+ status=0
+-bash "$stage/zb-trace/tb41/pilot.sh" "$stage" "$stage/runtime" fcmod-zepbound-amd183-medical-wave1 traced "$stage/run" \
++bash "$stage/zb-trace/tb41/pilot.sh" "$stage" "$stage/runtime" fcmod-zepbound-amd189-medical-wave1 traced "$stage/run" \
+     -codex-tools "$donor/fixtures/codex-harbor-tools.tar.gz" \
+     -image-helper "$stage/fixtures/aries-harbor-image" > "$stage/driver.log" 2>&1 || status=$?
+ printf '%s\n' "$status" > "$stage/driver.exit"
