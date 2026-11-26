@@ -247,6 +247,10 @@ func command(ctx context.Context) error {
 	if o.CompanionImage != requiredCompanion {
 		return fmt.Errorf("companion image differs from the source fixture for trial %s", r.Trial)
 	}
+	if r.Task == claimsTask {
+		o.Companions = claimsCompanions
+		o.NativeRestoreTimeoutSeconds = 600
+	}
 	if r.NeedsNetwork != (o.CNINetwork != "") {
 		return fmt.Errorf("source %s requires guest network enabled=%t", r.Trial, r.NeedsNetwork)
 	}
@@ -325,7 +329,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if videoIPP != "" {
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
 	}
-	req.PrivateHostsFile = r.Task == paymentsTask || r.Task == "intrastat-meldung" || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
+	req.PrivateHostsFile = r.Task == claimsTask || r.Task == paymentsTask || r.Task == "intrastat-meldung" || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	if r.Task == "freight-dispatch-shift" {
 		req.PrivateHostsFile = true
 		req.Env = []string{"DISPATCH_EVENT_API_URL=http://event-feed:8080"}
@@ -354,7 +358,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		return errors.Join(err, logErr)
 	}
 	imageHelperSHA := "b06faaf4f96c04e41d6808ee8e38317ea1fd19c68b20693b2045c8fe7e712bc9"
-	if r.Task == "music-harmony" || r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
+	if r.Task == claimsTask || r.Task == "music-harmony" || r.Task == "freecad-platform-drawing" || r.Task == "freecad-spring-clip" {
 		imageHelperSHA = "470c750e1af208d646f53c77a5334c33224a107693e2d02e83df124e50e7cde5"
 	}
 	for _, helper := range []struct{ name, path, expected string }{
@@ -443,6 +447,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if err = log.Encode(map[string]any{"event": event, "begin_monotonic_ns": prepBegin, "end_monotonic_ns": prepEnd, "state": state}); err != nil {
 		return err
 	}
+	if r.Task == claimsTask {
+		if err := claimsReady(ctx, m, id, "before_snapshot", log); err != nil {
+			return err
+		}
+	}
 	if err = verifyVideoRuntime(ctx, m, id, videoIPP, "before_snapshot", log); err != nil {
 		return err
 	}
@@ -496,6 +505,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	}
 	if r.Task == "intrastat-meldung" {
 		if _, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-ec", intrastatHealth}}); err != nil {
+			return err
+		}
+	}
+	if r.Task == claimsTask {
+		if err := claimsReady(ctx, m, id, "after_restore", log); err != nil {
 			return err
 		}
 	}

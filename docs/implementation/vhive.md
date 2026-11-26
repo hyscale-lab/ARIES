@@ -113,6 +113,15 @@ size an individual companion's private `/dev/shm` tmpfs. For example, set it
 to 1024 for a browser companion that requires 1 GiB. Zero uses containerd's
 default size.
 
+Companions can also set `Hostname` for processes that rely on the UTS
+hostname. The medical claims browser uses `localhost` so TigerVNC's
+`hostname -f` check resolves in the private VM. The workspace and browser
+retain their published entrypoints and run without a guest NIC.
+
+Trusted Manager callers can set `NativeRestoreTimeoutSeconds` for native
+artifacts that take longer to copy and verify. An unset value keeps the
+deadline carried by the original VM request.
+
 The [amd183 medical-claims mount fixture](../../scripts/zb-trace/tb41/fixtures/claims-shm-amd183.sh)
 checks Playwright's 1 GiB setting alongside a default companion. It runs headless
 Chromium on a generated document with only loopback available. The probe uses a
