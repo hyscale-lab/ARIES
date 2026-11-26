@@ -1,5 +1,30 @@
 [
   {
+    "task": "intrastat-meldung",
+    "workdir": "/workspace",
+    "image": "docker.io/harborframework/terminal-bench@sha256:6357248f210a333fb08d0fc28f23020b909364ef1a67db132418e651e71bb788",
+    "job_id": "a538f69d-7756-444a-9dfe-43a0ab10b3a8",
+    "row_id": "b3ad58f3-b311-4d4d-875b-3158cf0309d6",
+    "vcpus": 2,
+    "memory_mib": 8192,
+    "storage_mib": 20480,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ],
+    "effects": [
+      "Prepare a synthetic monthly reconciliation using the five isolated published benchmark services and their documented roles."
+    ],
+    "trials": [
+      {
+        "trial": "cfff4007-c001-4e29-950d-eb1a1e8a7bb0",
+        "trajectory_sha256": "1e2862e539f409a207777e5674b5b36563ca0b031f4dc9107f70e0869d7f246a",
+        "rollout_sha256": "3bd0f2eb892c02359bf564d33d19528a9cd55962492dfaa9ad537006e6254a49"
+      }
+    ]
+  },
+  {
     "task": "nextjs-performance",
     "workdir": "/app",
     "image": "localhost/zb-nextjs-runtime@sha256:3d877267cf0f0d27a4e7157cd3e7c42ea2e1b3787e4d790bc171b6311234dee4",

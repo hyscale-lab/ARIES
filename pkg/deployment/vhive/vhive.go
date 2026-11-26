@@ -669,7 +669,7 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		if err != nil {
 			return err
 		}
-		if err := validateGuestSpec(other, false); err != nil {
+		if err := validateGuestSpec(other, companionTasks[i].PrivateHostsFile); err != nil {
 			return err
 		}
 		if err := validateCompanionShm(other, companionTasks[i].ShmSizeMiB); err != nil {

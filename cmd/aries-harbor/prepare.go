@@ -47,6 +47,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"intrastat-meldung": intrastatSetup,
 	"embedding-drift-monitor": {
 		packagesSHA: "1409c8778df5c00c86abe5d99ca46b7526d3d7e5369d2596334ae543dc410a26", packagesField: "noble_git_packages_sha256",
 		output: "drift_monitor/monitor.py",
@@ -259,7 +260,11 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 		}
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
-	if r.Task == hofTopologyTask {
+	if r.Task == "intrastat-meldung" {
+		if err := uploadPinned(ctx, m, id, packages, task.packagesSHA, "/tmp"); err != nil {
+			return "", nil, err
+		}
+	} else if r.Task == hofTopologyTask {
 		if err := stageHOFWheels(ctx, m, id, packages, task.packagesSHA); err != nil {
 			return "", nil, err
 		}
@@ -457,6 +462,8 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += hfFinalCheck(r.Trial)
 	}
 	switch r.Trial {
+	case "cfff4007-c001-4e29-950d-eb1a1e8a7bb0":
+		cmd += "\necho '43aa929ede833faa97e5806adf8aa477520940d4a2384d17d0bbd3b17f6116ef  /workspace/out/reconciliation.json' | sha256sum -c -"
 	case nextjsTrial:
 		cmd += nextjsFinalCheck
 	case nextjsWave2Trial:

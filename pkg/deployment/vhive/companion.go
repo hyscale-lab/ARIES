@@ -22,10 +22,11 @@ const companionsLabel = "aries.vhive.companions"
 // CompanionTask is a trusted provider configuration, outside the guest tool
 // contract. An empty Command uses the digest-qualified image command.
 type CompanionTask struct {
-	Role       string
-	Image      string
-	Command    []string
-	ShmSizeMiB int64 // Zero keeps containerd's default /dev/shm size.
+	Role             string
+	Image            string
+	Command          []string
+	PrivateHostsFile bool
+	ShmSizeMiB       int64 // Zero keeps containerd's default /dev/shm size.
 }
 
 type companionBinding struct {
@@ -131,6 +132,9 @@ func (m *Manager) prepareCompanion(ctx context.Context, vmID string, binding com
 		return nil, fmt.Errorf("reserve guest companion %s: %w", binding.Role, err)
 	}
 	opts := companionSpecOptions(vmID, task.ShmSizeMiB)
+	if task.PrivateHostsFile {
+		opts = append(opts, oci.WithoutMounts("/etc/hosts"))
+	}
 	if len(task.Command) > 0 {
 		opts = append(opts, oci.WithProcessArgs(task.Command...))
 	}

@@ -237,6 +237,9 @@ func command(ctx context.Context) error {
 	if r.Task == nextjsTask {
 		requiredCompanion = "localhost/zb-nextjs-warehouse@sha256:decefdfc46bbed17ebdc58a58d0b220ae52d4c71b363ce42b58ecde17d309ba8"
 	}
+	if r.Task == "intrastat-meldung" {
+		o.Companions = intrastatCompanions()
+	}
 	if o.CompanionImage != requiredCompanion {
 		return fmt.Errorf("companion image differs from the source fixture for trial %s", r.Trial)
 	}
@@ -318,7 +321,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if videoIPP != "" {
 		req.Env = []string{"OPENCV_IPP=" + videoIPP}
 	}
-	req.PrivateHostsFile = r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
+	req.PrivateHostsFile = r.Task == "intrastat-meldung" || r.Task == pretrainShardTask || r.Task == hfTask && hfResolvesHostnameToLoopback(r.Trial) || torchGloo == "alias"
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
@@ -479,6 +482,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	}
 	if err = lifecycle("restore_complete"); err != nil {
 		return err
+	}
+	if r.Task == "intrastat-meldung" {
+		if _, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-ec", intrastatHealth}}); err != nil {
+			return err
+		}
 	}
 	if err = verifyVideoRuntime(ctx, m, id, videoIPP, "after_restore", log); err != nil {
 		return err
