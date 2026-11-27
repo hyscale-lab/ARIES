@@ -333,7 +333,8 @@ To run another subset from the pinned revision, copy either profile and replace
 listed order and repeated entries. Set positive `execution.concurrency` to
 bound parallel occurrences. Add a positive Go duration such as `"30m"` as
 `execution.loop_duration` to repeat the list until admissions close; admitted
-work is always drained. ARIES loads each task's explicit tagged image directly from that
+work is always drained. To stop the agents themselves at a set time, see
+[End a run at a deadline](#end-a-run-at-a-deadline). ARIES loads each task's explicit tagged image directly from that
 task's `task.toml`; no version-catalog or Go code change is required.
 
 ## Replay task arrivals
@@ -421,6 +422,36 @@ loading, but before sandbox startup. It is neither the planned arrival time
 nor the first model request time. Starts can be delayed by capacity or setup;
 scheduling is not a hard realtime guarantee. Trace contents are loaded during
 `run` after model preflight, so `setup` alone does not validate them.
+
+## End a run at a deadline
+
+`execution.run_deadline` is a positive Go duration such as `"6h"`, measured
+from the start of task scheduling like arrival offsets. It ends a run at a set
+time without cutting its evaluations:
+
+```json
+"execution": {
+  "concurrency": 3,
+  "run_deadline": "6h"
+}
+```
+
+At the deadline no further task is admitted, and every agent still running is
+stopped as its own agent timeout would stop it: ARIES confirms harness stop and
+bridge revocation, and the verifier then scores what the agent left. Verifiers
+already running finish, and task cleanup is unchanged. A task admitted just
+before the deadline still starts its sandbox and harness, and its agent stops
+at once. The deadline applies with every deployment provider, and combines with
+`loop_duration` or an arrival trace; whichever closes admissions first applies.
+
+A task whose agent the deadline stopped carries `"run_deadline_reached": true`
+in `run-result.json`; see [run results](run-results.md#inspect-a-run). Like an
+agent timeout, it makes `aries` exit nonzero, and `run-result.json` is still
+complete. With an arrival trace, arrivals scheduled at or after the deadline
+never start and have no task result; ARIES logs their count once when it loads
+the schedule. An arrival scheduled before the deadline that is still waiting
+for capacity when the deadline passes is not admitted either. Without the
+field, a run lasts until its last admitted agent and verifier finish.
 
 ## Model backends
 

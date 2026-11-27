@@ -259,6 +259,13 @@ type TaskResult struct {
 	// schedule asked for.
 	StartedAt time.Time     `json:"started_at,omitempty"`
 	Duration  time.Duration `json:"duration"`
+	// RunDeadlineReached marks a task whose agent was still running when the
+	// run deadline passed and was stopped by it, as its own agent timeout
+	// would have stopped it. Its sandbox is still evaluated. It is set when the
+	// harness run failed and the deadline had passed by the time the run
+	// returned, artifact collection included, so a harness that failed just
+	// before the deadline can carry it too.
+	RunDeadlineReached bool `json:"run_deadline_reached,omitempty"`
 }
 
 // RunSummary is a direct count of task outcomes.

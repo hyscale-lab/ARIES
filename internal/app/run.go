@@ -232,6 +232,17 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 			schedule = append(schedule, arrival{logicalID: entry.TaskID, at: entry.At})
 		}
 		logger.WithFields(logrus.Fields{"arrivals": len(schedule), "rate_per_min": cfg.Execution.ArrivalRatePerMin, "last_offset": schedule[len(schedule)-1].at.String()}).Info("open-loop arrival schedule loaded")
+		if deadline := cfg.Execution.Deadline; deadline > 0 {
+			late := 0
+			for _, next := range schedule {
+				if next.at >= deadline {
+					late++
+				}
+			}
+			if late > 0 {
+				logger.WithFields(logrus.Fields{"arrivals": len(schedule), "after_deadline": late, "run_deadline": deadline.String()}).Warn("arrivals at or after the run deadline will not start")
+			}
+		}
 	}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
@@ -240,9 +251,9 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	go func() {
 		completed <- executeAndRecord(runCtx, func(executionCtx context.Context) (core.RunResult, error) {
 			return runWithInfrastructure(executionCtx, cfg, runID, outputRoot, logger, dependencies.Wiring, func(executionCtx context.Context, taskWiring Wiring) (core.RunResult, error) {
-				return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
+				return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, cfg.Execution.Deadline, schedule,
 					func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
-						experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, catalog, taskWiring)
+						experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence, harnessLookup, logger, catalog, taskWiring)
 						if err != nil {
 							return core.RunResult{}, err
 						}
@@ -321,7 +332,8 @@ func resolveOutputRoot(root, runID string) (string, error) {
 	return outputRoot, nil
 }
 
-func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring) (*experiment, error) {
+func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot string, occurrence taskOccurrence, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring) (*experiment, error) {
+	logicalID, occurrenceID := occurrence.logicalID, occurrence.executionID
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
@@ -351,6 +363,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB},
 			AgentTimeout:          cfg.Overrides.AgentTimeout,
 		},
+		AgentDeadline: occurrence.agentDeadline,
 	})
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("construct runner: %w", err), sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))

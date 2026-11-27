@@ -48,6 +48,13 @@ type ExecutionConfig struct {
 	Concurrency  int           `json:"concurrency"`
 	LoopDuration string        `json:"loop_duration,omitempty"`
 	Loop         time.Duration `json:"-"`
+	// RunDeadline, a Go duration measured from the run start, closes
+	// admissions and stops every agent still running then, as its own agent
+	// timeout would. Those tasks are still evaluated, and so are the ones
+	// already past their agent, so the run ends once the last verifier does
+	// rather than when the last agent would have.
+	RunDeadline string        `json:"run_deadline,omitempty"`
+	Deadline    time.Duration `json:"-"`
 	// ArrivalsFile and ArrivalRatePerMin turn the run into an open loop: each
 	// task starts at the offset the trace gives it, scaled from the trace's
 	// base rate to ArrivalRatePerMin, instead of as soon as a worker is free.
@@ -763,6 +770,13 @@ func (c *Config) validate() error {
 			return errors.New("execution.loop_duration must be a positive Go duration")
 		}
 		c.Execution.Loop = loop
+	}
+	if c.Execution.RunDeadline != "" {
+		deadline, err := time.ParseDuration(c.Execution.RunDeadline)
+		if err != nil || deadline <= 0 {
+			return errors.New("execution.run_deadline must be a positive Go duration")
+		}
+		c.Execution.Deadline = deadline
 	}
 	if (c.Execution.ArrivalsFile != "") != (c.Execution.ArrivalRatePerMin != 0) {
 		return errors.New("execution.arrivals_file and execution.arrival_rate_per_min must be set together")

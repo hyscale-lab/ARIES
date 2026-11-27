@@ -66,6 +66,16 @@ error. List failed tasks with:
 jq -r '.tasks[] | select(.error) | "\(.task_id): \(.error)"' "$run_dir/run-result.json"
 ```
 
+A task with `"run_deadline_reached": true` had its agent stopped by
+[`execution.run_deadline`](configuration.md#end-a-run-at-a-deadline) rather
+than by its own agent timeout. Its harness status and `error` read as they do
+for an agent timeout, normally `canceled` with a deadline error, so the field
+is what tells the two apart. Its isolation and evaluation outcomes are recorded
+as for any other task, so the reward scores what the agent left. The field is set
+when the harness run failed and the deadline had passed by the time the run
+returned, artifact collection included, so a harness that failed just before
+the deadline can carry it too.
+
 Also inspect the run's `infrastructure` object. It records shared bridge and
 network identities, the effective network policy, the bridge observer outcome,
 startup/cleanup durations, and confirmed shared cleanup. Shared failures remain

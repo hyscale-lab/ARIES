@@ -32,6 +32,9 @@ func (experiment *experiment) Run(ctx context.Context) (core.RunResult, error) {
 type taskOccurrence struct {
 	logicalID   string
 	executionID string
+	// agentDeadline is when the run deadline stops this occurrence's agent;
+	// zero means none.
+	agentDeadline time.Time
 }
 
 func nextTaskOccurrence(logicalID string, index *uint64) (taskOccurrence, error) {
@@ -56,7 +59,11 @@ type occurrenceSlot struct {
 	err        error
 }
 
-func runProfile(ctx context.Context, name, runID string, taskIDs []string, concurrency int, loopDuration time.Duration, arrivals []arrival, run occurrenceRunner) (core.RunResult, error) {
+// runProfile admits task occurrences and waits for every admitted one. A
+// positive runDeadline, measured from the run start, closes admissions and
+// stops every agent still running then; the occurrences themselves finish,
+// evaluation included.
+func runProfile(ctx context.Context, name, runID string, taskIDs []string, concurrency int, loopDuration, runDeadline time.Duration, arrivals []arrival, run occurrenceRunner) (core.RunResult, error) {
 	started := time.Now()
 	result := core.RunResult{Name: name, RunID: runID}
 	if concurrency <= 0 || len(taskIDs) == 0 {
@@ -77,12 +84,20 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 		defer timer.Stop()
 		deadline = timer.C
 	}
+	var agentDeadline time.Time
+	if runDeadline > 0 {
+		agentDeadline = started.Add(runDeadline)
+	}
+	closed := func() bool {
+		now := time.Now()
+		return !deadlineAt.IsZero() && !now.Before(deadlineAt) || !agentDeadline.IsZero() && !now.Before(agentDeadline)
+	}
 	capacity := make(chan struct{}, concurrency)
 	var slots []*occurrenceSlot
 	var wg sync.WaitGroup
 	var index uint64
 	admit := func(logicalID string) bool {
-		if !deadlineAt.IsZero() && !time.Now().Before(deadlineAt) {
+		if closed() {
 			return false
 		}
 		select {
@@ -92,7 +107,7 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 			return false
 		case capacity <- struct{}{}:
 		}
-		if ctx.Err() != nil || !deadlineAt.IsZero() && !time.Now().Before(deadlineAt) {
+		if ctx.Err() != nil || closed() {
 			<-capacity
 			return false
 		}
@@ -102,6 +117,7 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 			slots = append(slots, &occurrenceSlot{err: err})
 			return false
 		}
+		occurrence.agentDeadline = agentDeadline
 		slot := &occurrenceSlot{occurrence: occurrence}
 		slots = append(slots, slot)
 		wg.Add(1)
@@ -119,6 +135,10 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 		// the closed-loop artifact the concurrency setting must be sized to
 		// avoid; the realised start is recorded on the task result either way.
 		for _, next := range arrivals {
+			// Offsets are sorted, so nothing after this one can start either.
+			if runDeadline > 0 && next.at >= runDeadline {
+				break
+			}
 			wait := time.Until(started.Add(next.at))
 			if wait > 0 {
 				timer := time.NewTimer(wait)

@@ -38,6 +38,10 @@ harness stop → confirm bridge revocation → evaluate → remove evaluation sa
 → remove task sandbox → release attachment. Record every task failure in
 `TaskResult.Error`.
 
+`execution.run_deadline` closes task admission and bounds only the harness run.
+Keep harness stop, bridge revocation, evaluation, and cleanup on the run context,
+so a task whose agent the deadline stopped is still evaluated.
+
 The app owns one shared bridge and network per run; Runner receives per-sandbox
 sessions. Start shared infrastructure after model preflight, before task admission.
 After task cleanup, stop and remove the shared bridge runtime, finalize shared

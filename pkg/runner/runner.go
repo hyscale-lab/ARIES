@@ -24,6 +24,11 @@ type Options struct {
 	CleanupTimeout   time.Duration
 	Logger           *logrus.Logger
 	RuntimeOverrides RuntimeOverrides
+	// AgentDeadline, when set, stops the agent of a task still running at
+	// that time as its own agent timeout would. Harness stop, bridge
+	// revocation, and evaluation go on under the run's context, so the
+	// verifier still scores what the agent left.
+	AgentDeadline time.Time
 }
 
 type ResourceOverrides struct {
@@ -51,6 +56,7 @@ type Runner struct {
 	cleanupTimeout   time.Duration
 	logger           *logrus.Logger
 	runtimeOverrides RuntimeOverrides
+	agentDeadline    time.Time
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
@@ -88,6 +94,7 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		cleanupTimeout:   options.CleanupTimeout,
 		logger:           options.Logger,
 		runtimeOverrides: cloneRuntimeOverrides(options.RuntimeOverrides),
+		agentDeadline:    options.AgentDeadline,
 	}, nil
 }
 
@@ -263,7 +270,14 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		result.Harness.Error = err.Error()
 		allErrors = append(allErrors, fmt.Errorf("start harness: %w", err))
 	} else {
-		harnessResult, runErr := r.harness.Run(ctx, task.Instruction)
+		agentCtx := ctx
+		if !r.agentDeadline.IsZero() {
+			var cancelAgent context.CancelFunc
+			agentCtx, cancelAgent = context.WithDeadline(ctx, r.agentDeadline)
+			defer cancelAgent()
+		}
+		harnessResult, runErr := r.harness.Run(agentCtx, task.Instruction)
+		result.RunDeadlineReached = runErr != nil && agentCtx.Err() != nil && ctx.Err() == nil
 		result.Harness = harnessResult
 		if runErr == nil {
 			if result.Harness.Status == "" {

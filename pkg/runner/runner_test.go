@@ -273,6 +273,9 @@ type fakeHarness struct {
 	runs         int
 	stops        int
 	instructions []string
+	// runUntilDone makes Run behave like an agent that never finishes on
+	// its own: it returns only when its context ends.
+	runUntilDone bool
 }
 
 func (f *fakeHarness) Start(ctx context.Context, request core.HarnessRequest) error {
@@ -295,6 +298,10 @@ func (f *fakeHarness) Run(ctx context.Context, instruction string) (core.Harness
 	f.log.add("harness.run", ctx)
 	if err := ctx.Err(); err != nil {
 		return core.HarnessResult{}, err
+	}
+	if f.runUntilDone {
+		<-ctx.Done()
+		return core.HarnessResult{}, ctx.Err()
 	}
 	f.mu.Lock()
 	f.instructions = append(f.instructions, instruction)
@@ -1049,5 +1056,65 @@ func TestNewRejectsMissingRunID(t *testing.T) {
 	rig := newRig(t, 0)
 	if _, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("New() error = %v, want missing run ID", err)
+	}
+}
+
+func newDeadlineRig(t *testing.T, deadline time.Time) *rig {
+	t.Helper()
+	rig := newRig(t, 1)
+	runner, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{
+		Name: "test", RunID: "test-run", OutputDir: "runs", CleanupTimeout: time.Second,
+		Logger: logrus.New(), AgentDeadline: deadline,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	rig.runner = runner
+	return rig
+}
+
+func TestAgentDeadlineStopsAgentAndStillEvaluates(t *testing.T) {
+	rig := newDeadlineRig(t, time.Now().Add(50*time.Millisecond))
+	rig.harness.runUntilDone = true
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want the agent's deadline error", err)
+	}
+	wantCalls := []string{
+		"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run",
+		"harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
+	}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("calls = %v, want %v", got, wantCalls)
+	}
+	if deadlines := rig.log.contextDeadlines("harness.run"); len(deadlines) != 1 || !deadlines[0] {
+		t.Fatalf("harness.run context deadlines = %v, want one deadline", deadlines)
+	}
+	for _, call := range []string{"harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"} {
+		if errs := rig.log.contextErrors(call); len(errs) != 1 || errs[0] != nil {
+			t.Fatalf("%s context errors = %v, want a live context", call, errs)
+		}
+	}
+	if deadlines := rig.log.contextDeadlines("benchmark.evaluate"); len(deadlines) != 1 || deadlines[0] {
+		t.Fatalf("benchmark.evaluate context deadlines = %v, want the run's context without the agent deadline", deadlines)
+	}
+	task := result.Tasks[0]
+	if !task.RunDeadlineReached {
+		t.Fatal("task result does not record the run deadline")
+	}
+	if task.Harness.Status != core.StatusCanceled || task.Isolation.Status != core.StatusConfirmed || task.Evaluation.Status != core.StatusSucceeded || task.Evaluation.Reward != 1 {
+		t.Fatalf("unexpected task result: %#v", task)
+	}
+}
+
+func TestAgentDeadlineLeavesAnAgentThatFinishesFirstAlone(t *testing.T) {
+	rig := newDeadlineRig(t, time.Now().Add(time.Hour))
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task := result.Tasks[0]
+	if task.RunDeadlineReached || task.Harness.Status != core.StatusSucceeded || task.Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("unexpected task result: %#v", task)
 	}
 }
