@@ -27,26 +27,41 @@ hof_start_endpoints() {
     for host in "${hof_hosts[@]}"; do
         number=$((number + 1))
         address="192.0.2.$number"
-        target=$(python3 - "$host" <<'PY'
+        if [[ "$host" == brave-broker ]]; then
+            target=${ZB_BRAVE_WORKER_SOCKET:?}
+            [[ -S "$target" && "$target" == /* ]]
+        else
+            target=$(python3 - "$host" <<'PY'
 import ipaddress, socket, sys
 ips = [item[4][0] for item in socket.getaddrinfo(sys.argv[1], 443, socket.AF_INET, socket.SOCK_STREAM)]
 assert ips and all(ipaddress.ip_address(ip).is_global for ip in ips)
 print(ips[0])
 PY
 )
+            if [[ "${HOF_USE_PUBLIC_IPS:-0}" == 1 ]]; then address=$target; fi
+            target="$target:443"
+        fi
+        if [[ -e "$label/hof-endpoints.txt" ]] && awk -v ip="$address" '$1 == ip {found=1} END {exit !found}' "$label/hof-endpoints.txt"; then
+            printf '%s %s %s\n' "$address" "$host" "${target%:443}" >>"$label/hof-endpoints.txt"
+            continue
+        fi
         "${fixture[@]}" ip address add "$address/32" dev lo
         "${service[@]}" ip route add "$address/32" via 192.0.2.246 dev hof-egress
-        # The listener can forward only to this public IP and port. TLS remains end-to-end.
+        # Each listener has one destination, either a fixed HTTPS origin or the broker socket.
         "${fixture[@]}" systemd-socket-activate -l "$address:443" \
-            nsenter --net=/proc/1/ns/net --no-fork /lib/systemd/systemd-socket-proxyd "$target:443" \
+            nsenter --net=/proc/1/ns/net --no-fork /lib/systemd/systemd-socket-proxyd "$target" \
             >"$label/$host.proxy.log" 2>&1 &
         hof_proxies+=("$!")
-        printf '%s %s %s\n' "$address" "$host" "$target" >>"$label/hof-endpoints.txt"
+        printf '%s %s %s\n' "$address" "$host" "${target%:443}" >>"$label/hof-endpoints.txt"
     done
     export TB41_HOF_ENDPOINTS
     TB41_HOF_ENDPOINTS=$(realpath "$label/hof-endpoints.txt")
     for host in "${hof_hosts[@]}"; do
         address=$(awk -v host="$host" '$2 == host {print $1}' "$label/hof-endpoints.txt")
+        if [[ "$host" == brave-broker ]]; then
+            [[ "$(nsenter -t "$pid" -n -- curl -sS --retry 2 --retry-connrefused --max-time 10 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{}' "http://$address:443/search")" == 403 ]]
+            continue
+        fi
         nsenter -t "$pid" -n -- curl -sS --connect-timeout 5 --max-time 15 --retry 2 --retry-connrefused \
             --resolve "$host:443:$address" "https://$host/" -o /dev/null
     done
@@ -55,6 +70,8 @@ PY
 hof_network_guest() {
     local sandbox=$1 run=$2 pid archive="$2/hof-net-tools.tar.gz"
     cp "${TB41_HOF_ENDPOINTS:?}" "$run/hof-endpoints.txt"
+    local -a addresses
+    mapfile -t addresses < <(awk '{print $1}' "$run/hof-endpoints.txt" | sort -u)
     pid=$(jq -er '.pid | select(. > 0)' "$run/workload-state.json")
     # Stage the worker's Ubuntu userspace tools outside the workload. Guest kernel and VMM stay stock.
     local paths=("/usr/sbin/ip" "/usr/sbin/nft")
@@ -77,8 +94,8 @@ hof_network_guest() {
         container_ip "$pid" address add 192.0.2.242/30 dev hof-task
         container_ip "$pid" link set hof-task up
         local_addresses=""
-        for n in $(seq 11 "$((10 + $2))"); do
-            address="192.0.2.$n"
+        shift
+        for address in "$@"; do
             container_ip "$pid" route add "$address/32" via 192.0.2.241 dev hof-task
             local_addresses="${local_addresses:+$local_addresses,}$address"
         done
@@ -96,10 +113,8 @@ RULES
         done
         "$loader" --library-path "$d" "$d/nft" list table ip hof
         rm -r "$d"
-    ' _ "$pid" "${#hof_hosts[@]}" >"$run/hof-network.txt"
-    local n=10 host
-    for host in "${hof_hosts[@]}"; do
-        n=$((n + 1))
-        guest sh -ec 'printf "%s %s\n" "$1" "$2" >> /workload/rootfs/etc/hosts' _ "192.0.2.$n" "$host"
-    done
+    ' _ "$pid" "${addresses[@]}" >"$run/hof-network.txt"
+    while read -r address host _; do
+        guest sh -ec 'printf "%s %s\n" "$1" "$2" >> /workload/rootfs/etc/hosts' _ "$address" "$host"
+    done <"$run/hof-endpoints.txt"
 }

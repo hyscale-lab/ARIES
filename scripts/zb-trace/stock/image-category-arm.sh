@@ -10,6 +10,14 @@ trace="$base/01_Productivity_Flow_task_8_real_image_category.jsonl"
 [[ "$2" =~ ^[a-zA-Z0-9-]+$ ]]
 task=${3:-image-category}
 case "$task" in
+    arxiv-digest)
+        service="ad-$1-$2"; source_sha=209255b995e2554ee8bd061c723848844af0ac464054b5b62ab18bbbc3ac106b
+        trace="$base/01_Productivity_Flow_task_1_arxiv_digest.jsonl"
+        cache="$base/live/home/image-cache"; [[ -d "$cache" ]] || cache="$base/image-cache";;
+    excel-search)
+        service="xl-$1-$2"; source_sha=d21b1a20750e0b72f6d8702ca1321bfdd391921886c2aa1850882bf060896432
+        trace="$base/04_Search_Retrieval_task_6_excel_with_search.jsonl"
+        cache="$base/live/home/image-cache"; [[ -d "$cache" ]] || cache="$base/image-cache";;
     sam3-inference|sam3-debug)
         cache="$base/image-cache"; [[ ! -d "$base/live/home/image-cache" ]] || cache="$base/live/home/image-cache"
         if [[ "$task" == sam3-inference ]]; then service="si-$1-$2"; trace="$base/02_Code_Intelligence_task_1_sam3_inference.jsonl"; source_sha=6fdb46f630e5f42e9b7dd8225f8c59785e6bc9e8d8881b3b3744a57d8cfbaada
@@ -44,8 +52,15 @@ case "$task" in
     conflicting-handling) service="law-$1-$2"; source_sha=7a020f97fe201c8153c08e219839b7a6b6d77ae6f6755a42588c27a2f42fef39
         trace="$base/04_Search_Retrieval_task_2_conflicting_handling.jsonl"; cache="$base/live/home/image-cache"
         [[ -d "$cache" ]] || cache="$base/image-cache";;
-    *) exit 2;;
+    *)
+        source "$here/retrieval-config.sh"
+        retrieval_task "$task" || exit 2
+        retrieval_config "$task" "$1" "$2" "$base";;
 esac
+if [[ "$task" == excel-search || "$task" == arxiv-digest ]] || declare -F retrieval_config >/dev/null; then
+    ZB_BRAVE_PUBLIC_IP=$(python3 -c 'import socket,ipaddress; ip=socket.gethostbyname("api.search.brave.com"); assert ipaddress.ip_address(ip).is_global; print(ip)')
+    export ZB_BRAVE_PUBLIC_IP
+fi
 work="$base/$service"
 run="$base/$service-run"
 options=(--deep)
@@ -101,13 +116,19 @@ for _ in {1..60}; do
     sleep 1
 done
 pid=$(cat "$work/server.pid")
-if [[ "$task" == arxiv-tables || "$task" == wiki-biography || "$task" == sam3-debug || "$task" == scp-crawl || "$task" == repo-homepage ]]; then
+if [[ "$task" == arxiv-tables || "$task" == wiki-biography || "$task" == sam3-debug || "$task" == scp-crawl || "$task" == repo-homepage || "$task" == excel-search || "$task" == arxiv-digest ]] || declare -F retrieval_config >/dev/null; then
     source "$here/hof-network.sh"
     hof_hosts=(arxiv.org)
     if [[ "$task" == wiki-biography ]]; then hof_hosts=(zh.wikipedia.org zh.m.wikipedia.org); fi
     if [[ "$task" == scp-crawl ]]; then hof_hosts=(scp-wiki.wikidot.com scp-wiki.wdfiles.com); fi
     if [[ "$task" == sam3-debug ]]; then hof_hosts=(github.com); fi
     if [[ "$task" == repo-homepage ]]; then hof_hosts=("${homepage_hosts[@]}"); fi
+    if [[ "$task" == arxiv-digest ]]; then hof_hosts=(export.arxiv.org arxiv.org ar5iv.labs.arxiv.org brave-broker); fi
+    if [[ "$task" == excel-search ]]; then hof_hosts=(www.faa.gov brave-broker); fi
+    if declare -F retrieval_config >/dev/null; then
+        HOF_USE_PUBLIC_IPS=1
+        retrieval_hosts "$task"
+    fi
     hof_start_endpoints "$work" "$pid"
 fi
 regctl() { in_stock env REGCTL_CONFIG="$base/registry/regctl.json" "$base/server-bundle/deps/regctl/v0.11.5/regctl" "$@"; }
@@ -150,6 +171,14 @@ elif [[ "$task" == repo-homepage ]]; then
     if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
     aenv exec "$sandbox" runc exec zb-workload python3 /tmp/homepage-check.py inspect >"$run/traced/homepage-files.json"
     python3 "$here/homepage-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif [[ "$task" == excel-search || "$task" == arxiv-digest ]]; then
+    if [[ "$task" == arxiv-digest ]]; then
+        if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
+        aenv exec "$sandbox" runc exec zb-workload sh -ec 'if test -f /tmp_workspace/results/arxiv_digest.md; then cat /tmp_workspace/results/arxiv_digest.md; fi' >"$run/traced/arxiv_digest.md"
+    fi
+    python3 "$here/excel-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
+elif declare -F retrieval_config >/dev/null; then
+    python3 "$here/retrieval-check.py" "$trace" "$run/traced" >"$run/traced/validation.json"
 elif [[ "$task" == video-skill ]]; then
     if [[ -s "$run/traced/final-sandbox-id" ]]; then sandbox=$(cat "$run/traced/final-sandbox-id"); fi
     aenv exec "$sandbox" runc exec zb-workload python3 /tmp/video-skill-check.py inspect >"$run/traced/video-skill-members.json"

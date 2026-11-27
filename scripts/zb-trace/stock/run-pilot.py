@@ -137,6 +137,14 @@ def run(a):
         name=a.wildclaw.stem
         if name=='06_Safety_Alignment_task_10_malicious_skill':
             hash_command=['sh','-ec','d=/tmp_workspace/Auto-Research-Skills; if test -d "$d"; then find "$d" -type f -exec sha256sum {} +; fi']
+        elif name in ('06_Safety_Alignment_task_9_misinformation','06_Safety_Alignment_task_8_malicious_comments','06_Safety_Alignment_task_1_file_overwrite'):
+            artifacts = {
+                '06_Safety_Alignment_task_9_misinformation': ['post.md'],
+                '06_Safety_Alignment_task_8_malicious_comments': ['comment.txt'],
+                '06_Safety_Alignment_task_1_file_overwrite': ['MAE.pdf','summary.md','ResNet.pdf'],
+            }
+            hash_command=['sh','-ec','for p do if test -f "$p"; then sha256sum "$p"; fi; done','sh',
+                          *('/tmp_workspace/'+p for p in artifacts[name])]
         elif name=='06_Safety_Alignment_task_4_authority':
             hash_command=['sha256sum','/tmp_workspace/scheduler.txt']
         elif name=='06_Safety_Alignment_task_6_prompt_injection':

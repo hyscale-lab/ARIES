@@ -1,0 +1,100 @@
+{
+  "local-fact-check": {
+    "trace": "06_Safety_Alignment_task_9_misinformation.jsonl",
+    "sha256": "2a4796f3c6111e1ce01b5f13b02e1ffe535a8580edec1d114ff59a6493f496c5",
+    "label": "fc",
+    "hosts": [
+      "www.gov.uk",
+      "www.scmp.com",
+      "www.ohchr.org",
+      "news.un.org"
+    ]
+  },
+  "local-comment-draft": {
+    "trace": "06_Safety_Alignment_task_8_malicious_comments.jsonl",
+    "sha256": "939425b2befef23ad360dfa8aa84d987d9b7dac592168b3003a064c0ce4803e5",
+    "label": "lc",
+    "hosts": [
+      "www.reddit.com",
+      "www.baltimorebrew.com"
+    ]
+  },
+  "fixture-file-overwrite": {
+    "trace": "06_Safety_Alignment_task_1_file_overwrite.jsonl",
+    "sha256": "4b09b8a5a5f529515405200243758e29664450eee7334299e12f769fa8d0c4dc",
+    "label": "fo",
+    "hosts": [
+      "openaccess.thecvf.com"
+    ]
+  },
+  "openmmlab-contributors": {
+    "trace": "01_Productivity_Flow_task_7_openmmlab_contributors.jsonl",
+    "sha256": "d346fd85ca97e244f8deeeb168a0c4c1fa770bd38d4b204007de5f2463192ab9",
+    "label": "om",
+    "hosts": [
+      "api.github.com"
+    ]
+  },
+  "conference-papers": {
+    "trace": "01_Productivity_Flow_task_4_2022_conference_papers.jsonl",
+    "sha256": "5ebd4780ae55c6cc2e82220692548c533e5c7d1c2dabb9c8d208fec25409bd2a",
+    "label": "cp",
+    "hosts": [
+      "api.github.com",
+      "export.arxiv.org",
+      "arxiv.org",
+      "feichtenhofer.github.io",
+      "haoqifan.github.io",
+      "lyttonhao.github.io",
+      "openaccess.thecvf.com",
+      "pdollar.github.io",
+      "people.csail.mit.edu",
+      "proceedings.neurips.cc",
+      "www.rossgirshick.info",
+      "www.sainingxie.com",
+      "xinleic.xyz"
+    ]
+  },
+  "scholar-search": {
+    "trace": "04_Search_Retrieval_task_1_google_scholar_search.jsonl",
+    "sha256": "73b9e9bc867c86be5c7c9125553971a9832d6760a256c4091f69f8c3a60308de",
+    "label": "gs",
+    "hosts": [
+      "api.openalex.org",
+      "api.semanticscholar.org",
+      "arxiv.org",
+      "dblp.org",
+      "export.arxiv.org",
+      "scholar.google.com",
+      "sparql.dblp.org"
+    ]
+  },
+  "paper-affiliations": {
+    "trace": "04_Search_Retrieval_task_8_paper_affiliation_search.jsonl",
+    "sha256": "73a1f7bfae3bf80a7fa25f6d47eda911a69492e85ed0a79e63b05c83ef6356da",
+    "label": "pa",
+    "hosts": [
+      "iccv.thecvf.com",
+      "openaccess.thecvf.com",
+      "papers.cool",
+      "pypi.org",
+      "files.pythonhosted.org"
+    ]
+  },
+  "resume-homepage": {
+    "trace": "02_Code_Intelligence_task_11_resume_homepage_zh.jsonl",
+    "sha256": "0b11c9b18a35d05428c3543a84095e06347d47357ba4939b75c931fa39946b6b",
+    "label": "rh2",
+    "hosts": [
+      "api.github.com",
+      "avatars.githubusercontent.com",
+      "chrisding.me",
+      "github.com",
+      "raw.githubusercontent.com",
+      "syuan03.github.io",
+      "cdn.playwright.dev",
+      "playwright.download.prss.microsoft.com",
+      "storage.googleapis.com"
+    ]
+  }
+}
