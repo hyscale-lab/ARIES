@@ -110,10 +110,14 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 		}
 	}
 
+	ack := "envd_process_start"
+	if g.direct != nil {
+		ack = "vhive_guest_task_start"
+	}
 	enc := json.NewEncoder(out)
 	if err := enc.Encode(map[string]any{
 		"event": "replay_configuration", "benchmark_evaluator_enabled": false, "sandbox_id": g.sandbox, "container": g.container,
-		"runtime": g.runtime, "start_ack_basis": "envd_process_start", "task": r.Task, "trial_id": r.Trial, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "openclaw_trace": r.OpenClawTrace,
+		"runtime": g.runtime, "start_ack_basis": ack, "task": r.Task, "trial_id": r.Trial, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "openclaw_trace": r.OpenClawTrace,
 	}); err != nil {
 		return err
 	}
@@ -122,6 +126,9 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 		return err
 	}
 	periodic := stockPeriodic(*boundarySocket, g.sandbox)
+	if g.direct != nil {
+		periodic = harbor.PeriodicSocket(*boundarySocket, g.sandbox, g.vmmSocket)
+	}
 	sessions := harbor.NewCodexProcessSessions(ctx, g.stream)
 	defer sessions.Close()
 	intervals := make([]toolInterval, len(r.Plan.Calls))
@@ -199,35 +206,42 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "selected TB 4.1 Codex rollout")
 	calendar := flag.String("calendar", "", "reviewed Sol Calendar JSONL")
 	wildclaw := flag.String("wildclaw", "", "reviewed WildClawBench live replay JSONL")
+	modified := flag.String("modified-v5", "", "modified v5 runtime and fixture JSON")
 	flag.Parse()
-	u, err := url.Parse(g.url)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("expected -url with an HTTP(S) AgentENV base URL")
-	}
-	if g.sandbox == "" || flag.NArg() != 0 {
-		return errors.New("expected -sandbox ID and named options")
-	}
-	if g.container == "" && g.runtime != "" {
-		return errors.New("-runtime requires -container")
-	}
-	if g.container != "" {
-		if strings.HasPrefix(g.container, "-") {
-			return errors.New("invalid workload container name")
+	if *modified != "" {
+		if g.url != "" || g.sandbox != "" || g.container != "" || g.runtime != "" || flag.NArg() != 0 || *atif != "" || *rollout != "" || *boundarySocket == "" {
+			return errors.New("modified v5 requires a WildClaw recording and boundary socket")
 		}
-		if g.runtime == "" {
-			g.runtime = "docker"
+	} else {
+		u, err := url.Parse(g.url)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("expected -url with an HTTP(S) AgentENV base URL")
 		}
-		if g.runtime != "docker" && g.runtime != "runc" {
-			return errors.New("guest runtime must be docker or runc")
+		if g.sandbox == "" || flag.NArg() != 0 {
+			return errors.New("expected -sandbox ID and named options")
 		}
+		if g.container == "" && g.runtime != "" {
+			return errors.New("-runtime requires -container")
+		}
+		if g.container != "" {
+			if strings.HasPrefix(g.container, "-") {
+				return errors.New("invalid workload container name")
+			}
+			if g.runtime == "" {
+				g.runtime = "docker"
+			}
+			if g.runtime != "docker" && g.runtime != "runc" {
+				return errors.New("guest runtime must be docker or runc")
+			}
+		}
+		g.url = strings.TrimRight(g.url, "/")
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Protocols = new(http.Protocols)
+		transport.Protocols.SetHTTP1(true)
+		transport.ResponseHeaderTimeout = 30 * time.Second
+		g.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		g.token = os.Getenv("ENVD_ACCESS_TOKEN")
 	}
-	g.url = strings.TrimRight(g.url, "/")
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Protocols = new(http.Protocols)
-	transport.Protocols.SetHTTP1(true)
-	transport.ResponseHeaderTimeout = 30 * time.Second
-	g.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	g.token = os.Getenv("ENVD_ACCESS_TOKEN")
 	r, err := recording(*atif, *rollout, *calendar, *wildclaw)
 	if err != nil {
 		return err
@@ -247,6 +261,9 @@ func command(ctx context.Context) error {
 	}
 	g.publicGitHubOnly = r.Task == "01_Productivity_Flow_task_7_openmmlab_contributors"
 	g.roy = r.Task == "roy-polymorph-cn"
+	if *modified != "" {
+		return modifiedV5(ctx, *modified, g, r)
+	}
 	return replayGuest(ctx, g, r, os.Stdout)
 }
 

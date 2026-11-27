@@ -12,12 +12,15 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/replay"
 )
 
 type guest struct {
+	vmmSocket                               string
+	direct                                  func(context.Context, processConfig, time.Duration, io.Writer, io.Writer) (core.CommandResult, error)
 	url, sandbox, token, container, runtime string
 	openClawSHA                             string
 	openClaw, roy, publicGitHubOnly         bool
@@ -140,6 +143,12 @@ func (g *guest) streamMode(ctx context.Context, c replay.Call, stdout, stderr io
 	if err != nil {
 		return result, err
 	}
+	if c.NativeTool == "" && g.openClaw && (c.Operation == "Exec" || c.Operation == "StartProcess") {
+		stderr = stdout // OpenClaw returns aggregated output in stream order.
+	}
+	if g.direct != nil {
+		return g.direct(ctx, p, c.Timeout, stdout, stderr)
+	}
 	payload, err := json.Marshal(struct {
 		Process processConfig `json:"process"`
 		Stdin   bool          `json:"stdin"`
@@ -175,9 +184,6 @@ func (g *guest) streamMode(ctx context.Context, c replay.Call, stdout, stderr io
 	}
 	if typ, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); typ != "application/connect+json" {
 		return result, fmt.Errorf("unexpected envd content type %q", typ)
-	}
-	if c.NativeTool == "" && g.openClaw && (c.Operation == "Exec" || c.Operation == "StartProcess") {
-		stderr = stdout // OpenClaw returns aggregated output in stream order.
 	}
 	return processReply(ctx, resp.Body, stdout, stderr)
 }

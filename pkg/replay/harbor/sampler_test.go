@@ -1,4 +1,4 @@
-package main
+package harbor
 
 import (
 	"os"
@@ -14,7 +14,7 @@ func TestSamplerReadinessAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "samples.jsonl")
-	stop, err := startSampler(t.Context(), script, "unused-test-socket", out)
+	stop, err := StartVMMSampler(t.Context(), script, "unused-test-socket", out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestSamplerReadinessAndStop(t *testing.T) {
 	if err = os.WriteFile(script, []byte("print('invalid')\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = startSampler(t.Context(), script, "unused", out+"-invalid"); err == nil {
+	if _, err = StartVMMSampler(t.Context(), script, "unused", out+"-invalid"); err == nil {
 		t.Fatal("accepted invalid sample")
 	}
 }

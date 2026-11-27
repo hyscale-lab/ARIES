@@ -1,4 +1,4 @@
-package main
+package harbor
 
 import (
 	"bufio"
@@ -16,7 +16,7 @@ import (
 
 // Start sampling before the session origin and keep the worker process and
 // its output owned through teardown. Wait for one real record before admitting tools.
-func startSampler(ctx context.Context, script, socket, output string) (func() error, error) {
+func StartVMMSampler(ctx context.Context, script, socket, output string) (func() error, error) {
 	file, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return nil, err

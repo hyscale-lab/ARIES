@@ -629,7 +629,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 		return err
 	}
 	if sampler != "" {
-		stop, err := startSampler(ctx, sampler, socket, samples)
+		stop, err := harbor.StartVMMSampler(ctx, sampler, socket, samples)
 		if err != nil {
 			return err
 		}

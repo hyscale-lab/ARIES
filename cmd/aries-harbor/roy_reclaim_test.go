@@ -224,7 +224,7 @@ func TestRoyReclaimPair(t *testing.T) {
 		dir := filepath.Join(stage, arm)
 		reclaimRequired(t, os.Setenv("ZB_CGROUP_EVENTS", filepath.Join(dir, "events.jsonl")))
 		samplePath := filepath.Join(dir, "samples.jsonl")
-		stop, err := startSampler(ctx, filepath.Join(stage, "zb-trace/tb41/sample.py"), socket, samplePath)
+		stop, err := harbor.StartVMMSampler(ctx, filepath.Join(stage, "zb-trace/tb41/sample.py"), socket, samplePath)
 		reclaimRequired(t, err)
 		func() {
 			defer func() { reclaimRequired(t, stop()) }()
