@@ -150,12 +150,6 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 		Record:                record,
 		WasRetained:           sessions.WasRetained,
 		RelaxedMeasuredStatus: true,
-		FinishObservedProcess: func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
-			if c.NativeTool != "" {
-				return g.nativeResult(ctx, c, true)
-			}
-			return sessions.PollObservedProcess(ctx, c)
-		},
 		Exec: func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
 			if c.NativeTool != "" {
 				return g.nativeResult(ctx, c, false)

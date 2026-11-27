@@ -727,14 +727,15 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if opamLog {
 		h.Exec = mapCompilerLog(h.Exec, log.Encode)
 	}
-	if processDrift || tb41Polls {
+	if processDrift {
 		h.FinishObservedProcess = sessions.FinishObservedProcess
 		h.WasRetained = sessions.WasRetained
 	}
 	if tb41Polls {
 		h.KeepBoundedPollResult = true
 		h.RecordSourceDivergence = true
-		h.FinishObservedProcess = sessions.PollObservedProcess
+		h.WasRetained = sessions.WasRetained
+		h.FinishObservedProcess = nil
 	}
 	if relaxedStatus {
 		h.FinishObservedProcess = sessions.FinishRelaxed

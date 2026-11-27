@@ -442,7 +442,7 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 		if h.RelaxedMeasuredStatus || (h.KeepBoundedPollResult && call.Operation == "Exec" && call.ExitCode >= 0 && out.ExitCode == ProcessRunning) {
 			return recordProcessDrift(ctx, h, call, receipt, out)
 		}
-		if h.FinishObservedProcess != nil && call.SessionID != 0 {
+		if (h.RecordSourceDivergence || h.FinishObservedProcess != nil) && call.SessionID != 0 {
 			return recordProcessDrift(ctx, h, call, receipt, out)
 		}
 		return fmt.Errorf("step %d live exit %d, recorded %d", receipt.Step, out.ExitCode, call.ExitCode)

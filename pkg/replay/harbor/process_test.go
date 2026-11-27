@@ -412,3 +412,20 @@ func TestSourceTerminalExecYieldUsesSeparateDiagnosticIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestSourceOnlyPollRetainsFirstReplyWithoutAdditionalDispatch(t *testing.T) {
+	var events []Receipt
+	hooks := Hooks{RecordSourceDivergence: true, Record: func(e Receipt) error {
+		events = append(events, e)
+		return nil
+	}}
+	call := replay.Call{Operation: "PollProcess", SessionID: 73, ExitCode: 0}
+	first := core.CommandResult{ExitCode: ProcessRunning}
+	if err := recordReply(t.Context(), hooks, call, Receipt{SourceCallID: "poll"}, first, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Event != "tool_reply" || *events[0].Exit != ProcessRunning ||
+		events[1].StatusBasis != "real_process_running_at_source_terminal_poll" {
+		t.Fatalf("unexpected source-only receipts: %+v", events)
+	}
+}
