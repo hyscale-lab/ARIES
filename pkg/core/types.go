@@ -1,6 +1,9 @@
 package core
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Task is the benchmark-independent description of one unit of work.
 type Task struct {
@@ -60,6 +63,9 @@ type Command struct {
 
 // CommandResult records a completed sandbox process.
 type CommandResult struct {
+	NativeToolDetails json.RawMessage `json:"native_tool_details,omitempty"`
+	NativeToolSignal  string          `json:"native_tool_signal,omitempty"`
+
 	Timing   *CommandTiming `json:"timing,omitempty"`
 	ExitCode int            `json:"exit_code"`
 	Stdout   string         `json:"stdout,omitempty"`

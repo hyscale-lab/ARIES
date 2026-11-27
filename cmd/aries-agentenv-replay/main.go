@@ -150,9 +150,17 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 		Record:                record,
 		WasRetained:           sessions.WasRetained,
 		RelaxedMeasuredStatus: true,
-		FinishObservedProcess: sessions.PollObservedProcess,
+		FinishObservedProcess: func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
+			if c.NativeTool != "" {
+				return g.nativeResult(ctx, c, true)
+			}
+			return sessions.PollObservedProcess(ctx, c)
+		},
 		Exec: func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
-			if c.Operation == "OpenClawRead" || c.Operation == "OpenClawImage" || c.Operation == "ReadFile" || c.Operation == "WriteFile" || c.Operation == "EditFile" || c.Operation == "ApplyPatch" || c.Operation == "ViewImage" {
+			if c.NativeTool != "" {
+				return g.nativeResult(ctx, c, false)
+			}
+			if c.Operation == "OpenClawBraveSearch" || c.Operation == "OpenClawWebFetch" || c.Operation == "OpenClawRead" || c.Operation == "OpenClawImage" || c.Operation == "ReadFile" || c.Operation == "WriteFile" || c.Operation == "EditFile" || c.Operation == "ApplyPatch" || c.Operation == "ViewImage" {
 				var stdout, stderr bytes.Buffer
 				ctx, timings := core.WithCommandTimings(ctx)
 				result, err := g.stream(ctx, c, &stdout, &stderr)
@@ -231,10 +239,19 @@ func command(ctx context.Context) error {
 		return err
 	}
 	g.openClaw = r.OpenClawTrace != nil
+	if g.openClaw {
+		g.openClawSHA = r.OpenClawTrace.SHA256
+	}
 	switch r.Task {
-	case "05_Creative_Synthesis_task_8_repo_to_homepage", "01_Productivity_Flow_task_9_scp_crawl", "02_Code_Intelligence_task_1_sam3_inference", "02_Code_Intelligence_task_2_sam3_debug", "01_Productivity_Flow_task_5_wikipedia_biography", "05_Creative_Synthesis_task_7_paper_to_poster", "01_Productivity_Flow_task_2_table_tex_download", "03_Social_Interaction_task_2_chat_action_extraction", "03_Social_Interaction_task_3_chat_multi_step_reasoning", "03_Social_Interaction_task_4_chat_thread_consolidation", "03_Social_Interaction_task_5_chat_escalation_routing", "03_Social_Interaction_task_6_chat_cross_dept_update_zh", "06_Safety_Alignment_task_4_authority", "06_Safety_Alignment_task_5_risk_os_operation", "06_Safety_Alignment_task_6_prompt_injection", "01_Productivity_Flow_task_8_real_image_category", "02_Code_Intelligence_task_9_link_a_pix_color_easy_zh", "01_Productivity_Flow_task_10_pdf_digest", "04_Search_Retrieval_task_2_conflicting_handling":
+	case "04_Search_Retrieval_task_1_google_scholar_search", "04_Search_Retrieval_task_8_paper_affiliation_search", "02_Code_Intelligence_task_11_resume_homepage_zh",
+		"01_Productivity_Flow_task_1_arxiv_digest", "01_Productivity_Flow_task_4_2022_conference_papers",
+		"01_Productivity_Flow_task_7_openmmlab_contributors", "04_Search_Retrieval_task_4_efficient_search",
+		"04_Search_Retrieval_task_6_excel_with_search", "06_Safety_Alignment_task_1_file_overwrite",
+		"06_Safety_Alignment_task_8_malicious_comments", "06_Safety_Alignment_task_9_misinformation",
+		"05_Creative_Synthesis_task_8_repo_to_homepage", "01_Productivity_Flow_task_9_scp_crawl", "02_Code_Intelligence_task_1_sam3_inference", "02_Code_Intelligence_task_2_sam3_debug", "01_Productivity_Flow_task_5_wikipedia_biography", "05_Creative_Synthesis_task_7_paper_to_poster", "01_Productivity_Flow_task_2_table_tex_download", "03_Social_Interaction_task_2_chat_action_extraction", "03_Social_Interaction_task_3_chat_multi_step_reasoning", "03_Social_Interaction_task_4_chat_thread_consolidation", "03_Social_Interaction_task_5_chat_escalation_routing", "03_Social_Interaction_task_6_chat_cross_dept_update_zh", "06_Safety_Alignment_task_4_authority", "06_Safety_Alignment_task_5_risk_os_operation", "06_Safety_Alignment_task_6_prompt_injection", "01_Productivity_Flow_task_8_real_image_category", "02_Code_Intelligence_task_9_link_a_pix_color_easy_zh", "01_Productivity_Flow_task_10_pdf_digest", "04_Search_Retrieval_task_2_conflicting_handling":
 		g.shell = "sh" // The recorded shell rejects pipefail and identifies itself as sh.
 	}
+	g.publicGitHubOnly = r.Task == "01_Productivity_Flow_task_7_openmmlab_contributors"
 	g.roy = r.Task == "roy-polymorph-cn"
 	return replayGuest(ctx, g, r, os.Stdout)
 }

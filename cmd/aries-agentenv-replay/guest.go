@@ -19,7 +19,8 @@ import (
 
 type guest struct {
 	url, sandbox, token, container, runtime string
-	openClaw, roy                           bool
+	openClawSHA                             string
+	openClaw, roy, publicGitHubOnly         bool
 	shell                                   string
 	client                                  *http.Client
 }
@@ -31,7 +32,21 @@ type processConfig struct {
 }
 
 func (g guest) process(c replay.Call) (processConfig, error) {
+	return g.processMode(c, false)
+}
+
+func (g guest) processMode(c replay.Call, diagnostic bool) (processConfig, error) {
 	var p processConfig
+	if c.NativeTool != "" {
+		if !g.openClaw || g.openClawSHA == "" {
+			return p, errors.New("missing native tool source")
+		}
+		args := []string{"/tmp/zb-source-tools.mjs", "call", g.openClawSHA, c.ToolCallID}
+		if diagnostic {
+			args = append(args, "diagnostic")
+		}
+		return g.containerProcess(processConfig{"node", args, ""}), nil
+	}
 	switch c.Operation {
 	case "Exec", "StartProcess":
 		flag := "-c"
@@ -48,11 +63,24 @@ func (g guest) process(c replay.Call) (processConfig, error) {
 			shell = "/bin/bash"
 		}
 		p = processConfig{shell, []string{flag, script}, c.Workdir}
+		if g.publicGitHubOnly {
+			// OpenMMLab's recorded token probe was empty and the collector used anonymous GETs.
+			p = processConfig{"env", []string{"-u", "GH_TOKEN", "-u", "GITHUB_TOKEN", "-u", "GITHUB_PAT", shell, flag, script}, c.Workdir}
+		}
 	case "ApplyPatch":
 		const binary = "/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
 		p = processConfig{binary, []string{"--codex-run-as-apply-patch", string(c.Body)}, c.Workdir}
 	case "ViewImage":
 		p = processConfig{"/usr/local/bin/aries-harbor-image", []string{c.Path, strconv.Itoa(c.ImageWidth), strconv.Itoa(c.ImageHeight)}, ""}
+	case "OpenClawBraveSearch", "OpenClawWebFetch":
+		if !g.openClaw || g.openClawSHA == "" {
+			return p, errors.New("unexpected native web operation")
+		}
+		if c.Operation == "OpenClawBraveSearch" {
+			p = processConfig{"node", []string{"/tmp/zb-brave.mjs", "call", g.openClawSHA, c.ToolCallID, string(c.Body)}, ""}
+		} else {
+			p = processConfig{"node", []string{"/tmp/zb-web-fetch.mjs", string(c.Body)}, ""}
+		}
 	case "OpenClawRead":
 		if !g.openClaw {
 			return p, errors.New("unexpected native file read")
@@ -82,6 +110,10 @@ func (g guest) process(c replay.Call) (processConfig, error) {
 	default:
 		return p, fmt.Errorf("unsupported guest operation %q for %s", c.Operation, c.ToolCallID)
 	}
+	return g.containerProcess(p), nil
+}
+
+func (g guest) containerProcess(p processConfig) processConfig {
 	if g.container != "" {
 		args := []string{"exec"}
 		if p.CWD != "" {
@@ -94,13 +126,17 @@ func (g guest) process(c replay.Call) (processConfig, error) {
 		args = append(args, g.container, p.Command)
 		p = processConfig{g.runtime, append(args, p.Args...), ""}
 	}
-	return p, nil
+	return p
 }
 
 // envd's Connect Process/Start handler supports JSON and protobuf on the same route.
 func (g *guest) stream(ctx context.Context, c replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
+	return g.streamMode(ctx, c, stdout, stderr, false)
+}
+
+func (g *guest) streamMode(ctx context.Context, c replay.Call, stdout, stderr io.Writer, diagnostic bool) (core.CommandResult, error) {
 	var result core.CommandResult
-	p, err := g.process(c)
+	p, err := g.processMode(c, diagnostic)
 	if err != nil {
 		return result, err
 	}
@@ -140,7 +176,7 @@ func (g *guest) stream(ctx context.Context, c replay.Call, stdout, stderr io.Wri
 	if typ, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); typ != "application/connect+json" {
 		return result, fmt.Errorf("unexpected envd content type %q", typ)
 	}
-	if g.openClaw && (c.Operation == "Exec" || c.Operation == "StartProcess") {
+	if c.NativeTool == "" && g.openClaw && (c.Operation == "Exec" || c.Operation == "StartProcess") {
 		stderr = stdout // OpenClaw returns aggregated output in stream order.
 	}
 	return processReply(ctx, resp.Body, stdout, stderr)

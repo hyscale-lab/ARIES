@@ -2,6 +2,7 @@ package harbor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -36,6 +37,12 @@ type Hooks struct {
 }
 
 type Receipt struct {
+	NativeToolDetails     json.RawMessage `json:"native_tool_details,omitempty"`
+	SourceToolDetails     json.RawMessage `json:"source_native_tool_details,omitempty"`
+	NativeToolSignal      string          `json:"native_tool_signal,omitempty"`
+	SourceToolSignal      string          `json:"source_native_tool_signal,omitempty"`
+	NativeToolStatusMatch *bool           `json:"native_tool_status_matches_source,omitempty"`
+
 	SourceHandle         string              `json:"source_handle,omitempty"`
 	SourcePlayback       bool                `json:"source_playback,omitempty"`
 	SourceTraceStatus    string              `json:"source_trace_status,omitempty"`
@@ -359,6 +366,9 @@ func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 			receipt.StatusBasis = "retained_terminal_status_empty_poll"
 		}
 	}
+	if call.Operation == "OpenClawBraveSearch" || call.Operation == "OpenClawWebFetch" {
+		receipt.StatusBasis = "live_openclaw_web_tool_result"
+	}
 	if call.Operation == "ViewImage" {
 		receipt.StatusBasis = "recorded_high_detail_image_attachment"
 	}
@@ -382,6 +392,13 @@ func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt
 	receipt.Time = replyTime
 	receipt.OutputComparison = compareOutput(call.ResponseStdout, out)
 	receipt.SourceOutputSHA = digest(call.ResponseStdout)
+	if call.NativeTool != "" {
+		receipt.StatusBasis = "live_published_openclaw_tool"
+		receipt.SourceToolDetails, receipt.SourceToolSignal = call.SourceToolDetails, call.NativeSignal
+		receipt.NativeToolDetails, receipt.NativeToolSignal = out.NativeToolDetails, out.NativeToolSignal
+		match := callErr == nil && sameNativeStatus(call.SourceToolDetails, out.NativeToolDetails) && call.NativeSignal == out.NativeToolSignal
+		receipt.NativeToolStatusMatch = &match
+	}
 	receipt.ProcessTiming = out.Timing
 	receipt.SourceYieldMS = call.YieldTime.Milliseconds()
 	receipt.Exit = &out.ExitCode

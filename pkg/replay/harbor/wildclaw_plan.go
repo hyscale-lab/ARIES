@@ -35,7 +35,7 @@ func LoadWildClawLive(trace []byte) (*Recording, error) {
 }
 
 func reviewedWildClawLive(sha string) bool {
-	return localFileSource(sha) || sha == wildClawCalendarDigest || sha == wildClawImageCategoryDigest || sha == wildClawPuzzleDigest || sha == wildClawPDF || sha == wildClawConflicts
+	return braveSearchSource(sha) || localFileSource(sha) || sha == wildClawCalendarDigest || sha == wildClawImageCategoryDigest || sha == wildClawPuzzleDigest || sha == wildClawPDF || sha == wildClawConflicts
 }
 
 func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
@@ -105,7 +105,12 @@ func wildClawRecording(s *WildClawSource, playback bool) (*Recording, error) {
 			if !playback {
 				var call replay.Call
 				var err error
-				if localFileSource(s.SHA256) || s.SHA256 == wildClawPDF || s.SHA256 == wildClawConflicts {
+				if braveSearchSource(s.SHA256) && (c.Name == "web_search" || c.Name == "web_fetch") {
+					call, err = openClawWebCall(c)
+				} else if (s.SHA256 == wildClawScholar || s.SHA256 == wildClawAffiliations) && (c.Name == "process" || (c.Name == "exec" && c.Reply != nil && c.Reply.Status == "running")) ||
+					s.SHA256 == wildClawResume && (c.Name == "read" || c.Name == "image") {
+					call, err = nativeSourceCall(c, handles, s.CWD)
+				} else if braveSearchSource(s.SHA256) || localFileSource(s.SHA256) || s.SHA256 == wildClawPDF || s.SHA256 == wildClawConflicts {
 					call, err = documentCall(c, handles, s.CWD)
 				} else {
 					call, err = wildClawLiveCall(c, s.CWD)
@@ -146,9 +151,15 @@ func wildClawLiveCall(c WildClawSourceCall, sessionCWD string) (replay.Call, err
 	}
 	switch c.Name {
 	case "read":
-		var args struct{ Path string }
+		var args struct {
+			Path     string
+			FilePath string `json:"file_path"`
+		}
 		if err := json.Unmarshal(c.Arguments, &args); err != nil {
 			return call, err
+		}
+		if args.Path == "" {
+			args.Path = args.FilePath
 		}
 		var content []struct{ Type, Text, Data, MimeType string }
 		if err := json.Unmarshal(c.Reply.Content, &content); err != nil {

@@ -136,6 +136,42 @@ func TestWildClawSolEngineCoverage(t *testing.T) {
 			continue
 		}
 		livePlans++
+		if braveSearchSource(r.OpenClawTrace.SHA256) {
+			var operations [2]int
+			for _, c := range live.Plan.Calls {
+				switch c.Operation {
+				case "OpenClawBraveSearch":
+					operations[0]++
+				case "OpenClawWebFetch":
+					operations[1]++
+				default:
+					continue
+				}
+				if c.ToolCallID == "" || len(c.Body) == 0 || len(c.ResponseStdout) == 0 || (c.ExitCode != 0 && (c.Operation != "OpenClawWebFetch" || c.ResponseCode != "error")) {
+					t.Fatalf("unbound web operation in %s, sequence %d", r.Task, c.Sequence)
+				}
+			}
+			expected := map[string][2]int{
+				"04_Search_Retrieval_task_1_google_scholar_search":    {20, 5},
+				"04_Search_Retrieval_task_8_paper_affiliation_search": {8, 0},
+				"02_Code_Intelligence_task_11_resume_homepage_zh":     {1, 5},
+				"01_Productivity_Flow_task_1_arxiv_digest":            {3, 0},
+				"01_Productivity_Flow_task_4_2022_conference_papers":  {20, 7},
+				"01_Productivity_Flow_task_7_openmmlab_contributors":  {1, 0},
+				"04_Search_Retrieval_task_4_efficient_search":         {4, 6},
+				"06_Safety_Alignment_task_1_file_overwrite":           {1, 0},
+				"06_Safety_Alignment_task_8_malicious_comments":       {1, 2},
+				"06_Safety_Alignment_task_9_misinformation":           {3, 4},
+				"04_Search_Retrieval_task_6_excel_with_search":        {3, 0},
+				"04_Search_Retrieval_task_10_tomllib_trace":           {3, 3},
+				"04_Search_Retrieval_task_5_fuzzy_search":             {3, 4},
+				"04_Search_Retrieval_task_11_fuzzy_repo_search":       {3, 9},
+				"04_Search_Retrieval_task_3_constraint_search":        {7, 2},
+			}
+			if operations != expected[r.Task] {
+				t.Fatalf("%s: projected search/fetch counts %v", r.Task, operations)
+			}
+		}
 		if r.OpenClawTrace.SHA256 == wildClawImageCategoryDigest {
 			var exit []int32
 			for _, c := range live.Plan.Calls {
@@ -149,7 +185,7 @@ func TestWildClawSolEngineCoverage(t *testing.T) {
 			}
 		}
 	}
-	if observedCalls != 1109 || observedReplies != 1108 || unanswered != 1 || livePlans != 21 {
+	if observedCalls != 1109 || observedReplies != 1108 || unanswered != 1 || livePlans != 36 {
 		t.Fatalf("observed %d requests, %d replies, %d unanswered, %d live plans", observedCalls, observedReplies, unanswered, livePlans)
 	}
 }

@@ -12,6 +12,10 @@ import (
 
 // Call is one recorded sandbox request and its expected logical outcome.
 type Call struct {
+	NativeTool        string          `json:"native_tool,omitempty"`
+	NativeSignal      string          `json:"source_native_signal,omitempty"`
+	SourceToolDetails json.RawMessage `json:"source_native_tool_details,omitempty"`
+
 	SourceHandle   string        `json:"source_handle,omitempty"`
 	ImageWidth     int           `json:"image_width,omitempty"`
 	ImageHeight    int           `json:"image_height,omitempty"`
