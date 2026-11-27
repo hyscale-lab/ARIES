@@ -107,6 +107,22 @@ func PrepareApptainerBridge() error {
 // ApptainerNetworkPolicy is recorded as an Apptainer run's network policy.
 const ApptainerNetworkPolicy = apptainer.NetworkPolicy
 
+// CheckApptainerModelAddress refuses a model base URL that an Apptainer run's
+// tasks could not reach: one in a subnet the run's own network namespaces use,
+// or, for a managed server, a loopback URL other than http on 127.0.0.1.
+func CheckApptainerModelAddress(baseURL string, managed bool) error {
+	return apptainer.CheckModelAddress(baseURL, managed)
+}
+
+// CheckApptainerStateDir refuses a state directory too long for a task's
+// slirp4netns socket.
+func CheckApptainerStateDir(cfg config.DeploymentConfig) error {
+	if cfg.Apptainer == nil {
+		return nil
+	}
+	return apptainer.CheckStateDir(cfg.Apptainer.StateDir)
+}
+
 // NewApptainerRunResources observes the run's bridge process.
 func NewApptainerRunResources(cfg config.DeploymentConfig, runID string) (monitor.ResourceSource, error) {
 	if cfg.Apptainer == nil {

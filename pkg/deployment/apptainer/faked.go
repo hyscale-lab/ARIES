@@ -19,9 +19,10 @@ const fakedShell = `faked=/.singularity.d/libs/faked; [ -x "$faked" ] || exit 0;
 // exec has its own daemon, which ends with the command. A harness that saves a
 // command's environment and restores it in the next, as Hermes does, would then
 // send to a finished daemon's queue: nothing reads it, so it fills, and the
-// command blocks in msgsnd. Stopping the instance ends the daemon.
-func (manager *Manager) startFaked(ctx context.Context, id string) error {
-	output, err := manager.run(ctx, nil, append(execPrefix(id, "/"), "/bin/sh", "-c", fakedShell)...)
+// command blocks in msgsnd. Stopping the instance ends the daemon. enter is
+// the nsenter command for the instance's task namespace, if it has one.
+func (manager *Manager) startFaked(ctx context.Context, id string, enter []string) error {
+	output, err := manager.runIn(ctx, enter, nil, append(execPrefix(id, "/"), "/bin/sh", "-c", fakedShell)...)
 	if err != nil {
 		return fmt.Errorf("start the instance's fakeroot daemon: %w", err)
 	}

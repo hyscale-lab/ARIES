@@ -209,11 +209,12 @@ func (f *fakeToolSandbox) stopCount() int {
 }
 
 type fakeSandbox struct {
-	name string
+	name         string
+	modelBaseURL string
 }
 
 func (f *fakeSandbox) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "occurrence-network"}}
+	return core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "occurrence-network"}, ModelBaseURL: f.modelBaseURL}
 }
 
 func (f *fakeSandbox) Exec(context.Context, core.Command) (core.CommandResult, error) {
@@ -549,6 +550,30 @@ func TestRunnerPassesTheTaskSandboxToolsToTheHarness(t *testing.T) {
 		}
 		if got := rig.harness.requests[0].NoSandboxTools; got != withheld {
 			t.Fatalf("harness request NoSandboxTools = %v, want %v", got, withheld)
+		}
+	}
+}
+
+func TestRunnerGivesTheHarnessTheModelAddressItsPlacementReaches(t *testing.T) {
+	model := core.ModelConfig{Provider: "sglang", BaseURL: "http://127.0.0.1:30000/v1", Model: "served"}
+	for _, placed := range []string{"", "http://10.0.3.2:30000/v1"} {
+		rig := newRig(t, 1)
+		rig.factory.sandbox.modelBaseURL = placed
+		runner, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{
+			Name: "test", RunID: "test-run", OutputDir: "runs", CleanupTimeout: time.Second, Logger: logrus.New(), Model: model,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runner.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		want := model
+		if placed != "" {
+			want.BaseURL = placed
+		}
+		if got := rig.harness.requests[0].Model; got != want {
+			t.Fatalf("harness model with placement URL %q = %+v, want %+v", placed, got, want)
 		}
 	}
 }

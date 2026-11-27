@@ -7,6 +7,7 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/config"
+	"github.com/hyscale-lab/aries/pkg/deployment/apptainer"
 )
 
 // NewSGLang validates native configuration and prepares a managed runtime.
@@ -15,6 +16,14 @@ func NewSGLang(cfg config.Config, outputDir string) (app.PreparedBackend, error)
 	native, err := runtimesglang.LoadNativeConfig(cfg.Runtime.Config.ResolvedFile, cfg.Model.ID, cfg.Model.BaseURL)
 	if err != nil {
 		return app.PreparedBackend{}, err
+	}
+	// An Apptainer task reaches the server through its gateway, which leads
+	// to the run namespace's 127.0.0.1 alone, or at the run namespace's own
+	// address when the model URL names it.
+	if cfg.Sandbox.Deployment.Backend == "apptainer" {
+		if err := apptainer.CheckManagedListener(native.Host, cfg.Model.BaseURL); err != nil {
+			return app.PreparedBackend{}, err
+		}
 	}
 	gpuIndices, err := native.ResolveGPUIndices(cfg.Runtime.Config.GPUIndices)
 	if err != nil {

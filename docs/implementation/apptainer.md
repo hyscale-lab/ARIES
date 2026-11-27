@@ -14,23 +14,60 @@ profile fields are in the [configuration reference](../configuration.md#apptaine
 Harness, sandbox and bridge all select `apptainer` with one shared
 configuration. A normal user cannot give an Apptainer instance its own network,
 so `aries PROFILE` first re-executes itself in a new user and network namespace
-that maps the invoking user to itself. `slirp4netns` gives the namespace
-internet access but no route to the host's loopback. Runner, the bridge and
-every instance share the loopback of the namespace; nothing in it can be reached from
-outside, which keeps the unauthenticated control and SSH ports private on a host
-shared with other users. Services are addressed at `127.0.0.1`, so a run
-executes one task at a time (`execution.concurrency: 1`). Instances resolve
-names through the forwarder of `slirp4netns`; Runner uses the host's resolver
-configuration. The recorded network policy is `run-namespace`. `aries setup`
-does not enter a namespace.
+that maps the invoking user to itself. `slirp4netns` gives this run namespace
+internet access but no route to the host's loopback. Runner and the bridge live
+in it, and nothing in it can be reached from outside, which keeps the
+unauthenticated control and SSH ports private on a host shared with other
+users. `aries setup` does not enter a namespace.
+
+Each task gets a namespace of its own, nested in the run's, which its sandbox,
+harness and services share. The sandbox's task environment starts it, and stops
+it after the sandbox is removed; an evaluation sandbox gets one of its own.
+Tasks that run at once (`execution.concurrency` above 1) can therefore use the
+same ports: a task's services are addressed at `127.0.0.1`, its own loopback.
+
+- **Holder.** `cat` reading a pipe that only Runner writes to keeps the
+  namespace, and ends when Runner closes the pipe or dies.
+- **Network.** The task's own `slirp4netns`, on `10.0.3.0/24`, runs in the run
+  namespace. It gives the task internet access, and connects what the task sends
+  to its gateway, `10.0.3.2`, to `127.0.0.1` in the run namespace, where the
+  harness reaches the bridge.
+- **Runner to harness.** Runner reaches a harness at an address on the loopback
+  of the run namespace that is the task's own, such as `127.1.0.1`, from which
+  `slirp4netns` forwards the port into the task.
+- **Model.** A managed SGLang server runs in the run namespace. When
+  `model.base_url` names its loopback, Runner uses that URL and the harness gets
+  the same URL with the task's gateway as host, such as `http://10.0.3.2:30000/v1`.
+  The gateway leads to `127.0.0.1` only, so the URL must be `http` on `127.0.0.1`,
+  `localhost` or `0.0.0.0`, and the `host` in the SGLang config must be
+  `127.0.0.1` or `0.0.0.0`; another loopback address is refused, and so are
+  `https`, whose certificate would not name the gateway, and a server listening
+  elsewhere, such as on `::1`, which Runner could still reach through `localhost`.
+  The URL may instead name `10.0.2.100`, the address `slirp4netns` gives `tap0`
+  in the run namespace: Runner reaches it there, and a task through its own
+  `slirp4netns`, so the harness gets the URL unchanged. The server must then
+  listen on `10.0.2.100` or `0.0.0.0`.
+- **Commands.** Apptainer cannot execute in an instance from outside the network
+  namespace that started it, so `apptainer instance start` and every
+  `apptainer exec` for a task's instance go through `nsenter`. Listing and
+  stopping instances work from outside. A record of each task namespace in
+  `state_dir` lets the bridge enter it too. `aries` checks that `nsenter` and
+  `cat` are on `PATH` before anything starts.
+
+Instances resolve names through the run's `slirp4netns` forwarder, `10.0.2.3`,
+which a task reaches because its own network is another; Runner uses the host's
+resolver configuration. A task reaches `127.0.0.1` in the run namespace, and with
+it the bridge's control port and the SSH ports of every task's session, none of
+which require authentication, as containers on Docker's shared network can reach
+one another; it does not reach other tasks' loopback or their forwarded ports. The recorded network policy is `task-namespace`.
 
 The bridge runs `aries-bridge`, built beside `aries`, as a plain process in the
-namespace. Apptainer cannot enter an instance's user namespace from inside
+run namespace. Apptainer cannot enter an instance's user namespace from inside
 another instance, so a containerized bridge could not execute in the sandboxes.
 The bridge's paths are host paths in a private directory under `state_dir`; it
 receives only the environment needed to run `apptainer`, not Runner's
 credentials. It reads the sandboxes' ownership records in `state_dir` before it
-executes in them.
+executes in them, and enters each sandbox's task namespace.
 
 ## Images
 
@@ -141,19 +178,36 @@ measurement against the CPU each of them reports for itself.
 
 - CPU and memory limits need cgroups v2 with delegation, which HPC hosts often
   lack. A request with limits is refused unless `unenforced_limits` accepts them;
-  the limits are then recorded but not applied.
+  the limits are then recorded but not applied, so tasks that run at once share
+  the host's or the job's CPU and memory without a bound per task.
 - Resources are measured from processes, not from a cgroup: memory excludes the
   page cache, and CPU time used by Apptainer's launcher outside the instance is
-  not counted.
-- Network aliases, mixed backends, concurrency above one and SWE-bench Pro, whose
-  commands run as a non-root user, are rejected before any effect. So is the
-  `hermes-grpc` bridge, whose typed file operations are not implemented here; the
-  SSH bridges need only exec.
+  not counted. Neither is the `slirp4netns` that carries a task's traffic.
+- Network aliases, mixed backends and SWE-bench Pro, whose commands run as a
+  non-root user, are rejected before any effect. So are the `hermes-grpc` bridge,
+  whose typed file operations are not implemented here (the SSH bridges need
+  only exec), and an external model server on loopback (`localhost`, `127.0.0.0/8`,
+  `::1` or the unspecified address): nothing in the run reaches the host's
+  loopback, so it must be at an address both Runner and the tasks reach, such as
+  the node's. A model address in `10.0.2.0/24` or `10.0.3.0/24` is refused too:
+  inside the run those addresses belong to `slirp4netns`, not to the node's network.
+  The one exception is a managed server at `10.0.2.100`, the address of the run
+  namespace itself.
+  So is a managed server's URL on another loopback address than `127.0.0.1`,
+  `localhost` or `0.0.0.0`, or over `https`, and, before it starts, a managed
+  SGLang server whose `host` is neither `127.0.0.1` nor `0.0.0.0` (neither
+  `10.0.2.100` nor `0.0.0.0` when the URL names `10.0.2.100`).
 - Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
   (`kernel.apparmor_restrict_unprivileged_userns`); with the restriction on,
-  Apptainer cannot start a fakeroot instance inside the run namespace. On such
-  a host Runner's own name lookups also fail inside the namespace when the host
-  resolves through `127.0.0.53`, so endpoints Runner contacts must be addresses.
+  Apptainer cannot start a fakeroot instance inside the run's or a task's
+  namespace. On such a host Runner's own name lookups also fail inside the
+  namespace when the host resolves through `127.0.0.53`, so endpoints Runner
+  contacts must be addresses.
+- `state_dir` must be short enough for each task's `slirp4netns` socket,
+  `<state_dir>/ns-<16 hex digits>/slirp.sock`, to fit the 107 bytes of a Unix
+  socket address; `aries setup` and `aries run` refuse a longer one before
+  anything else. The PBS example puts `state_dir` under `$TMPDIR`; with NSCC's,
+  the socket path takes 88 of the 107 bytes.
 - Toolathlon's application-backed tasks need Docker on the host and are not
   supported.
 
@@ -163,13 +217,19 @@ measurement against the CPU each of them reports for itself.
 with `apptainer instance list` that it is gone, and removes the overlay and the
 record. An instance with no record, or whose PID differs from its record, is
 never stopped. The bridge process is stopped by process group and its directory
-removed. The namespace ends with the run's last process.
+removed. A task's namespace is stopped after its runtimes: its holder and its
+`slirp4netns` end, and its record goes. A process still in it belongs to a
+runtime whose removal failed; it is reported, not killed, and the namespace stays
+until it is gone. The run's namespace ends with the run's last process.
 
 As on the other backends, a Runner that crashes leaves its runtimes for an
 operator to clean up, and the bridge process keeps running, which also keeps the
-namespace. Every runtime's `Stop` works from its record on disk, so a later process
-that calls it does remove them; a PID that now names another process is not
-signaled. ARIES has no command that does this yet.
+run's namespace. The holder and `slirp4netns` of a task namespace end with
+Runner, since only Runner held their pipes; its instances keep it, without
+internet access, until they are stopped, and its record stays in `state_dir`. Every
+runtime's `Stop` works from its record on disk, so a later process that calls it
+does remove them; a PID that now names another process is not signaled. ARIES
+has no command that does this yet.
 
 ## Running on a PBS cluster
 
@@ -223,5 +283,8 @@ need a host with Apptainer and an image, and `make integration` does not run the
 make integration-apptainer ARIES_APPTAINER_TEST_IMAGE=/path/to/image.sif
 ```
 
-The fakeroot test is skipped unless `fakeroot-sysv` is on `PATH`. On Ubuntu 24.04
-the tests also need the AppArmor restriction described under [Limits](#limits) off.
+The fakeroot test is skipped unless `fakeroot-sysv` is on `PATH`. The
+[task namespace test](../../pkg/deployment/apptainer/tasknamespace_integration_test.go)
+needs `slirp4netns`, `nsenter` and `cat`; it starts two task namespaces that
+serve one port at once. On Ubuntu 24.04 the tests also need the AppArmor
+restriction described under [Limits](#limits) off.

@@ -31,13 +31,14 @@ effective permissions after private archive staging.
 
 `RunEnvironment.Start` prepares shared connectivity and returns an opaque
 `RuntimePlacement`. Its `NewTaskEnvironment` returns a fresh logical handle for
-each live or evaluation sandbox. A handle borrows the run attachment; it never
-removes the shared network or closes the run's deployment transport.
+each live or evaluation sandbox. A handle borrows the run attachment, or, on
+Apptainer, starts an attachment of its own inside it and ends it on `Stop`; it
+never removes the shared network or closes the run's deployment transport.
 
 | Task operation | Contract |
 | --- | --- |
 | `Start(ctx, TaskEnvironmentRequest)` | Validate run identity, service declarations and unique runtime name; return placement and resolved service URLs. |
-| `Validate(ctx)` | Confirm the borrowed attachment remains active and owned. |
+| `Validate(ctx)` | Confirm the attachment, borrowed or the task's own, remains active and owned. |
 | `Stop(ctx)` | Release this logical handle without affecting peer tasks. |
 
 `RunEnvironment.Stop` removes only connectivity owned by the run, after all
@@ -49,7 +50,9 @@ this trusted research setup.
 
 The sandbox receives `Options.NewEnvironment`, attaches its runtime, and exposes
 `Connectivity() core.HarnessConnectivity`. Runner forwards it to the harness.
-Fresh evaluation sandboxes get independent handles and names on the same network.
+Fresh evaluation sandboxes get independent handles and names: on the same network
+where the provider's handles borrow the run attachment, and on Apptainer each in a
+network namespace of its own, which does not share the live task's loopback.
 Task cleanup releases handles after sandbox removal. The run owns shared teardown.
 
 ## Endpoint handoff
@@ -63,6 +66,7 @@ reachable inside a harness container.
 | Runner | Bridge gRPC control address | Bridge deployment |
 | Harness | Sandbox-specific SSH or gRPC tool endpoint | Bridge deployment, using the actual listener port |
 | Harness | Task service URLs such as `SearchURL` | Sandbox task environment |
+| Harness | The model base URL, when the run's is not reachable from the harness's placement (`ModelBaseURL`, which Runner applies) | Sandbox task environment |
 | Bridge | Immutable sandbox execution binding and configured backend access | Execution-provider wiring and registration |
 
 Each local listener reports its bound port. Deployment resolves the advertised
@@ -99,7 +103,8 @@ provider. Backend endpoints and socket mounts come from provider wiring. A
 [Kubernetes provider](../implementation/kubernetes.md) implements the same
 contracts on pods for a narrower set of runs, and an
 [Apptainer provider](../implementation/apptainer.md) implements them on
-unprivileged instances, one task at a time, for hosts without Docker.
+unprivileged instances, for hosts without Docker; its task handles each start a
+network namespace of their own.
 
 Deployment requests still include container-oriented resource settings, host
 mounts, network aliases and image-volume policy. The sandbox assumes Linux,

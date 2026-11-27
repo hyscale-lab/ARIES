@@ -264,10 +264,11 @@ Apptainer cannot enforce CPU or memory limits without cgroups v2. A runtime that
 requests them, as every Terminal-Bench 2 task does, is refused unless
 `unenforced_limits` is `true`; the limits are then not applied. Storage limits
 are enforced with a fixed-size overlay. An Apptainer run uses an SSH bridge
-(`hermes-grpc` is refused), executes one task at a
-time (`execution.concurrency: 1`), needs `slirp4netns` on `PATH`, and records
-the network policy `run-namespace`; `aries PROFILE` enters the run's private
-namespace by itself. Resources are measured from `/proc`, since there is no
+(`hermes-grpc` is refused), needs `slirp4netns`, `nsenter` and `cat` on `PATH`,
+and records the network policy `task-namespace`; `aries PROFILE` enters the
+run's private namespace by itself and gives each task a namespace of its own, so
+`execution.concurrency` can exceed 1. `state_dir` must leave room for a Unix
+socket path of `<state_dir>/ns-<16 hex digits>/slirp.sock` within 107 bytes. Resources are measured from `/proc`, since there is no
 cgroup per instance, and memory excludes the page cache. Package
 installs inside the sandbox, such as a test script's `apt-get install`, need a
 `fakeroot-sysv` command on `PATH` with `faked-sysv` beside it, built against a
@@ -277,8 +278,16 @@ glibc no newer than the task images'. See the
 A checked-in [example](../profiles/apptainer/hermes-tb2-fix-git-apptainer.json)
 runs Terminal-Bench 2 `fix-git` with Hermes against an OpenAI-compatible model
 server. Replace its paths and its model address; use an address rather than a
-name, and one that is not the host's loopback, which a run's namespace cannot
-reach. `aries setup` reports the Hermes tag to map if the example's is out of date.
+name, and not the host's loopback, which a run's namespace cannot reach: an
+external `model.base_url` on loopback is refused, as is one in `10.0.2.0/24` or
+`10.0.3.0/24`, the address ranges of the run's and the tasks' own networks. A managed SGLang server runs in
+the run's namespace, so its `model.base_url` may be `http` on `127.0.0.1` (or
+`localhost`), and the `host` in its SGLang config must be `127.0.0.1` or
+`0.0.0.0`: each task's harness reaches it through the task's gateway, which leads
+to `127.0.0.1` only. Its `model.base_url` may instead name `10.0.2.100`, the
+address of the run namespace itself, with the server's `host` `10.0.2.100` or
+`0.0.0.0`; tasks reach that address directly. Another loopback address, `https` on
+loopback, or another `host` is refused before the server starts. `aries setup` reports the Hermes tag to map if the example's is out of date.
 
 Bridge addresses come from deployment resolution, not profile fields. Plaintext,
 unauthenticated gRPC control and the harness-facing transport (SSH or gRPC)

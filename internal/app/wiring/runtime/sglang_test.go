@@ -40,6 +40,46 @@ func TestPrepareBackendPreservesExplicitGPUOrderAndOwnership(t *testing.T) {
 	}
 }
 
+func TestManagedSGLangOnApptainerListensWhereTheTaskGatewayLeads(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "python")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const loopbackURL, runGuestURL = "http://127.0.0.1:30000/v1", "http://10.0.2.100:30000/v1"
+	for name, tc := range map[string]struct {
+		backend, host, url string
+		refused            bool
+	}{
+		"all addresses":                    {"apptainer", "0.0.0.0", loopbackURL, false},
+		"IPv4 loopback":                    {"apptainer", "127.0.0.1", loopbackURL, false},
+		"IPv6 loopback":                    {"apptainer", "::1", loopbackURL, true},
+		"localhost":                        {"apptainer", "localhost", loopbackURL, true},
+		"the run's address, all addresses": {"apptainer", "0.0.0.0", runGuestURL, false},
+		"the run's address itself":         {"apptainer", "10.0.2.100", runGuestURL, false},
+		"the run's address, loopback":      {"apptainer", "127.0.0.1", runGuestURL, true},
+		"loopback URL, the run's address":  {"apptainer", "10.0.2.100", loopbackURL, true},
+		"IPv6 loopback, Docker":            {"docker", "::1", loopbackURL, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			native := filepath.Join(root, "native.yaml")
+			content := strings.Replace(nativeForWiring, "host: 0.0.0.0", "host: "+tc.host, 1)
+			if err := os.WriteFile(native, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Config{
+				Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{ResolvedFile: native, Executable: executable}},
+				Model:   config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: tc.url, APIKeyEnv: "KEY"},
+				Sandbox: config.SandboxConfig{Deployment: config.DeploymentConfig{Backend: tc.backend}},
+			}
+			_, err := NewSGLang(cfg, filepath.Join(root, "output"))
+			if tc.refused != (err != nil) || tc.refused && !strings.Contains(err.Error(), "listening on "+tc.host) {
+				t.Fatalf("NewSGLang with host %s and URL %s on %s = %v, want refused %v", tc.host, tc.url, tc.backend, err, tc.refused)
+			}
+		})
+	}
+}
+
 func TestPrepareBackendRejectsManagedSGLangGPUCountMismatch(t *testing.T) {
 	root := t.TempDir()
 	native := filepath.Join(root, "native.yaml")

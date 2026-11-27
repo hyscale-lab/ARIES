@@ -31,7 +31,8 @@ var processEnvironment = []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "TM
 // ProcessRuntime runs a runtime's command as a plain process in the run's
 // namespace instead of an instance. The bridge needs this: it executes in the
 // sandboxes with apptainer, which cannot enter their user namespaces from
-// inside another instance. Requests name an entrypoint that Executables maps
+// inside another instance, entering each sandbox's task namespace with
+// nsenter. Requests name an entrypoint that Executables maps
 // to a host program; their paths are host paths confined to the workdir,
 // which Create makes and Stop removes. The process has no tie to the one that
 // started it and outlives it after a crash, so a record beside the workdir lets
@@ -446,7 +447,10 @@ func (p *ProcessRuntime) Address(_ context.Context, id string, port int) (string
 	return net.JoinHostPort(loopbackHost, strconv.Itoa(port)), nil
 }
 
-// TaskAddress resolves a port of the running process on the run's loopback.
+// TaskAddress resolves a port of the running process for a harness. The
+// process listens on the run namespace's loopback, and every harness runs in a
+// task namespace, whose slirp4netns connects the task's gateway to that
+// loopback.
 func (p *ProcessRuntime) TaskAddress(ctx context.Context, id string, port int) (string, error) {
 	if port < 1 || port > 65535 {
 		return "", errors.New("invalid task service port")
@@ -458,7 +462,7 @@ func (p *ProcessRuntime) TaskAddress(ctx context.Context, id string, port int) (
 	if !running {
 		return "", errors.New("process runtime is not running")
 	}
-	return net.JoinHostPort(loopbackHost, strconv.Itoa(port)), nil
+	return net.JoinHostPort(taskGateway, strconv.Itoa(port)), nil
 }
 
 // Stop ends the process group, removes the workdir and its logs, and confirms

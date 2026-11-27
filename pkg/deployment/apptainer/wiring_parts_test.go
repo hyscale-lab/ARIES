@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,37 +19,219 @@ import (
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
-func TestRunEnvironmentRequiresItsNamespaceAndResolvesServicesOnLoopback(t *testing.T) {
+// fakeTaskNamespace stands in for a started task namespace.
+type fakeTaskNamespace struct {
+	name    string
+	request taskNamespaceRequest
+	invalid error
+	stopErr error
+	stops   int
+}
+
+func (n *fakeTaskNamespace) Name() string                 { return n.name }
+func (n *fakeTaskNamespace) Validate() error              { return n.invalid }
+func (n *fakeTaskNamespace) Stop(_ context.Context) error { n.stops++; return n.stopErr }
+
+func TestRunEnvironmentGivesEachTaskANamespaceAndItsServicesItsLoopback(t *testing.T) {
 	manager, _, _ := newTestManager(t, Options{})
-	environment := manager.NewRunEnvironment("run-1")
+	environment := manager.NewRunEnvironment("run-1", "http://127.0.0.1:30000/v1")
 	network := "net:[4026532001]"
 	environment.current = func() (string, error) { return network, nil }
-	placement, err := environment.Start(context.Background())
+	var started []*fakeTaskNamespace
+	environment.startNamespace = func(_ context.Context, request taskNamespaceRequest) (taskNamespaceHandle, error) {
+		namespace := &fakeTaskNamespace{name: "ns-" + strconv.Itoa(len(started)+1), request: request}
+		started = append(started, namespace)
+		return namespace, nil
+	}
+	ctx := context.Background()
+	placement, err := environment.Start(ctx)
 	if err != nil || placement.AttachmentID != "run-namespace:net:[4026532001]" {
 		t.Fatalf("Start = %+v, %v", placement, err)
 	}
-	task := environment.NewTaskEnvironment()
 	request := deployment.TaskEnvironmentRequest{RuntimeName: "aries-task-1"}
-	request.RunID = "run-1"
+	request.RunID, request.TaskID = "run-1", "task-1"
 	request.Environment.Services = core.TaskServices{SearchPort: 8000, MCP: []core.TaskMCPService{{Name: "toolathlon", Port: 10086, Path: "/sse", Transport: "sse"}}}
-	connectivity, err := task.Start(context.Background(), request)
+	first := environment.NewTaskEnvironment()
+	connectivity, err := first.Start(ctx, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if connectivity.SearchURL != "http://127.0.0.1:8000" || len(connectivity.MCPServers) != 1 || connectivity.MCPServers[0].URL != "http://127.0.0.1:10086/sse" || connectivity.Placement != placement {
+	if connectivity.SearchURL != "http://127.0.0.1:8000" || len(connectivity.MCPServers) != 1 || connectivity.MCPServers[0].URL != "http://127.0.0.1:10086/sse" || connectivity.Placement.AttachmentID != "task-namespace:ns-1" {
 		t.Fatalf("connectivity = %+v", connectivity)
 	}
+	// The run's model is on Runner's loopback; the harness reaches it through
+	// the task's gateway.
+	if connectivity.ModelBaseURL != "http://10.0.3.2:30000/v1" {
+		t.Fatalf("harness model URL = %q", connectivity.ModelBaseURL)
+	}
+	request.RuntimeName, request.TaskID = "aries-task-2", "task-2"
+	second := environment.NewTaskEnvironment()
+	if connectivity, err := second.Start(ctx, request); err != nil || connectivity.Placement.AttachmentID != "task-namespace:ns-2" {
+		t.Fatalf("second task = %+v, %v", connectivity, err)
+	}
+	if len(started) != 2 {
+		t.Fatalf("%d task namespaces started, want 2", len(started))
+	}
+	if started[0].request.loopback != "127.1.0.1" || started[1].request.loopback != "127.1.0.2" ||
+		started[0].request.stateDir != manager.options.StateDir || started[1].request.runtime != "aries-task-2" ||
+		started[0].request.labels["aries.task"] != "task-1" || started[1].request.labels["aries.run"] != "run-1" {
+		t.Fatalf("namespaces started with %+v and %+v", started[0].request, started[1].request)
+	}
+	if err := first.Validate(ctx); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	started[0].invalid = errors.New("task namespace ns-1 lost its holder")
+	if err := first.Validate(ctx); err == nil {
+		t.Fatal("Validate accepted a namespace that lost its holder")
+	}
+	started[0].invalid = nil
 	network = "net:[4026532999]"
-	if err := task.Validate(context.Background()); err == nil {
+	if err := first.Validate(ctx); err == nil {
 		t.Fatal("Validate accepted a process that left its namespace")
 	}
-	if err := environment.Stop(context.Background()); err != nil {
+	// A namespace that still holds a runtime's processes stays, and Stop can be
+	// repeated once they are gone.
+	started[1].stopErr = errors.New("task namespace ns-2 still holds processes [5000]")
+	if err := second.Stop(ctx); err == nil {
+		t.Fatal("Stop ignored a namespace that could not end")
+	}
+	started[1].stopErr = nil
+	for _, task := range []deployment.TaskEnvironment{first, second, first} {
+		if err := task.Stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if started[0].stops != 2 || started[1].stops != 2 {
+		t.Fatalf("stops = %d, %d", started[0].stops, started[1].stops)
+	}
+	if err := environment.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	other := manager.NewRunEnvironment("run-2")
+	other := manager.NewRunEnvironment("run-2", "")
 	other.current = func() (string, error) { return "", errors.New("not in a run namespace") }
-	if _, err := other.Start(context.Background()); err == nil {
+	if _, err := other.Start(ctx); err == nil {
 		t.Fatal("Start succeeded outside a run namespace")
+	}
+}
+
+func TestHarnessModelURLReplacesOnlyWhatTheGatewayLeadsTo(t *testing.T) {
+	for base, want := range map[string]string{
+		"http://127.0.0.1:30000/v1":    "http://10.0.3.2:30000/v1",
+		"http://localhost:30000/v1":    "http://10.0.3.2:30000/v1",
+		"http://localhost.:30000/v1":   "http://10.0.3.2:30000/v1",
+		"http://0.0.0.0:30000/v1":      "http://10.0.3.2:30000/v1",
+		"http://127.0.0.1/v1":          "http://10.0.3.2/v1",
+		"http://127.0.0.2:30000/v1":    "",
+		"http://[::1]:30000/v1":        "",
+		"https://127.0.0.1:30000/v1":   "",
+		"http://10.0.2.100:30000/v1":   "",
+		"http://10.150.7.122:30000/v1": "",
+		"https://api.deepseek.com":     "",
+		"":                             "",
+	} {
+		if got := harnessModelURL(base); got != want {
+			t.Errorf("harnessModelURL(%q) = %q, want %q", base, got, want)
+		}
+	}
+}
+
+func TestCheckModelAddressRefusesTheRunsOwnSubnets(t *testing.T) {
+	for base, want := range map[string]string{
+		"http://10.0.2.15:30000/v1":         "10.0.2.0/24 is the subnet slirp4netns gives the run's",
+		"http://10.0.2.100:30000/v1":        "10.0.2.0/24 is the subnet slirp4netns gives the run's",
+		"http://10.0.3.15:30000/v1":         "10.0.3.0/24 is the subnet slirp4netns gives each task's",
+		"http://10.0.3.2:30000/v1":          "10.0.3.0/24",
+		"http://[::ffff:10.0.3.9]:30000/v1": "10.0.3.0/24",
+		"http://10.0.4.1:30000/v1":          "",
+		"http://10.150.7.122:30000/v1":      "",
+		"http://127.0.0.1:30000/v1":         "",
+		"http://model.cluster:30000/v1":     "",
+		"https://api.deepseek.com":          "",
+		"":                                  "",
+	} {
+		err := CheckModelAddress(base, false)
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("CheckModelAddress(%q) = %v, want %q", base, err, want)
+		}
+	}
+}
+
+func TestCheckModelAddressKeepsAManagedServerWhereTheGatewayLeads(t *testing.T) {
+	for base, refused := range map[string]bool{
+		"http://127.0.0.1:30000/v1":    false,
+		"http://localhost:30000/v1":    false,
+		"http://localhost.:30000/v1":   false,
+		"http://0.0.0.0:30000/v1":      false,
+		"http://127.0.0.2:30000/v1":    true,
+		"http://[::1]:30000/v1":        true,
+		"https://127.0.0.1:30000/v1":   true,
+		"https://localhost:30000/v1":   true,
+		"https://localhost.:30000/v1":  true,
+		"http://10.150.7.122:30000/v1": false,
+		"http://10.0.2.100:30000/v1":   false,
+		"https://10.0.2.100:30000/v1":  false,
+	} {
+		err := CheckModelAddress(base, true)
+		if refused != (err != nil) || refused && !strings.Contains(err.Error(), "cannot reach a managed model server") {
+			t.Errorf("CheckModelAddress(%q, managed) = %v, want refused %v", base, err, refused)
+		}
+	}
+}
+
+func TestATaskNamespaceThatCouldNotBeEndedIsKeptForStop(t *testing.T) {
+	manager, _, _ := newTestManager(t, Options{})
+	environment := manager.NewRunEnvironment("run-1", "")
+	environment.current = func() (string, error) { return "net:[4026532001]", nil }
+	// The start failed, and so did removing what it had made.
+	leftover := &fakeTaskNamespace{name: "ns-1", stopErr: errors.New("remove task namespace ns-1: permission denied")}
+	environment.startNamespace = func(context.Context, taskNamespaceRequest) (taskNamespaceHandle, error) {
+		return leftover, errors.New("slirp4netns did not configure the task namespace; remove task namespace ns-1: permission denied")
+	}
+	ctx := context.Background()
+	if _, err := environment.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	request := deployment.TaskEnvironmentRequest{RuntimeName: "aries-task-1"}
+	request.RunID = "run-1"
+	task := environment.NewTaskEnvironment()
+	if _, err := task.Start(ctx, request); err == nil {
+		t.Fatal("Start succeeded")
+	}
+	// Stop fails while the namespace cannot be ended, and ends it once it can.
+	if err := task.Stop(ctx); err == nil {
+		t.Fatal("Stop dropped a namespace it could not end")
+	}
+	leftover.stopErr = nil
+	if err := task.Stop(ctx); err != nil {
+		t.Fatalf("Stop once the namespace can end: %v", err)
+	}
+	if leftover.stops != 2 {
+		t.Fatalf("stops = %d, want 2", leftover.stops)
+	}
+}
+
+func TestATaskWhoseNamespaceDidNotStartHasNothingToStop(t *testing.T) {
+	manager, _, _ := newTestManager(t, Options{})
+	environment := manager.NewRunEnvironment("run-1", "")
+	environment.current = func() (string, error) { return "net:[4026532001]", nil }
+	environment.startNamespace = func(context.Context, taskNamespaceRequest) (taskNamespaceHandle, error) {
+		return nil, errors.New("slirp4netns did not configure the task namespace")
+	}
+	ctx := context.Background()
+	if _, err := environment.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	request := deployment.TaskEnvironmentRequest{RuntimeName: "aries-task-1"}
+	request.RunID = "run-1"
+	task := environment.NewTaskEnvironment()
+	if _, err := task.Start(ctx, request); err == nil || !strings.Contains(err.Error(), "did not configure") {
+		t.Fatalf("Start = %v", err)
+	}
+	if err := task.Validate(ctx); err == nil {
+		t.Fatal("Validate accepted a task without a namespace")
+	}
+	if err := task.Stop(ctx); err != nil {
+		t.Fatalf("Stop after a failed Start: %v", err)
 	}
 }
 
@@ -193,7 +376,8 @@ func TestProcessRuntimeRunsTheMappedProgramInItsWorkdir(t *testing.T) {
 	if address, err := runtime.Address(context.Background(), id, 8443); err != nil || address != "127.0.0.1:8443" {
 		t.Fatalf("Address = %q, %v", address, err)
 	}
-	if address, err := runtime.TaskAddress(context.Background(), id, 40123); err != nil || address != "127.0.0.1:40123" {
+	// Harnesses run in task namespaces, whose gateway reaches the run's loopback.
+	if address, err := runtime.TaskAddress(context.Background(), id, 40123); err != nil || address != "10.0.3.2:40123" {
 		t.Fatalf("TaskAddress = %q, %v", address, err)
 	}
 }
