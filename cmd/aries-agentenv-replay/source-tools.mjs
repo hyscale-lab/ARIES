@@ -63,8 +63,9 @@ if (process.argv[2] === 'prepare') {
         if (sha !== manifest.sha || !c || !tools.has(c.name)) throw Error('unbound source tool');
         const args = {...c.args};
         if (c.name === 'process' && args.action === 'poll') {
-          args.sessionId = handles.get(args.sessionId);
-          if (!args.sessionId) throw Error('source poll has no matching live OpenClaw handle');
+          if (!handles.has(args.sessionId)) throw Error('source poll precedes its bound exec');
+          // A source exec can finish before yielding a live handle. Let OpenClaw answer that poll.
+          args.sessionId = handles.get(args.sessionId) ?? args.sessionId;
           if (diagnostic) args.timeout = Math.min(args.timeout,5000);
         } else if (diagnostic) throw Error('unexpected diagnostic request');
         let result;
@@ -74,9 +75,10 @@ if (process.argv[2] === 'prepare') {
           const details = {status:'error',tool:c.name,error:err.message};
           result = {details,content:[{type:'text',text:JSON.stringify(details,null,2)}]};
         }
-        if (c.name === 'exec' && result.details?.status === 'running') {
-          if (!result.details.sessionId || !c.handle) throw Error('unbound live process');
-          handles.set(c.handle,result.details.sessionId);
+        if (c.name === 'exec' && c.handle) {
+          const running = result.details?.status === 'running';
+          if (running && !result.details.sessionId) throw Error('unbound live process');
+          handles.set(c.handle,running ? result.details.sessionId : null);
         }
         client.end(JSON.stringify({result}));
       } catch (err) {

@@ -29,7 +29,7 @@ def assess(trace, messages, calls, actual, native_evidence=None):
         if len([k for k in actual if k.endswith('.tex')])!=5:return False,'Expected five TeX files plus 2022.tsv.'
     elif name.endswith('_paper_affiliation_search'):
         excerpt = native_evidence['report_excerpt']
-        if not excerpt['prefix_matches'] or not excerpt['newline_count_matches']:
+        if excerpt['prefix_matches'] is False or excerpt['newline_count_matches'] is False:
             return False,'Final report excerpt or newline count differs from the source terminal receipt.'
         paths={root+'results.md'}
     elif name.endswith('_resume_homepage_zh'):

@@ -41,8 +41,10 @@ def compare(calls, historical, live, actual, name):
         expected = historical[calls[-1]['id']]['content'][0]['text'].splitlines()
         assert len(expected) == 82 and expected[0] == 'wrote 105 lines' and expected[-1] == '104 /tmp_workspace/results/results.md'
         observed = live[calls[-1]['id']].get('stdout', '').splitlines()
-        evidence['report_excerpt'] = dict(prefix_lines=80, prefix_matches=observed[1:81] == expected[1:81],
-                                          newline_count_matches=bool(observed) and observed[-1] == expected[-1])
+        observed_count = re.fullmatch(r'(\d+) /tmp_workspace/results/results\.md', observed[-1]) if observed else None
+        printed_file = bool(observed_count and re.fullmatch(r'wrote \d+ lines', observed[0]))
+        evidence['report_excerpt'] = dict(prefix_lines=80, prefix_matches=observed[1:81] == expected[1:81] if printed_file else None,
+                                          newline_count_matches=int(observed_count[1]) == 104 if observed_count else None)
     if name.endswith('_resume_homepage_zh'):
         root = PurePosixPath('/tmp_workspace/results')
         contents = {}
