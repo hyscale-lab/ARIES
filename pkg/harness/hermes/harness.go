@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -75,6 +76,11 @@ type Options struct {
 	// Compaction and ExtraBody render optional native config blocks.
 	Compaction *CompactionSettings
 	ExtraBody  []byte
+	// Env is extra literal environment for the Hermes process, appended after
+	// the variables the harness sets. StateArtifacts are bare names of files
+	// under HERMES_HOME that are retained after the run.
+	Env            map[string]string
+	StateArtifacts []string
 	// KeepRoot keeps Hermes running as the runtime's root instead of dropping
 	// to its hermes user, through the image's documented opt-outs: the CLI
 	// shim's HERMES_DOCKER_EXEC_AS_ROOT and the gateway's
@@ -178,8 +184,15 @@ func New(options Options) (*Manager, error) {
 			return nil, fmt.Errorf("Hermes MCP server: %w", err)
 		}
 	}
+	for _, name := range options.StateArtifacts {
+		if name == "." || name == ".." || name != filepath.Base(name) {
+			return nil, fmt.Errorf("Hermes state artifact %q must be a bare file name", name)
+		}
+	}
 	options.Runtime = runtime.Options
 	options.ExtraBody = bytes.Clone(options.ExtraBody)
+	options.Env = maps.Clone(options.Env)
+	options.StateArtifacts = slices.Clone(options.StateArtifacts)
 	options.Common.MCPServers = append([]core.MCPServerConfig(nil), options.Common.MCPServers...)
 	return &Manager{runtime: runtime, options: options, newSpeech: newSpeechClient, newID: privatefiles.RandomID}, nil
 }
@@ -242,6 +255,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	if manager.options.KeepRoot {
 		environment = append(environment, "HERMES_DOCKER_EXEC_AS_ROOT=1", "HERMES_ALLOW_ROOT_GATEWAY=1")
+	}
+	for _, name := range slices.Sorted(maps.Keys(manager.options.Env)) {
+		environment = append(environment, name+"="+manager.options.Env[name])
 	}
 	credentials := harness.NewCredentials("Hermes")
 	defer func() {
@@ -737,6 +753,9 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, o
 			active.Artifacts.Add(paths...)
 		}
 	}
+	if err := manager.collectStateArtifacts(ctx, active); err != nil {
+		errs = append(errs, err)
+	}
 	index, err := json.MarshalIndent(struct {
 		Paths []string `json:"paths"`
 	}{Paths: active.Artifacts.TelemetryPaths()}, "", "  ")
@@ -836,6 +855,74 @@ func (manager *Manager) collectSpans(ctx context.Context, active *session) ([]st
 		return nil, fmt.Errorf("retain Hermes spans: %w", err)
 	}
 	return []string{path}, nil
+}
+
+const (
+	stateArtifactMissing    = 3
+	stateArtifactTruncated  = 4
+	stateArtifactNotRegular = 5
+	stateArtifactLimit      = maxDockerOutput - 1<<20
+)
+
+// stateArtifactScript prints the file named argv[2] in the directory argv[1],
+// at most argv[3] bytes of it. Neither open follows a symbolic link and only
+// a regular file is read, so a link planted at or under HERMES_HOME cannot
+// name a file outside it.
+const stateArtifactScript = `import os, stat, sys
+directory, name, limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+except FileNotFoundError:
+    sys.exit(3)
+except OSError:
+    sys.exit(5)
+if not stat.S_ISREG(os.fstat(fd).st_mode):
+    sys.exit(5)
+with os.fdopen(fd, "rb") as file:
+    data = file.read(limit + 1)
+sys.stdout.buffer.write(data[:limit])
+sys.stdout.buffer.flush()
+if len(data) > limit:
+    sys.exit(4)
+`
+
+// collectStateArtifacts retains the profile's state_artifacts as
+// state/<name>, redacted like the session export. A file Hermes did not write
+// is logged and skipped: a run may end before the feature that writes it
+// acts. A file over stateArtifactLimit keeps its first bytes and logs a
+// warning. A symbolic link or other non-regular file is an error.
+func (manager *Manager) collectStateArtifacts(ctx context.Context, active *session) error {
+	var errs []error
+	for _, name := range manager.options.StateArtifacts {
+		result, err := manager.runtime.Options.Deployment.Exec(ctx, active.ID, core.Command{
+			Path: "python3", Args: []string{"-c", stateArtifactScript, stateContainerPath, name, strconv.Itoa(stateArtifactLimit)},
+			Dir: workspaceRoot, OutputLimitBytes: maxDockerOutput,
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read Hermes state artifact %s: %w", name, err))
+			continue
+		}
+		logger := manager.runtime.Options.Logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.TaskID, "artifact": name})
+		switch result.ExitCode {
+		case 0:
+		case stateArtifactMissing:
+			logger.Warn("Hermes state artifact is absent")
+			continue
+		case stateArtifactTruncated:
+			logger.Warn("Hermes state artifact exceeded the size limit; later bytes were dropped")
+		case stateArtifactNotRegular:
+			errs = append(errs, fmt.Errorf("Hermes state artifact %s is not a regular file", name))
+			continue
+		default:
+			errs = append(errs, fmt.Errorf("read Hermes state artifact %s exited with code %d: %s", name, result.ExitCode, bytes.TrimSpace(active.Credentials.Redact([]byte(result.Stderr)))))
+			continue
+		}
+		if err := active.Artifacts.Write("state/"+name, active.Credentials.Redact([]byte(result.Stdout))); err != nil {
+			errs = append(errs, fmt.Errorf("retain Hermes state artifact %s: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func lastJSONObject(text string) (map[string]any, bool) {

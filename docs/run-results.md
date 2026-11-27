@@ -129,6 +129,7 @@ Historical CLI artifacts map as follows:
 | `session-outcome.json` with `exit_code` | Same filename, with `run_id`, `session_id`, native `end_reason`, and ARIES `status`; no CLI exit code. Timing covers submission through terminal observation, separately from voice preparation. |
 | `telemetry/sessions.jsonl` | Retained native message-level session export. |
 | `telemetry/otel-spans.jsonl` | Tool, model, and API timing from the pinned `hermes-otel` plugin; see [collection limits](implementation/harnesses.md#hermes). |
+| `state/<name>` | Files named by `harness.hermes.state_artifacts`, read from Hermes's state directory and redacted; see [configuration](configuration.md#hermes-process-environment-and-state-artifacts). |
 | `config.yaml`, voice artifacts | Retained private configuration, audio, transcript, and voice result. |
 
 A completed native run is a harness outcome. Check isolation, evaluation, and
