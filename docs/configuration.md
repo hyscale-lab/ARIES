@@ -46,6 +46,10 @@ evaluation sandbox, such as SWE-bench Pro's, uses the task's own resources.
 
 Neither block inherits from the other.
 
+On Docker, a fixed [process limit](implementation/docker.md#runtime-creation-and-execution)
+applies to harness and sandbox containers whatever these blocks say, including
+when CPU and memory are unlimited.
+
 The independent `agent_timeout_seconds` field changes only the agent deadline.
 The independent `verifier_timeout_floor_seconds` field raises a Terminal-Bench
 task's evaluation budget to at least that many seconds and never lowers one.

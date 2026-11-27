@@ -53,6 +53,10 @@ type Options struct {
 	Socket         string
 	CleanupTimeout time.Duration
 	Logger         *logrus.Logger
+	// PidsLimit caps the processes and threads of every runtime this
+	// transport creates; zero leaves them uncapped. It is an isolation
+	// property that composition fixes per component, not a request setting.
+	PidsLimit int64
 }
 
 // Manager implements deployment operations; the harness owns its task lifecycle.
@@ -62,6 +66,7 @@ type Manager struct {
 	closeOnce sync.Once
 	closeErr  error
 	timeout   time.Duration
+	pidsLimit int64
 }
 
 var _ deployment.Deployment = (*Manager)(nil)
@@ -83,7 +88,7 @@ func New(options Options) (*Manager, error) {
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
-	return &Manager{client: api, logger: logger, timeout: options.CleanupTimeout}, nil
+	return &Manager{client: api, logger: logger, timeout: options.CleanupTimeout, pidsLimit: options.PidsLimit}, nil
 }
 
 func (manager *Manager) Close() error {
@@ -129,6 +134,10 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	limits, err := resources(request)
 	if err != nil {
 		return "", err
+	}
+	if manager.pidsLimit > 0 {
+		pids := manager.pidsLimit
+		limits.PidsLimit = &pids
 	}
 	if request.ServicePort < 0 || request.ServicePort > 65535 {
 		return "", errors.New("deployment service port is invalid")

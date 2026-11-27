@@ -25,7 +25,7 @@ func deploymentRequest() deployment.Request {
 
 func TestCreatePreservesArgumentsResourcesAndPrivateService(t *testing.T) {
 	fake := newFakeDocker()
-	manager := &Manager{client: fake}
+	manager := &Manager{client: fake, pidsLimit: 4096}
 	request := deploymentRequest()
 	cpu, memory := 2.5, 1536
 	request.CPU, request.MemoryMB = &cpu, &memory
@@ -42,6 +42,9 @@ func TestCreatePreservesArgumentsResourcesAndPrivateService(t *testing.T) {
 	limits := fake.created.HostConfig.Resources
 	if limits.NanoCPUs != 2500000000 || limits.Memory != 1536<<20 {
 		t.Fatalf("limits=%+v", limits)
+	}
+	if limits.PidsLimit == nil || *limits.PidsLimit != 4096 {
+		t.Fatalf("pids limit=%v, want 4096", limits.PidsLimit)
 	}
 	port := network.MustParsePort("18789/tcp")
 	bindings := fake.created.HostConfig.PortBindings[port]
@@ -89,8 +92,22 @@ func TestCreateRejectsInvalidResourcesBeforeDocker(t *testing.T) {
 	if _, err := manager.Create(context.Background(), deploymentRequest()); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.created.HostConfig.Resources; got.NanoCPUs != 0 || got.Memory != 0 {
+	if got := fake.created.HostConfig.Resources; got.NanoCPUs != 0 || got.Memory != 0 || got.PidsLimit != nil {
 		t.Fatalf("omitted resources=%+v", got)
+	}
+}
+
+// The process limit belongs to the transport, so a request without CPU or
+// memory limits is still capped.
+func TestCreateCapsProcessesWithoutRequestLimits(t *testing.T) {
+	fake := newFakeDocker()
+	manager := &Manager{client: fake, pidsLimit: 1024}
+	if _, err := manager.Create(context.Background(), deploymentRequest()); err != nil {
+		t.Fatal(err)
+	}
+	got := fake.created.HostConfig.Resources
+	if got.PidsLimit == nil || *got.PidsLimit != 1024 || got.NanoCPUs != 0 || got.Memory != 0 {
+		t.Fatalf("resources=%+v", got)
 	}
 }
 

@@ -12,14 +12,34 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// Docker process limits are fixed isolation properties, not per-task knobs.
+// Agents run whatever a repository offers, and test runners size their worker
+// pools from the host's CPU count rather than the cgroup's, so one task can
+// otherwise hold thousands of processes at its memory cap and push the node's
+// load into the thousands (observed with jest at 6600 processes). The sandbox
+// limit is generous for real builds and test suites. The agent's tools run in
+// the sandbox, so a harness needs only the agent process, its subprocesses and
+// its bridge clients.
+const (
+	sandboxPidsLimit int64 = 4096
+	harnessPidsLimit int64 = 1024
+)
+
+// NewDocker constructs a transport whose runtimes have no process limit, for
+// the run network and the bridge.
 func NewDocker(cfg config.DeploymentConfig, logger *logrus.Logger) (*dockerdeployment.Manager, error) {
 	return dockerdeployment.New(dockerdeployment.Options{Socket: cfg.Docker.Socket, Logger: logger})
+}
+
+// NewDockerHarness constructs the transport for harness containers.
+func NewDockerHarness(cfg config.DeploymentConfig, logger *logrus.Logger) (*dockerdeployment.Manager, error) {
+	return dockerdeployment.New(dockerdeployment.Options{Socket: cfg.Docker.Socket, Logger: logger, PidsLimit: harnessPidsLimit})
 }
 
 // NewDockerSandbox constructs the transport and occurrence-scoped monitoring
 // source. The caller owns both on success; partial construction closes transport.
 func NewDockerSandbox(cfg config.DeploymentConfig, runID, occurrenceID string, logger *logrus.Logger) (*dockerdeployment.Manager, monitor.ResourceSource, error) {
-	transport, err := NewDocker(cfg, logger)
+	transport, err := dockerdeployment.New(dockerdeployment.Options{Socket: cfg.Docker.Socket, Logger: logger, PidsLimit: sandboxPidsLimit})
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct sandbox deployment: %w", err)
 	}
