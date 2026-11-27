@@ -27,7 +27,10 @@ import (
 )
 
 const (
-	defaultCleanupTimeout = 30 * time.Second
+	// defaultCleanupTimeout bounds a start rollback: the container stop, a
+	// removal the Docker deployment may retry for up to 60s against a
+	// contended Engine, and the network release after it.
+	defaultCleanupTimeout = 90 * time.Second
 	maxExecInput          = 16 << 20
 	maxConfiguredOutput   = 1 << 30
 )

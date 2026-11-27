@@ -270,6 +270,7 @@ type fakeHarness struct {
 	startErr     error
 	runErrors    []error
 	stopErrors   []error
+	stopDelay    time.Duration
 	runs         int
 	stops        int
 	instructions []string
@@ -313,6 +314,8 @@ func (f *fakeHarness) Stop(ctx context.Context) error {
 	err := indexedError(f.stopErrors, f.stops)
 	f.stops++
 	f.mu.Unlock()
+	// A native harness stops on its own cleanup context, not the caller's.
+	time.Sleep(f.stopDelay)
 	return err
 }
 
@@ -849,6 +852,23 @@ func TestRunnerCleanupTimeoutJoinsPrimaryError(t *testing.T) {
 	}
 	if got := result.Tasks[0].Cleanup.Error; got == "" || !strings.Contains(got, "cleanup sandbox") {
 		t.Fatalf("cleanup error = %q, want component context", got)
+	}
+}
+
+// A harness removal that outlasts a contended Engine can take longer than one
+// stage's deadline and still succeed. The stages behind it need live contexts.
+func TestSlowHarnessStopDoesNotConsumeLaterStageBudgets(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.runner.cleanupTimeout = 20 * time.Millisecond
+	rig.harness.stopDelay = 40 * time.Millisecond
+
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task := result.Tasks[0]
+	if task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded {
+		t.Fatalf("isolation = %#v cleanup = %#v, want a fresh budget per stage", task.Isolation, task.Cleanup)
 	}
 }
 

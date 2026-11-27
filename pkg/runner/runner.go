@@ -13,7 +13,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const defaultCleanupTimeout = 30 * time.Second
+// defaultCleanupTimeout is the budget each isolation or cleanup stage gets on
+// its own. It is the outer bound: harnesses and sandboxes bound their own
+// work, including a container removal that retries against a contended Engine
+// for up to 60s, so a stage normally ends on the component's deadline and this
+// one is a backstop. With every stage at its limit, one task's teardown takes
+// the sum of its stages rather than a single shared deadline.
+const defaultCleanupTimeout = 120 * time.Second
 
 // Options contains the few experiment-level inputs needed by the Runner.
 type Options struct {
@@ -136,33 +142,27 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		harnessActive bool
 		allErrors     []error
 		cleanupErrors []error
-		cleanupCtx    context.Context
-		cleanupCancel context.CancelFunc
 		cleanupUsed   bool
 		evaluation    = &evaluationSandboxes{toolSandbox: r.toolSandbox, runID: r.runID, taskID: task.ID}
 	)
-	defer func() {
-		if cleanupCancel != nil {
-			cleanupCancel()
-		}
-	}()
-	ensureCleanupContext := func() context.Context {
-		if cleanupCtx == nil {
-			cleanupCtx, cleanupCancel = context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
-		}
-		return cleanupCtx
+	// Every stage gets the whole budget rather than a shared one: a stage that
+	// spends a single deadline leaves the stages behind it a context that was
+	// already dead when they were called.
+	withCleanupDeadline := func(stop func(context.Context) error) error {
+		stageCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+		defer cancel()
+		return stop(stageCtx)
 	}
 	finish := func() (core.TaskResult, error) {
-		cleanup := ensureCleanupContext()
 		if evaluation.active() {
 			cleanupUsed = true
-			if err := evaluation.stop(cleanup); err != nil {
+			if err := withCleanupDeadline(evaluation.stop); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup evaluation sandbox: %w", err))
 			}
 		}
 		if harnessActive {
 			cleanupUsed = true
-			if err := r.harness.Stop(cleanup); err != nil {
+			if err := withCleanupDeadline(r.harness.Stop); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup harness: %w", err))
 			} else {
 				harnessActive = false
@@ -170,7 +170,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 		if bridgeActive {
 			cleanupUsed = true
-			if err := r.bridge.Stop(cleanup); err != nil {
+			if err := withCleanupDeadline(r.bridge.Stop); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup bridge: %w", err))
 			} else {
 				bridgeActive = false
@@ -178,7 +178,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 		if sandboxActive {
 			cleanupUsed = true
-			if err := r.toolSandbox.Stop(cleanup, sandbox); err != nil {
+			if err := withCleanupDeadline(func(stageCtx context.Context) error { return r.toolSandbox.Stop(stageCtx, sandbox) }); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup sandbox: %w", err))
 			} else {
 				sandboxActive = false
@@ -277,20 +277,18 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	isolationErrors := make([]error, 0, 2)
-	isolationCtx, cancelIsolation := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
-	if err := r.harness.Stop(isolationCtx); err != nil {
+	if err := withCleanupDeadline(r.harness.Stop); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm harness stopped: %w", err))
 	} else {
 		harnessActive = false
 		result.Isolation.HarnessStopped = true
 	}
-	if err := r.bridge.Stop(isolationCtx); err != nil {
+	if err := withCleanupDeadline(r.bridge.Stop); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))
 	} else {
 		bridgeActive = false
 		result.Isolation.BridgeRevoked = true
 	}
-	cancelIsolation()
 
 	if len(isolationErrors) != 0 {
 		isolationErr := errors.Join(isolationErrors...)
