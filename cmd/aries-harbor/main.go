@@ -759,6 +759,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, pe
 	if err := harbor.Run(ctx, r, h); err != nil {
 		return err
 	}
+	for _, observation := range sessions.LateCompletions() {
+		if err := log.Encode(observation); err != nil {
+			return err
+		}
+	}
 	endingStates := map[int]string{}
 	if len(r.EndingProcessSessions) > 0 {
 		endingStates = sessions.EndingProcessStates(r.EndingProcessSessions)

@@ -429,3 +429,24 @@ func TestSourceOnlyPollRetainsFirstReplyWithoutAdditionalDispatch(t *testing.T) 
 		t.Fatalf("unexpected source-only receipts: %+v", events)
 	}
 }
+
+func TestLateCompletionUsesExistingStream(t *testing.T) {
+	release := make(chan struct{})
+	s := NewProcessSessions(t.Context(), func(context.Context, replay.Call, io.Writer, io.Writer) (core.CommandResult, error) {
+		<-release
+		return core.CommandResult{ExitCode: 3}, nil
+	})
+	defer s.Close()
+	call := replay.Call{Operation: "Exec", ToolCallID: "original", Sequence: 8, ExitCode: 0}
+	out, err := s.ObserveRelaxed(t.Context(), call)
+	pending := s.LateCompletions()
+	close(release)
+	s.wg.Wait()
+	if err != nil || out.ExitCode != ProcessRunning || len(pending) != 1 || pending[0].Exit != nil {
+		t.Fatalf("pending: %+v %+v %v", out, pending, err)
+	}
+	rows := s.LateCompletions()
+	if len(rows) != 1 || rows[0].SourceCallID != "original" || rows[0].Time <= 0 || rows[0].Exit == nil || *rows[0].Exit != 3 {
+		t.Fatalf("completion: %+v", rows)
+	}
+}

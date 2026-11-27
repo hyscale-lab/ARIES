@@ -41,6 +41,7 @@ func (s *pendingStream) take() string {
 type guestProcess struct {
 	stdout, stderr pendingStream
 	done           chan struct{}
+	streamEnd      int64
 	result         core.CommandResult
 	err            error
 	retained       bool
@@ -56,8 +57,40 @@ type ProcessSessions struct {
 	cancel           context.CancelFunc
 	run              GuestStream
 	active           map[int]*guestProcess
+	late             []lateReply
 	wg               sync.WaitGroup
 	nativeStartClock bool
+}
+
+type lateReply struct {
+	id       string
+	sequence uint64
+	process  *guestProcess
+}
+
+// LateCompletions reports whether an existing guest stream had ended by inspection.
+// The timestamps use the same host monotonic clock as tool dispatch receipts.
+func (s *ProcessSessions) LateCompletions() []Receipt {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	var observations []Receipt
+	for _, late := range s.late {
+		e := Receipt{Event: "passive_process_completion", SourceCallID: late.id, Sequence: late.sequence, StatusBasis: "still_running_at_session_end"}
+		select {
+		case <-late.process.done:
+			e.Time = late.process.streamEnd
+			if late.process.err != nil || e.Time <= 0 {
+				e.StatusBasis = "completion_unverified"
+			} else {
+				e.StatusBasis = "guest_stream_returned"
+				exit := late.process.result.ExitCode
+				e.Exit = &exit
+			}
+		default:
+		}
+		observations = append(observations, e)
+	}
+	return observations
 }
 
 func NewProcessSessions(ctx context.Context, run GuestStream) *ProcessSessions {
@@ -197,6 +230,7 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		go func() {
 			defer s.wg.Done()
 			p.result, p.err = s.run(work, call, &p.stdout, &p.stderr)
+			p.streamEnd, _ = Clock()
 			close(p.done)
 		}()
 	case "PollProcess":
@@ -263,6 +297,11 @@ func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain,
 		}
 		s.lock.Unlock()
 	default:
+		if retain && !join && call.ExitCode >= 0 {
+			s.lock.Lock()
+			s.late = append(s.late, lateReply{call.ToolCallID, call.Sequence, p})
+			s.lock.Unlock()
+		}
 	}
 	if p.timing != nil {
 		timing := p.timing.Snapshot()
