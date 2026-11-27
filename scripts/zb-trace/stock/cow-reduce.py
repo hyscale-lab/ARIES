@@ -128,7 +128,7 @@ def main():
     if not records or [r['index'] for r in records] != list(range(len(records))):
         raise ValueError('missing baseline or sample')
     with a.csv.open('w', newline='') as stream:
-        writer = csv.DictWriter(stream, fieldnames=records[0].keys())
+        writer = csv.DictWriter(stream, fieldnames=records[0].keys(), lineterminator='\n')
         writer.writeheader()
         writer.writerows(records)
 
