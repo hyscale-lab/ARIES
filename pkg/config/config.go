@@ -303,6 +303,14 @@ type HarnessHermesConfig struct {
 	// raw bytes: ARIES validates its shape, its ${NAME} references, and the
 	// absence of credential-bearing fields, but never interprets its keys.
 	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
+	// Env holds extra literal environment variables for the Hermes process,
+	// such as the switches of a customized image. Names may not be ones ARIES
+	// sets or look like credentials; values are not expanded.
+	Env map[string]string `json:"env,omitempty"`
+	// StateArtifacts are bare names of files under Hermes's state directory
+	// (HERMES_HOME) that the harness retains after the run. The files ARIES
+	// stages there are not eligible.
+	StateArtifacts []string `json:"state_artifacts,omitempty"`
 }
 
 // HarnessCompactionConfig controls Hermes's context compaction. Hermes
@@ -363,6 +371,49 @@ func findCredentialField(value any, path string) string {
 		}
 	}
 	return ""
+}
+
+var (
+	hermesEnvName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+	// hermesOwnedEnv matches the variables the Hermes harness or its Gateway
+	// launcher sets, and the two every process inherits. A profile value
+	// under one of them would redirect the bridge target, the state
+	// directory, the Gateway, or the span store.
+	hermesOwnedEnv   = regexp.MustCompile(`^(PATH|HOME|HERMES_HOME|HERMES_YOLO_MODE|HERMES_WRITE_SAFE_ROOT|HERMES_DOCKER_EXEC_AS_ROOT|HERMES_ALLOW_ROOT_GATEWAY|SEARXNG_URL|TERMINAL_.*|ARIES_.*|API_SERVER_.*|HERMES_OTEL_.*)$`)
+	hermesStateFile  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	hermesStagedFile = regexp.MustCompile(`^config\.yaml$|\.key$`)
+)
+
+// validateEnvAndArtifacts checks harness.hermes.env and state_artifacts. An
+// env name is a plain variable name that ARIES does not set and that has no
+// credential-like part, so the block cannot carry a model key or replace a
+// variable the harness depends on; a value is literal and single-line. A
+// state artifact is a bare file name, which confines it to the state
+// directory, and is not one of the files ARIES stages there. Errors name the
+// variable, never its value.
+func (h *HarnessHermesConfig) validateEnvAndArtifacts() error {
+	for _, name := range slices.Sorted(maps.Keys(h.Env)) {
+		field := "harness.hermes.env." + name
+		if !hermesEnvName.MatchString(name) || hermesOwnedEnv.MatchString(name) {
+			return fmt.Errorf("%s: must be an upper-case environment variable name that ARIES does not set", field)
+		}
+		for _, part := range strings.Split(strings.ToLower(name), "_") {
+			if credentialFieldNames[part] {
+				return fmt.Errorf("%s is named like a credential; model keys stay out of JSON profiles", field)
+			}
+		}
+		if value := h.Env[name]; strings.Contains(value, "${") || strings.ContainsAny(value, "\x00\n\r") {
+			return fmt.Errorf("%s: the value must be single-line and must not contain ${", field)
+		}
+	}
+	seen := map[string]bool{}
+	for _, name := range h.StateArtifacts {
+		if !hermesStateFile.MatchString(name) || hermesStagedFile.MatchString(name) || seen[name] {
+			return fmt.Errorf("harness.hermes.state_artifacts: %q must be a unique bare file name that ARIES does not stage", name)
+		}
+		seen[name] = true
+	}
+	return nil
 }
 
 // HarnessWebSearchConfig is an OpenClaw/Hermes-only concept (see
@@ -836,7 +887,7 @@ func (c *Config) validate() error {
 	if _, err := model.ReasoningBody(c.CoreModel()); err != nil {
 		return err
 	}
-	if c.Model.ReasoningEffort != "" && c.Harness.Hermes != nil {
+	if c.Model.ReasoningEffort != "" && c.Harness.Hermes != nil && len(c.Harness.Hermes.ExtraBody) > 0 {
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(c.Harness.Hermes.ExtraBody, &object); err != nil {
 			return fmt.Errorf("harness.hermes.extra_body: %w", err)
@@ -853,14 +904,20 @@ func (c *Config) validate() error {
 	// Hermes merges a custom_providers extra_body only for its "custom"
 	// provider, which is how the OpenAI-compatible backends render; under
 	// DeepSeek the block would be silently ignored.
-	if c.Harness.Hermes != nil && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
+	if c.Harness.Hermes != nil && len(c.Harness.Hermes.ExtraBody) > 0 && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
 		return errors.New("harness.hermes.extra_body requires runtime.backend sglang or openai")
+	}
+	// The Gateway launcher exports the model key under this name.
+	if c.Harness.Hermes != nil {
+		if _, exists := c.Harness.Hermes.Env[c.Model.APIKeyEnv]; exists {
+			return fmt.Errorf("harness.hermes.env.%s is the model.api_key_env name", c.Model.APIKeyEnv)
+		}
 	}
 	if c.Model.Temperature != nil {
 		if c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
 			return errors.New("model.temperature requires runtime.backend sglang or openai for Hermes")
 		}
-		if c.Harness.Hermes != nil {
+		if c.Harness.Hermes != nil && len(c.Harness.Hermes.ExtraBody) > 0 {
 			var object map[string]json.RawMessage
 			if err := json.Unmarshal(c.Harness.Hermes.ExtraBody, &object); err != nil {
 				return fmt.Errorf("harness.hermes.extra_body: %w", err)
@@ -1063,19 +1120,24 @@ func (h *HarnessConfig) validateHermesBlocks() error {
 		if h.Type != "hermes" {
 			return errors.New("harness.hermes requires Hermes")
 		}
-		if len(h.Hermes.ExtraBody) == 0 {
-			return errors.New("harness.hermes must set extra_body")
+		if len(h.Hermes.ExtraBody) == 0 && len(h.Hermes.Env) == 0 && len(h.Hermes.StateArtifacts) == 0 {
+			return errors.New("harness.hermes must set extra_body, env, or state_artifacts")
 		}
-		var object map[string]any
-		if err := json.Unmarshal(h.Hermes.ExtraBody, &object); err != nil || len(object) == 0 {
-			return errors.New("harness.hermes.extra_body must be a non-empty JSON object")
+		if err := h.Hermes.validateEnvAndArtifacts(); err != nil {
+			return err
 		}
-		if field := findCredentialField(object, "harness.hermes.extra_body"); field != "" {
-			return fmt.Errorf("%s is named like a credential; model keys stay out of JSON profiles", field)
-		}
-		for _, match := range placeholderPattern.FindAllSubmatch(h.Hermes.ExtraBody, -1) {
-			if !extraBodyPlaceholders[string(match[1])] {
-				return fmt.Errorf("harness.hermes.extra_body may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", match[1])
+		if len(h.Hermes.ExtraBody) > 0 {
+			var object map[string]any
+			if err := json.Unmarshal(h.Hermes.ExtraBody, &object); err != nil || len(object) == 0 {
+				return errors.New("harness.hermes.extra_body must be a non-empty JSON object")
+			}
+			if field := findCredentialField(object, "harness.hermes.extra_body"); field != "" {
+				return fmt.Errorf("%s is named like a credential; model keys stay out of JSON profiles", field)
+			}
+			for _, match := range placeholderPattern.FindAllSubmatch(h.Hermes.ExtraBody, -1) {
+				if !extraBodyPlaceholders[string(match[1])] {
+					return fmt.Errorf("harness.hermes.extra_body may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", match[1])
+				}
 			}
 		}
 	}

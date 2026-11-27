@@ -929,8 +929,45 @@ func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {
 	if model.ContextLength != 262144 || model.MaxTokens != 32768 || model.Temperature == nil || *model.Temperature != 1.0 {
 		t.Fatalf("core model = %#v", model)
 	}
+	// env and state_artifacts may stand alone, on any backend, and with a
+	// reasoning effort: none of them reads the absent extra_body.
+	envOnly := strings.Replace(hermes, `"hermes":{"extra_body":`+hermesExtraBody+`}`, `"hermes":{"env":{"HERMES_FEATURE":"1","HERMES_FEATURE_MODE":"ours","MAX_TOKENS_KEPT":"2"},"state_artifacts":["events.jsonl"]}`, 1)
+	withEnv, err := Decode(strings.NewReader(strings.Replace(envOnly, `"api_key_env":"VLLM_API_KEY"`, `"api_key_env":"VLLM_API_KEY","reasoning_effort":"high"`, 1)))
+	if err != nil {
+		t.Fatalf("env with state_artifacts rejected: %v", err)
+	}
+	if withEnv.Harness.Hermes.Env["HERMES_FEATURE_MODE"] != "ours" || len(withEnv.Harness.Hermes.StateArtifacts) != 1 {
+		t.Fatalf("hermes block = %#v", withEnv.Harness.Hermes)
+	}
+	deepseek := strings.Replace(strings.Replace(envOnly, `"backend":"openai"`, `"backend":"deepseek"`, 1), `,"temperature":1.0`, "", 1)
+	if _, err := Decode(strings.NewReader(deepseek)); err != nil {
+		t.Fatalf("env under deepseek rejected: %v", err)
+	}
+	if _, err := Decode(strings.NewReader(strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"HERMES_FEATURE":"1"},"state_artifacts":["e.jsonl"]`, 1))); err != nil {
+		t.Fatalf("env beside extra_body rejected: %v", err)
+	}
+	// A rejected value is not echoed.
+	if _, err := Decode(strings.NewReader(strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"HERMES_FEATURE":"${VLLM_API_KEY}"}`, 1))); err == nil || strings.Contains(err.Error(), "VLLM_API_KEY") {
+		t.Fatalf("placeholder value error = %v", err)
+	}
 
 	rejected := map[string]string{
+		"lowercase env name":          strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"hermes_feature":"1"}`, 1),
+		"env shadows bridge target":   strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"TERMINAL_SSH_HOST":"10.0.0.1"}`, 1),
+		"env shadows state directory": strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"HERMES_HOME":"/tmp"}`, 1),
+		"env shadows gateway":         strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"API_SERVER_PORT":"1"}`, 1),
+		"env shadows span store":      strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"HERMES_OTEL_CONTENT_CAPTURE":"on"}`, 1),
+		"env shadows root opt-out":    strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"HERMES_ALLOW_ROOT_GATEWAY":"1"}`, 1),
+		"env credential name":         strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"HERMES_FEATURE_API_KEY":"sk-live"}`, 1),
+		"env is model key name":       strings.Replace(strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"VLLM_MODEL":"x"}`, 1), `"api_key_env":"VLLM_API_KEY"`, `"api_key_env":"VLLM_MODEL"`, 1),
+		"env multi-line value":        strings.Replace(hermes, hermesExtraBody, `{"a":1},"env":{"HERMES_FEATURE":"a\nb"}`, 1),
+		"state artifact with path":    strings.Replace(hermes, hermesExtraBody, `{"a":1},"state_artifacts":["../model.key"]`, 1),
+		"state artifact in directory": strings.Replace(hermes, hermesExtraBody, `{"a":1},"state_artifacts":["sessions/a.json"]`, 1),
+		"state artifact absolute":     strings.Replace(hermes, hermesExtraBody, `{"a":1},"state_artifacts":["/etc/passwd"]`, 1),
+		"state artifact is key file":  strings.Replace(hermes, hermesExtraBody, `{"a":1},"state_artifacts":["model.key"]`, 1),
+		"state artifact is config":    strings.Replace(hermes, hermesExtraBody, `{"a":1},"state_artifacts":["config.yaml"]`, 1),
+		"state artifact duplicate":    strings.Replace(hermes, hermesExtraBody, `{"a":1},"state_artifacts":["e.jsonl","e.jsonl"]`, 1),
+		"env under openclaw":          strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","hermes":{"env":{"HERMES_FEATURE":"1"}}}`, 1),
 		"compaction under openclaw":   strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","compaction":{"threshold_tokens":1000}}`, 1),
 		"hermes block under openclaw": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","hermes":{"extra_body":{"a":1}}}`, 1),
 		"empty hermes block":          strings.Replace(hermes, `"hermes":{"extra_body":`+hermesExtraBody+`}`, `"hermes":{}`, 1),

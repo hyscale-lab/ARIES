@@ -43,6 +43,7 @@ type fakeDeployment struct {
 	sttStderr                string
 	spansStdout, spansStderr string
 	spansExit                int
+	stateResults             map[string]core.CommandResult
 	sessionsStdout           string
 	sttExit, sessionsExit    int
 	gatewayStatus            string
@@ -109,6 +110,12 @@ func (f *fakeDeployment) Exec(ctx context.Context, _ string, c core.Command) (co
 	case "hermes":
 		return core.CommandResult{Stdout: f.sessionsStdout, ExitCode: f.sessionsExit}, nil
 	case "python3":
+		if len(c.Args) == 5 && c.Args[1] == stateArtifactScript {
+			if result, ok := f.stateResults[c.Args[3]]; ok {
+				return result, nil
+			}
+			return core.CommandResult{ExitCode: stateArtifactMissing}, nil
+		}
 		return core.CommandResult{Stdout: f.spansStdout, Stderr: f.spansStderr, ExitCode: f.spansExit}, nil
 	case "/bin/sh":
 		if len(c.Args) > 2 && c.Args[2] == "aries-hermes-stt" {

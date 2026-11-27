@@ -153,6 +153,24 @@ literal key cannot reach the retained `config.yaml` or the request bodies. The `
 every sandbox path; the harness clears it, because the sandbox is the isolation
 boundary and the tools act on it through the bridge.
 
+Fifth, `harness.hermes.env` and `harness.hermes.state_artifacts` let a profile
+run a customized build of the pinned image. The harness appends the `env`
+entries to the deployment request's environment after its own variables, in
+name order, so they reach the Gateway process the same way on Docker,
+Kubernetes, and Apptainer. The profile loader rejects a name the harness or
+the Gateway launcher sets and a name with a credential-like part, and a value
+that spans lines or contains `${`; the deployment's own validation still
+refuses a container whose metadata contains a loaded credential value.
+`state_artifacts` are bare file names under `HERMES_HOME`. During artifact
+collection, after the Gateway request and before container removal, a
+fixed-argv `python3` exec reads each one. It opens the state directory and
+then the file without following a symbolic link and reads only a regular file,
+so an entry cannot name a file outside the state directory, and it stops at the same byte bound as the span
+dump. The harness writes the redacted content to `state/<name>`. An absent
+file is logged and skipped, a file over the bound keeps its first bytes and
+logs a warning, and a link or other non-regular file fails the run like other
+artifact collection failures.
+
 Every run enables the `hermes_otel` plugin. For Docker, preparation builds
 the ARIES Hermes image from the pinned upstream image after it pulls images.
 For Kubernetes, [image publishing](../../k8s/README.md#3-publish-the-images-the-cluster-pulls)

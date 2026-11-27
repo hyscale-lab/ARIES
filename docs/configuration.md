@@ -780,7 +780,8 @@ Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 native Gateway's `gateway-output.txt`, `session-outcome.json`, `container.log`, and the
 exported message-level trajectory at `telemetry/sessions.jsonl`, and
 `telemetry/otel-spans.jsonl`: tool, model, and API spans with call IDs and wall-clock
-start/end times. An image without the plugin leaves no spans file.
+start/end times. An image without the plugin leaves no spans file. Files named
+by `harness.hermes.state_artifacts` land under `state/`.
 
 ### Hermes context window, compaction, and request extra body
 
@@ -857,6 +858,54 @@ covered by this execution path. The rendered `config.yaml` under
 `<run>/<task>/harness/` shows the selected settings.
 The Gateway reads `agent.max_turns`; `agent_timeout_seconds` in the overrides
 file also bounds the wall-clock wait for the run.
+
+### Hermes process environment and state artifacts
+
+Two more optional keys under `harness.hermes` serve a customized Hermes image,
+pinned through `hermes.image` in the versions catalog, whose added features are
+switched by environment variables and write files of their own. Either key may
+appear without `extra_body`, on every model backend and on the Docker,
+Kubernetes, and Apptainer deployment backends.
+
+```json
+{
+  "harness": {
+    "type": "hermes",
+    "hermes": {
+      "env": {
+        "HERMES_FEATURE": "1",
+        "HERMES_FEATURE_MODE": "strict"
+      },
+      "state_artifacts": ["feature_events.jsonl"]
+    }
+  }
+}
+```
+
+- `harness.hermes.env` maps variable names to literal values. ARIES adds them
+  to the Hermes container environment after its own variables, in name order.
+  A name is upper-case letters, digits, and `_`, starting with a letter. It may
+  not be a variable ARIES sets: `HERMES_HOME`, `HERMES_YOLO_MODE`,
+  `HERMES_WRITE_SAFE_ROOT`, `HERMES_DOCKER_EXEC_AS_ROOT`,
+  `HERMES_ALLOW_ROOT_GATEWAY`, `SEARXNG_URL`, `PATH`, `HOME`, the
+  `model.api_key_env` name, or any name beginning with `TERMINAL_`, `ARIES_`,
+  `API_SERVER_`, or `HERMES_OTEL_`. It is also rejected when one of its
+  `_`-separated parts is a credential word such as `KEY`, `TOKEN`, `SECRET`, or
+  `PASSWORD`: the values are stored in the profile and in the container's
+  metadata, where model keys must not appear. A value is a single line and may
+  not contain `${`, so it is never expanded. ARIES does not log the values.
+- `harness.hermes.state_artifacts` lists files in Hermes's state directory
+  (`HERMES_HOME`, `/run/aries/hermes` in the container) to keep. Each entry is
+  a bare file name with no directory part, made of letters, digits, `.`, `_`,
+  and `-`, and starting with a letter or digit. `config.yaml` and `*.key`, which
+  ARIES stages there, are not accepted. After the Gateway request finishes and
+  before the container is removed, ARIES reads each file and writes it to
+  `<run>/<task>/harness/state/<name>` with the run's credential values
+  redacted. This happens whether or not the request succeeded and does not
+  depend on evaluation. A file that does not exist is logged and skipped. A
+  file over 15 MiB keeps its first 15 MiB and logs a warning. A symbolic link
+  or other non-regular file is not read and fails the harness result, like
+  other artifact collection failures.
 
 ### Realtime OpenClaw mode
 

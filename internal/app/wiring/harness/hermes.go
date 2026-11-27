@@ -22,6 +22,10 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 	if err != nil {
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
+	block := cfg.Harness.Hermes
+	if block == nil {
+		block = &config.HarnessHermesConfig{}
+	}
 	options := hermesharness.Options{
 		Runtime: harnesscommon.RuntimeOptions{
 			Deployment:   transport,
@@ -30,9 +34,11 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 			APIKeyLookup: lookup,
 			Logger:       logger,
 		},
-		Common:     commonOptions(cfg),
-		Compaction: hermesCompaction(cfg.Harness.Compaction),
-		ExtraBody:  hermesExtraBody(cfg.Harness.Hermes),
+		Common:         commonOptions(cfg),
+		Compaction:     hermesCompaction(cfg.Harness.Compaction),
+		ExtraBody:      []byte(block.ExtraBody),
+		Env:            block.Env,
+		StateArtifacts: block.StateArtifacts,
 		// Apptainer without subordinate IDs cannot switch users.
 		KeepRoot: cfg.Harness.Deployment.Backend == "apptainer",
 	}
@@ -80,13 +86,6 @@ func hermesVoiceOptions(voice config.HarnessVoiceTranscribeConfig) hermesharness
 			Language: voice.STT.Language, Timeout: voice.STT.Timeout,
 		},
 	}
-}
-
-func hermesExtraBody(block *config.HarnessHermesConfig) []byte {
-	if block == nil {
-		return nil
-	}
-	return []byte(block.ExtraBody)
 }
 
 func hermesCompaction(block *config.HarnessCompactionConfig) *hermesharness.CompactionSettings {
