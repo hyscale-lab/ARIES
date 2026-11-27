@@ -121,47 +121,7 @@ def verify_foreground_yields(events, divergent, keys):
     return verified
 
 
-def process(run, output):
-    events = list(rows(run/'events.jsonl'))
-    if events[-1]['event'] != 'removed':
-        raise ValueError('incomplete runtime cleanup')
-    ending = [r for r in events if r['event']=='session_end_processes']
-    handles = {}
-    if ending:
-        receipt, = ending
-        handles = receipt['source_process_states']
-        if any(state not in ('running','terminal_retained') for state in handles.values()):
-            raise ValueError('missing source process at teardown')
-    keys=('sequence','step_id','source_call_id','operation','source_process_session_id','exit_code','expected_exit_code')
-    bound={tuple(r.get(k) for k in keys) for r in events if r['event']=='diagnostic_process_observation'
-           and ((r.get('status_basis')=='real_terminal_before_source_running_poll' and r.get('exit_code',-1)>=0 and r.get('expected_exit_code')==-1)
-                or (r.get('status_basis')=='real_terminal_status_differs_from_source' and r.get('exit_code',-1)>=0 and r.get('expected_exit_code',-1)>=0)
-                or (r.get('status_basis')=='real_process_running_at_source_terminal_poll' and r.get('exit_code')==-1 and r.get('expected_exit_code',-1)>=0))}
-    divergent=[r for r in events if r['event']=='tool_reply' and r['exit_code']!=r['expected_exit_code']]
-    for r in divergent:
-        if r.get('operation') in ('StartProcess','PollProcess') and tuple(r.get(k) for k in keys) not in bound:
-            raise ValueError('asynchronous status divergence requires a matching process observation')
-    groups, process_status = identify(events, complete=True, relaxed_status=bool(divergent),
-                ending_handles=[int(h) for h,state in handles.items() if state=='running'],
-                ending_retained_handles=[int(h) for h,state in handles.items() if state=='terminal_retained'])
-    process_status['divergent_first_replies']=[{k:r.get(k) for k in keys} for r in divergent]
-    foreground = verify_foreground_yields(events, divergent, keys)
-    if foreground:
-        process_status['foreground_yield_observations'] = foreground
-    create, = [r for r in events if r['event']=='create_start']
-    lifecycle = [r['event'] for r in events]
-    required = ['source_task_ready','snapshot_complete','restore_complete','session_start','tool_dispatch','session_end']
-    if [lifecycle.index(k) for k in required] != sorted(lifecycle.index(k) for k in required):
-        raise ValueError('invalid replay lifecycle')
-    meta = dict(workload=create['task'],source_trial=create['trial_id'],job_id=create['job_id'],
-                image=create['image'],trajectory_sha256=create['trajectory_sha256'],rollout_sha256=create['rollout_sha256'],
-                process_status=process_status,group_count=len(groups))
-    with (output/'events.jsonl').open('x') as stream:
-        for event in events:
-            write(stream,{k:v for k,v in event.items() if k not in {'stdout','stderr','values','content'}})
-    for name in ('samples.jsonl','provenance.txt','effective-runtime.json'):
-        if (run/name).is_file():
-            shutil.copyfile(run/name, output/name)
+def process_page_evidence(run, output, events, create, meta):
     native=run/'native-deep'
     captures=[r for r in events if r['event']=='trace_capture']
     if native.exists():
@@ -203,6 +163,50 @@ def process(run, output):
                 write(stream,{k:v for k,v in r.items() if k not in {'guest_telemetry','content_sample','original_snapshot_sample','dirty'}})
     elif any(c.get("pause_ack_monotonic_ns") or c.get("resume_request_monotonic_ns") for c in captures):
         raise ValueError('harness trace without native evidence')
+
+
+def process(run, output):
+    events = list(rows(run/'events.jsonl'))
+    if events[-1]['event'] != 'removed':
+        raise ValueError('incomplete runtime cleanup')
+    ending = [r for r in events if r['event']=='session_end_processes']
+    handles = {}
+    if ending:
+        receipt, = ending
+        handles = receipt['source_process_states']
+        if any(state not in ('running','terminal_retained') for state in handles.values()):
+            raise ValueError('missing source process at teardown')
+    keys=('sequence','step_id','source_call_id','operation','source_process_session_id','exit_code','expected_exit_code')
+    bound={tuple(r.get(k) for k in keys) for r in events if r['event']=='diagnostic_process_observation'
+           and ((r.get('status_basis')=='real_terminal_before_source_running_poll' and r.get('exit_code',-1)>=0 and r.get('expected_exit_code')==-1)
+                or (r.get('status_basis')=='real_terminal_status_differs_from_source' and r.get('exit_code',-1)>=0 and r.get('expected_exit_code',-1)>=0)
+                or (r.get('status_basis')=='real_process_running_at_source_terminal_poll' and r.get('exit_code')==-1 and r.get('expected_exit_code',-1)>=0))}
+    divergent=[r for r in events if r['event']=='tool_reply' and r['exit_code']!=r['expected_exit_code']]
+    for r in divergent:
+        if r.get('operation') in ('StartProcess','PollProcess') and tuple(r.get(k) for k in keys) not in bound:
+            raise ValueError('asynchronous status divergence requires a matching process observation')
+    groups, process_status = identify(events, complete=True, relaxed_status=bool(divergent),
+                ending_handles=[int(h) for h,state in handles.items() if state=='running'],
+                ending_retained_handles=[int(h) for h,state in handles.items() if state=='terminal_retained'])
+    process_status['divergent_first_replies']=[{k:r.get(k) for k in keys} for r in divergent]
+    foreground = verify_foreground_yields(events, divergent, keys)
+    if foreground:
+        process_status['foreground_yield_observations'] = foreground
+    create, = [r for r in events if r['event']=='create_start']
+    lifecycle = [r['event'] for r in events]
+    required = ['source_task_ready','snapshot_complete','restore_complete','session_start','tool_dispatch','session_end']
+    if [lifecycle.index(k) for k in required] != sorted(lifecycle.index(k) for k in required):
+        raise ValueError('invalid replay lifecycle')
+    meta = dict(workload=create['task'],source_trial=create['trial_id'],job_id=create['job_id'],
+                image=create['image'],trajectory_sha256=create['trajectory_sha256'],rollout_sha256=create['rollout_sha256'],
+                process_status=process_status,group_count=len(groups))
+    with (output/'events.jsonl').open('x') as stream:
+        for event in events:
+            write(stream,{k:v for k,v in event.items() if k not in {'stdout','stderr','values','content'}})
+    for name in ('samples.jsonl','provenance.txt','effective-runtime.json'):
+        if (run/name).is_file():
+            shutil.copyfile(run/name, output/name)
+    process_page_evidence(run,output,events,create,meta)
     (output/'run.json').write_text(json.dumps(meta,indent=2)+'\n')
 
 
