@@ -180,6 +180,11 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 	if err != nil {
 		return err
 	}
+	for _, observation := range sessions.LateCompletions() {
+		if err := enc.Encode(observation); err != nil {
+			return err
+		}
+	}
 	if len(r.EndingProcessSessions) > 0 {
 		at, err := harbor.Clock()
 		if err != nil {
