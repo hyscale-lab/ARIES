@@ -415,7 +415,7 @@ func TestSourceTerminalExecYieldUsesSeparateDiagnosticIdentity(t *testing.T) {
 
 func TestSourceOnlyPollRetainsFirstReplyWithoutAdditionalDispatch(t *testing.T) {
 	var events []Receipt
-	hooks := Hooks{RecordSourceDivergence: true, Record: func(e Receipt) error {
+	hooks := Hooks{KeepBoundedPollResult: true, Record: func(e Receipt) error {
 		events = append(events, e)
 		return nil
 	}}
