@@ -124,7 +124,7 @@ func (h Hooks) prepareTools(ctx context.Context, requests []Receipt) error {
 	}
 	step := requests[0].Step
 	if h.RecordToolRequests {
-		// All members of an ATIF batch arrive together; rollout spacing applies to dispatch.
+		// All calls in the assistant turn arrive together, regardless of their dispatch schedule.
 		for _, r := range requests {
 			r.Event, r.Time = "tool_request", ready
 			if err := h.Record(r); err != nil {

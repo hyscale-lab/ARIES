@@ -68,8 +68,11 @@ waits = [end["monotonic_ns"] - start["monotonic_ns"] for start, end in zip(wait_
 assert all(observed >= target - 1_000_000 for observed, target in zip(waits, requests))
 assert {r["source_time"] for r in dispatch[:3]} == {dispatch[0]["source_time"]}
 assert all(r["parallel_size"] == 3 for r in dispatch[:3])
-assert calls[2]["dispatch_ns"] <= min(c["reply_ns"] for c in calls[:3])
 start, = events("session_start")
+if start.get("serial_siblings"):
+    assert all(calls[i]["dispatch_ns"] >= calls[i - 1]["reply_ns"] for i in (1, 2))
+else:
+    assert calls[2]["dispatch_ns"] <= min(c["reply_ns"] for c in calls[:3])
 end, = events("session_end")
 assert start.get("source_playback") is not True
 total, covered_until = 0, 0

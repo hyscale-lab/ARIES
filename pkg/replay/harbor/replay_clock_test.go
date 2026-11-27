@@ -247,7 +247,7 @@ func TestParallelScheduleUsesRunnableSpacing(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	if err := runParallel(ctx, h, r, r.Events, Receipt{Step: 1, Sequence: 1}); err != nil {
+	if err := runToolGroup(ctx, h, r, r.Events, Receipt{Step: 1, Sequence: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if periodic == 0 || len(dispatches) != 2 {

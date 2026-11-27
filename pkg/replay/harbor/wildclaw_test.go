@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"reflect"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,26 +56,11 @@ func TestWildClawCalendarReplay(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
-	var started atomic.Int32
-	allStarted := make(chan struct{})
 	var receipts []Receipt
 	h := Hooks{
 		Periodic: func(context.Context, string, int, []string) (Freeze, error) { return Freeze{}, nil },
 		Record:   func(r Receipt) error { receipts = append(receipts, r); return nil },
-		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
-			if call.Sequence <= 3 {
-				if started.Add(1) == 3 {
-					close(allStarted)
-				}
-				select {
-				case <-allStarted:
-				case <-ctx.Done():
-					return core.CommandResult{}, ctx.Err()
-				}
-				if call.Sequence == 1 {
-					time.Sleep(250 * time.Millisecond)
-				}
-			}
+		Exec: func(_ context.Context, call replay.Call) (core.CommandResult, error) {
 			out := core.CommandResult{Stdout: string(call.ResponseStdout), ExitCode: int(call.ExitCode)}
 			if call.Sequence == 3 {
 				out.Stdout = "test backend live reply"
@@ -121,7 +105,12 @@ func TestWildClawCalendarReplay(t *testing.T) {
 	if !reflect.DeepEqual(waits, wantWaits) || replyCount != 5 || timerCount < 8 || receipts[len(receipts)-1].Event != "session_end" {
 		t.Fatalf("waits %v, replies %d, timer captures %d", waits, replyCount, timerCount)
 	}
-	gaps := []int64{dispatches[0] - receipts[0].Time, dispatches[3] - max(replies[0], replies[1], replies[2]), dispatches[4] - replies[3], receipts[len(receipts)-1].Time - replies[4]}
+	for i := 1; i < 3; i++ {
+		if replies[i-1] == 0 || dispatches[i] < replies[i-1] {
+			t.Fatalf("overlapping siblings: dispatch %v, first reply %v", dispatches, replies)
+		}
+	}
+	gaps := []int64{dispatches[0] - receipts[0].Time, dispatches[3] - replies[2], dispatches[4] - replies[3], receipts[len(receipts)-1].Time - replies[4]}
 	for i, gap := range gaps {
 		if gap < wantWaits[i] {
 			t.Fatalf("gap %d was %s, expected at least %s", i, time.Duration(gap), time.Duration(wantWaits[i]))

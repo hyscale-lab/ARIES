@@ -32,7 +32,7 @@ func validateParallelGroups(r *Recording) error {
 				}
 				seen[x.Sequence] = true
 				id := r.Plan.Calls[x.Sequence-1].SessionID
-				if id != 0 && sessions[id] {
+				if r.OpenClawTrace == nil && id != 0 && sessions[id] {
 					return errors.New("concurrent operations on same source handle")
 				}
 				sessions[id] = true
@@ -56,7 +56,7 @@ type parallelReply struct {
 	err     error
 }
 
-func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, first Receipt) (runErr error) {
+func runToolGroup(ctx context.Context, h Hooks, r *Recording, events []Event, first Receipt) (runErr error) {
 	n := len(events) / 2
 	if h.IntraTool != nil && h.IntraTool.Step == first.Step {
 		return errors.New("intra-tool sampling requires an individual, foreground source call")
@@ -99,13 +99,18 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 		sourceReplies[e.Sequence] = e
 	}
 	done := make(chan parallelReply, n)
+	serial := r.OpenClawTrace != nil
+	phase := "parallel-tool"
+	if serial {
+		phase = "tool"
+	}
 	start := time.Now()
 	next, finished := 0, 0
 	var batchStart int64
 	dispatch := func(e Event, receipt Receipt) error {
 		call := r.Plan.Calls[e.Sequence-1]
 		receipt = toolReceipt(h, receipt, call)
-		if err := h.dispatchReceipt(receipt, "parallel-tool"); err != nil {
+		if err := h.dispatchReceipt(receipt, phase); err != nil {
 			return err
 		}
 		wg.Add(1)
@@ -134,9 +139,11 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 		var timer *time.Timer
 		var tick <-chan time.Time
 		var periodic bool
+		// OpenClaw awaits each native tool reply, even when it returns a running handle.
+		canDispatch := next < n && (!serial || next == finished)
 		cursor := batchStart
 		if h.clock == nil {
-			if next < n {
+			if canDispatch {
 				delay := events[next].SourceTime.Sub(events[0].SourceTime) - time.Since(start)
 				timer = time.NewTimer(max(0, delay))
 				tick = timer.C
@@ -144,10 +151,12 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 		} else {
 			due := h.clock.next
 			periodic = true
-			if next < n {
+			if canDispatch {
 				cursor = batchStart + int64(events[next].SourceTime.Sub(events[0].SourceTime))
 				if next == 0 {
 					cursor = h.clock.cursor
+				} else if serial {
+					cursor = h.clock.runnable(lastReply)
 				}
 				if cursor <= due {
 					due = cursor
@@ -182,7 +191,7 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 				if err != nil {
 					return err
 				}
-				if err := h.capture(ctx, "parallel-tool", first.Step, at, true); err != nil {
+				if err := h.capture(ctx, phase, first.Step, at, true); err != nil {
 					return err
 				}
 				continue

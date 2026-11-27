@@ -44,6 +44,7 @@ type Receipt struct {
 	NativeToolStatusMatch *bool           `json:"native_tool_status_matches_source,omitempty"`
 
 	SourceHandle         string              `json:"source_handle,omitempty"`
+	SerialSiblings       bool                `json:"serial_siblings,omitempty"`
 	SourcePlayback       bool                `json:"source_playback,omitempty"`
 	SourceTraceStatus    string              `json:"source_trace_status,omitempty"`
 	SourceTime           time.Time           `json:"source_time,omitzero"`
@@ -162,6 +163,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 	sessionReceipt := Receipt{Event: "session_start", Time: sessionStart, SourcePlayback: r.SourcePlayback}
 	if r.OpenClawTrace != nil {
 		sessionReceipt.SourceTraceStatus = r.OpenClawTrace.Status
+		sessionReceipt.SerialSiblings = !r.SourcePlayback
 	}
 	defer func() {
 		// A failed initial capture may have acquired observers that still need release.
@@ -206,7 +208,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 			if end > len(r.Events) {
 				return errors.New("invalid parallel event span")
 			}
-			if err := runParallel(ctx, h, r, r.Events[i:end], receipt); err != nil {
+			if err := runToolGroup(ctx, h, r, r.Events[i:end], receipt); err != nil {
 				return err
 			}
 			if err := h.startCheckpoint(ctx, e.Step, r.Events[end:]); err != nil {
