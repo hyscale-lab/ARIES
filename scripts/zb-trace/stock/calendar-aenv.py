@@ -14,7 +14,7 @@ if args[:2] != ["start", "--cold"]:
     os.execv(cli, [cli, *args])
 
 expected = ["start", "--cold", "-d", "--timeout", "3600", "--cpu"]
-assert len(args) == 12 and args[:6] == expected and args[7] == "--memory" and (args[6],args[8]) in {("1","512"),("1","2048"),("10","8192")} and args[9] == "--image-mount"
+assert len(args) == 12 and args[:6] == expected and args[7] == "--memory" and (args[6],args[8]) == ("2","4096") and args[9] == "--image-mount"
 mount, image = args[10].split("=", 1)
 assert mount == "/workload/rootfs"
 with (Path(os.environ["XDG_CONFIG_HOME"]) / "aenv/credentials").open("rb") as source:

@@ -9,6 +9,7 @@ run=$4
 mkdir -m700 "$run"
 : "${AENV_CLI:?}" "${STOCK_BASE_IMAGE:?}"
 mounts=(--image-mount "/workload/rootfs=$image")
+cpus=2 memory=4096 workdir=/tmp_workspace
 case "$task" in
 tb41)
     : "${TB41_FIXTURE_DIR:?}"
@@ -39,24 +40,20 @@ tb41)
     ;;
 roy)
     [[ "$image" == *@sha256:3ed43bff698735f15fa9db6e020df8e44e1d3ec37e8828ebc53eba054e509a77 ]]
-    cpus=2 memory=4096 workdir=/app
+    workdir=/app
     ;;
 calendar)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     : "${CALENDAR_INPUTS:?}"
-    cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
 pdf-digest|conflicting-handling)
     [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
-    cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
 sam3-inference|sam3-debug)
     [[ "${image##*@}" == sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
-    cpus=10 memory=8192 workdir=/tmp_workspace
     ;;
 arxiv-digest|excel-search|video-skill|repo-homepage|scp-crawl|wiki-biography|paper-to-poster|arxiv-tables|social-[2-6]|schedule-edit|trash-fixture|chapter-summary)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
-    cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
 link-pix)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
@@ -68,27 +65,29 @@ link-pix)
 f015393667effe65afcca52e67332eaa5d5c97ee84682043ced8aa177e9d010f  environment/input/puzzle_data.json
 SUMS
     )
-    cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
 image-category)
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
     : "${WILDCLAW_IMAGES_TAR:?}"
     printf '%s  %s\n' f9ebc183b76d8f2ec58e9c0160a2f07e86fa6460d5febd786a2bf735f3368946 "$WILDCLAW_IMAGES_TAR" | sha256sum -c -
-    cpus=1 memory=512 workdir=/tmp_workspace
     ;;
 *)
     source "$(dirname "$0")/retrieval-config.sh"
     retrieval_task "$task" || exit 2
     retrieval_fixture=$(dirname "$0")/retrieval-fixture.sh
     [[ "$image" == *@sha256:60eec8752cb597e180780ff08d7569c1892c169521f1f2b069c2efeb006a4078 ]]
-    cpus=1 memory=2048 workdir=/tmp_workspace
     ;;
 esac
 echo "50dcc0b257d724fe07f3852c2dda52340223f038227c7572644eec870741223e  $runc_binary" | sha256sum -c -
 guest() { "$AENV_CLI" exec "$sandbox" "$@"; }
 date -u +%FT%T.%NZ >"$run/provision-start"
-sandbox=$("$AENV_CLI" start --cold -d --timeout 3600 --cpu "$cpus" --memory "$memory" \
-    "${mounts[@]}" "$STOCK_BASE_IMAGE")
+if [[ -n "${COW_PREPARE_SANDBOX:-}" ]]; then
+    [[ "$cpus" == 2 && "$memory" == 4096 && -z "${STOCK_PACK_STORE:-}" ]]
+    sandbox=$COW_PREPARE_SANDBOX
+else
+    sandbox=$("$AENV_CLI" start --cold -d --timeout 3600 --cpu "$cpus" --memory "$memory" \
+        "${mounts[@]}" "$STOCK_BASE_IMAGE")
+fi
 echo "$sandbox" >"$run/original-id"
 "$AENV_CLI" upload "$sandbox" "$runc_binary" /usr/local/bin/runc
 guest sh -ec 'chmod 755 /usr/local/bin/runc; cd /workload; runc spec; cat config.json' >"$run/default-spec.json"
@@ -164,7 +163,7 @@ elif [[ "$task" == calendar ]]; then
     done
     guest sh -ec 'cd /workload/rootfs; test -d tmp_workspace/.git; test ! -e tmp_workspace/results; if ! test -e root/USER.md; then cp tmp_workspace/USER.md root/USER.md; fi'
 elif [[ "$task" == schedule-edit || "$task" == trash-fixture || "$task" == chapter-summary ]]; then
-    local_fixture="/local/zb-study3-stock/local-sol/$task"
+    local_fixture="${LOCAL_SOL_DIR:-/local/zb-study3-stock/local-sol}/$task"
     (cd "$local_fixture" && sha256sum -c environment.sha256)
     "$AENV_CLI" upload "$sandbox" "$local_fixture/environment.tar" /tmp/local-environment.tar
     guest sh -ec 'cd /workload/rootfs/tmp_workspace; tar --no-same-owner -xf /tmp/local-environment.tar; rm /tmp/local-environment.tar'
@@ -295,6 +294,7 @@ date -u +%FT%T.%NZ >"$run/ready"
 guest runc exec zb-workload cat /proc/sys/kernel/random/boot_id >"$run/boot-id"
 "$AENV_CLI" snapshot create "$sandbox" --name "prepared-$sandbox" >"$run/snapshot.txt"
 "$AENV_CLI" delete "$sandbox"
+if [[ -n "${COW_PREPARE_SANDBOX:-}" ]]; then exit 0; fi
 if [[ -n "${STOCK_PACK_STORE:-}" ]]; then
     snapshot_id=$(awk '/^Created snapshot / {print $3}' "$run/snapshot.txt")
     for _ in $(seq 900); do
