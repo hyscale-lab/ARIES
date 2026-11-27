@@ -1175,6 +1175,7 @@ func TestOpenClawBlock(t *testing.T) {
 		"compaction model":            openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"model":"openai/gpt-5"}}}`),
 		"memory flush model":          openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"memoryFlush":{"model":"openai/gpt-5"}}}}`),
 		"escaped foreign placeholder": openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"user":"\u0024{VLLM_API_KEY}"}}}}`),
+		"empty placeholder first":     openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"user":"${}${VLLM_API_KEY}"}}}}`),
 		"placeholder in a key":        openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"${ARIES_TASK_ID}":true}}}}`),
 	}
 	for name, text := range rejected {
