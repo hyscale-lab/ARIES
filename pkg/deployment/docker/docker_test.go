@@ -28,7 +28,7 @@ func TestCreatePreservesArgumentsResourcesAndPrivateService(t *testing.T) {
 	manager := &Manager{client: fake}
 	request := deploymentRequest()
 	cpu, memory := 2.5, 1536
-	request.CPU, request.MemoryMB = &cpu, &memory
+	request.CPU, request.MemoryMB, request.CPUSet = &cpu, &memory, "0-7,64-71"
 	id, err := manager.Create(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestCreatePreservesArgumentsResourcesAndPrivateService(t *testing.T) {
 		t.Fatalf("argv=%q", fake.created.Config.Cmd)
 	}
 	limits := fake.created.HostConfig.Resources
-	if limits.NanoCPUs != 2500000000 || limits.Memory != 1536<<20 {
+	if limits.NanoCPUs != 2500000000 || limits.Memory != 1536<<20 || limits.CpusetCpus != "0-7,64-71" {
 		t.Fatalf("limits=%+v", limits)
 	}
 	port := network.MustParsePort("18789/tcp")
@@ -89,7 +89,7 @@ func TestCreateRejectsInvalidResourcesBeforeDocker(t *testing.T) {
 	if _, err := manager.Create(context.Background(), deploymentRequest()); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.created.HostConfig.Resources; got.NanoCPUs != 0 || got.Memory != 0 {
+	if got := fake.created.HostConfig.Resources; got.NanoCPUs != 0 || got.Memory != 0 || got.CpusetCpus != "" {
 		t.Fatalf("omitted resources=%+v", got)
 	}
 }

@@ -10,6 +10,10 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
   harness, sandbox and bridge share one configuration and the run's private namespace,
   and the bridge is a process. Reject unsupported or mixed backends and explicit
   embedded mode before effects.
+- `execution.cpuset_cpus` is Docker-only and applies to every container a run
+  creates: task and evaluation sandboxes, harness, and bridge. Reject it for other
+  backends, resolve it against the process's CPU affinity before effects, and pass
+  it on the deployment request like the CPU and memory limits.
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and
   explicit model request settings without silently changing their meaning. Judges

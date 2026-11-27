@@ -134,7 +134,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	deploymentRequest := deployment.Request{
 		Name: "aries-codex-" + id, Image: manager.runtime.Options.Image,
-		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB,
+		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, CPUSet: request.CPUSet,
 		Env:        []string{"HOME=" + codexHome, "CODEX_HOME=" + codexHome, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Entrypoint: append([]string(nil), runtimeEntrypoint...), Args: append([]string(nil), runtimeCommand...),
 		NoNewPrivileges: true,

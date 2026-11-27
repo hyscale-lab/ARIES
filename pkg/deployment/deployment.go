@@ -78,6 +78,10 @@ type Request struct {
 	// Nil CPU and memory dimensions impose no runtime limit.
 	CPU      *float64
 	MemoryMB *int
+	// CPUSet confines the runtime to these host CPUs, in Linux cpuset list
+	// form; empty leaves placement to the provider. Only Docker applies it,
+	// and profile validation rejects it for the other providers.
+	CPUSet string
 	// ImageVolumes allows only image-declared private volumes at these paths;
 	// it never grants permission to mount host files.
 	ImageVolumes []string

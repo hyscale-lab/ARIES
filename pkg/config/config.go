@@ -55,6 +55,47 @@ type ExecutionConfig struct {
 	// count so the schedule, not the pool, decides when a task starts.
 	ArrivalsFile      string  `json:"arrivals_file,omitempty"`
 	ArrivalRatePerMin float64 `json:"arrival_rate_per_min,omitempty"`
+	// CpusetCpus confines every container the run creates on Docker (task and
+	// evaluation sandboxes, harness, bridge) to these host CPUs, in addition
+	// to their CPU quotas. It is a Linux cpuset list ("0-7,64-71") or
+	// InheritCPUSet. Empty leaves placement to the container runtime. The
+	// command layer resolves it against the CPUs the aries process may run on
+	// before a run starts.
+	CpusetCpus string `json:"cpuset_cpus,omitempty"`
+}
+
+// InheritCPUSet as execution.cpuset_cpus selects the CPUs the aries process
+// may run on, such as a batch scheduler's allocation, so one profile follows
+// each allocation.
+const InheritCPUSet = "inherit"
+
+// ParseCPUSet returns the distinct CPUs of a Linux cpuset list in ascending
+// order. The list is comma-separated N or N-M with N <= M, without whitespace
+// or signs. Indices are 16-bit, well above Linux's 8192-CPU ceiling, so a
+// typo cannot expand into billions of entries.
+func ParseCPUSet(value string) ([]int, error) {
+	seen := make(map[int]bool)
+	for _, part := range strings.Split(value, ",") {
+		low, high, isRange := strings.Cut(part, "-")
+		if !isRange {
+			high = low
+		}
+		first, err := strconv.ParseUint(low, 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a CPU number", low)
+		}
+		last, err := strconv.ParseUint(high, 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a CPU number", high)
+		}
+		if first > last {
+			return nil, fmt.Errorf("range %s is descending", part)
+		}
+		for cpu := first; cpu <= last; cpu++ {
+			seen[int(cpu)] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // RuntimeConfig selects the model service. Mode is the ownership distinction:
@@ -773,6 +814,18 @@ func (c *Config) validate() error {
 		}
 		if c.Execution.LoopDuration != "" {
 			return errors.New("execution.arrivals_file cannot be combined with execution.loop_duration")
+		}
+	}
+	if c.Execution.CpusetCpus != "" {
+		if c.Execution.CpusetCpus != InheritCPUSet {
+			if _, err := ParseCPUSet(c.Execution.CpusetCpus); err != nil {
+				return fmt.Errorf("execution.cpuset_cpus %q: %w", c.Execution.CpusetCpus, err)
+			}
+		}
+		// Only Docker's CpusetCpus applies the set; a pod or an Apptainer
+		// instance would run unpinned.
+		if c.Harness.Deployment.Backend != "docker" || c.Sandbox.Deployment.Backend != "docker" || c.Bridge.Deployment.Backend != "docker" {
+			return errors.New("execution.cpuset_cpus is supported only with the docker deployment backend")
 		}
 	}
 	checks := []struct {

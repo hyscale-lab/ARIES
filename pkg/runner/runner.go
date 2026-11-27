@@ -36,6 +36,9 @@ type RuntimeOverrides struct {
 	HarnessResources      ResourceOverrides
 	AgentSandboxResources ResourceOverrides
 	AgentTimeout          *time.Duration
+	// CPUSet confines the task sandbox, the harness container, and every
+	// evaluation sandbox to these host CPUs. Empty leaves them unpinned.
+	CPUSet string
 }
 
 // Runner composes exactly the benchmark, harness, sandbox, and bridge roles.
@@ -139,7 +142,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		cleanupCtx    context.Context
 		cleanupCancel context.CancelFunc
 		cleanupUsed   bool
-		evaluation    = &evaluationSandboxes{toolSandbox: r.toolSandbox, runID: r.runID, taskID: task.ID}
+		evaluation    = &evaluationSandboxes{toolSandbox: r.toolSandbox, runID: r.runID, taskID: task.ID, cpuset: r.runtimeOverrides.CPUSet}
 	)
 	defer func() {
 		if cleanupCancel != nil {
@@ -250,6 +253,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		Timeout:      harnessTimeout,
 		CPU:          harnessCPU,
 		MemoryMB:     harnessMemory,
+		CPUSet:       sandboxEnvironment.CPUSet,
 		OutputDir:    r.outputDir,
 	}
 	request.NoSandboxTools = task.NoSandboxTools
@@ -322,6 +326,7 @@ func cloneRuntimeOverrides(overrides RuntimeOverrides) RuntimeOverrides {
 	cloned := RuntimeOverrides{
 		HarnessResources:      cloneResourceOverrides(overrides.HarnessResources),
 		AgentSandboxResources: cloneResourceOverrides(overrides.AgentSandboxResources),
+		CPUSet:                overrides.CPUSet,
 	}
 	if overrides.AgentTimeout != nil {
 		value := *overrides.AgentTimeout
@@ -352,6 +357,7 @@ func effectiveRuntime(original core.Task, overrides RuntimeOverrides) (core.Envi
 	if overrides.AgentSandboxResources.MemoryMB != nil {
 		environment.MemoryMB = *overrides.AgentSandboxResources.MemoryMB
 	}
+	environment.CPUSet = overrides.CPUSet
 	// A zero harness dimension means unlimited, which the deployment
 	// request expresses by omission.
 	harnessCPU := cloneFloat(overrides.HarnessResources.CPU)
@@ -434,11 +440,14 @@ type evaluationSandboxes struct {
 	toolSandbox ToolSandbox
 	runID       string
 	taskID      string
+	cpuset      string
 	mu          sync.Mutex
 	started     []Sandbox
 }
 
 func (e *evaluationSandboxes) Start(ctx context.Context, environment core.Environment) (Sandbox, error) {
+	// Placement follows the run, not the benchmark's evaluation environment.
+	environment.CPUSet = e.cpuset
 	sandbox, err := e.toolSandbox.Start(ctx, core.SandboxRequest{
 		RunID: e.runID, TaskID: e.taskID, Purpose: core.SandboxPurposeEvaluation, Environment: environment,
 	})

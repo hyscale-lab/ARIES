@@ -286,3 +286,5 @@ apptainer's
 cgroup
 cgroup's
 init
+cpuset
+Slurm

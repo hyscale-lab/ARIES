@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 )
 
 const fixtureImage = "docker.io/library/busybox:1.37.0-musl@sha256:222ad6d973c0d198014546a65cd02c5fdedcc172123c5b4c2bf0af636550bd94"
@@ -419,6 +421,60 @@ func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
 	}
 	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); err != nil {
 		t.Fatalf("root-workdir network removed by task Stop: %v", err)
+	}
+}
+
+// The Engine applies Environment.CPUSet: a task pinned to one CPU the test
+// process may use sees exactly one CPU.
+func TestDockerSandboxAppliesCPUSet(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-cpuset-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+	var allowed unix.CPUSet
+	if err := unix.SchedGetaffinity(0, &allowed); err != nil {
+		t.Fatal(err)
+	}
+	cpu := 0
+	for !allowed.IsSet(cpu) {
+		cpu++
+	}
+	cpuset := strconv.Itoa(cpu)
+
+	manager, err := newIntegrationManager(t, "cpuset-integration", Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "cpuset-integration", TaskID: "cpuset-task",
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/", CPU: 0.5, MemoryMB: 32, StorageMB: 64, CPUSet: cpuset},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	inspected, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inspected.Container.HostConfig.CpusetCpus; got != cpuset {
+		t.Fatalf("container cpuset = %q, want %q", got, cpuset)
+	}
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/nproc", Dir: "/"}, 0, "1\n", "")
+
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("cpuset container remains after Stop: %v", err)
 	}
 }
 

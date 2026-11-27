@@ -148,6 +148,7 @@ func TestSharedDeploymentReceivesSandboxPolicy(t *testing.T) {
 	f := &fakeDeployment{}
 	request := testRequest()
 	request.Environment.Env = map[string]string{"TZ": "untrusted", "DEBIAN_FRONTEND": "interactive", "KEEP": "exact"}
+	request.Environment.CPUSet = "0-3"
 	m := testManager(t, f)
 	live, err := m.Start(context.Background(), request)
 	if err != nil {
@@ -155,7 +156,7 @@ func TestSharedDeploymentReceivesSandboxPolicy(t *testing.T) {
 	}
 	s := live.(*Sandbox)
 	r := f.request
-	if r.Workdir != "/work" || !r.Init || !r.NoNewPrivileges || !r.AllowImageVolumes || r.StorageMB != 64 || r.GPUs != 1 || *r.CPU != 0.5 || *r.MemoryMB != 32 {
+	if r.Workdir != "/work" || !r.Init || !r.NoNewPrivileges || !r.AllowImageVolumes || r.StorageMB != 64 || r.GPUs != 1 || *r.CPU != 0.5 || *r.MemoryMB != 32 || r.CPUSet != "0-3" {
 		t.Fatalf("lost policy: %+v", r)
 	}
 	if !reflect.DeepEqual(r.Entrypoint, []string{"/bin/sleep"}) || !reflect.DeepEqual(r.Args, []string{"infinity"}) || len(r.NetworkAliases) != 0 {

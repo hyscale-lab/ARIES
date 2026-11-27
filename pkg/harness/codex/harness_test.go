@@ -169,7 +169,7 @@ func testManager(t *testing.T, settings ...Options) (*Manager, *fakeDeployment, 
 func TestHarnessStagesSeparateContainerWithoutModelCredentialMetadata(t *testing.T) {
 	manager, fake, request, sourceKey := testManager(t)
 	cpu, memory := 2.5, 512
-	request.CPU, request.MemoryMB = &cpu, &memory
+	request.CPU, request.MemoryMB, request.CPUSet = &cpu, &memory, "0-3"
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestHarnessStagesSeparateContainerWithoutModelCredentialMetadata(t *testing
 		t.Fatal("lookup buffer was not cleared")
 	}
 	r := fake.request
-	if r.Labels["aries.kind"] != "codex-harness" || r.Labels["aries.attempt"] == "" || r.Placement.AttachmentID != "aries-task-net" || *r.MemoryMB != memory || *r.CPU != cpu || !r.NoNewPrivileges || r.ServicePort != 0 || len(r.ImageVolumes) != 0 || r.AllowImageVolumes {
+	if r.Labels["aries.kind"] != "codex-harness" || r.Labels["aries.attempt"] == "" || r.Placement.AttachmentID != "aries-task-net" || *r.MemoryMB != memory || *r.CPU != cpu || r.CPUSet != "0-3" || !r.NoNewPrivileges || r.ServicePort != 0 || len(r.ImageVolumes) != 0 || r.AllowImageVolumes {
 		t.Fatalf("unsafe runtime request: %#v", r)
 	}
 	if strings.Contains(fmt.Sprintf("%+v", r), "test-model-secret") {

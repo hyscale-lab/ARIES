@@ -23,7 +23,7 @@ fields from your chosen profile.
 | `bridge` | Paired tool adapter, managed deployment, and optional raw evidence retention. |
 | `runtime` | Model service backend and external/managed ownership. |
 | `model` | Served model ID, endpoint, and credential environment-variable name. |
-| `execution` | Concurrency, looping, or arrival schedule. |
+| `execution` | Concurrency, looping, or arrival schedule, and optional [CPU pinning](#cpu-pinning) on Docker. |
 | `output_dir` | Private run output root; defaults to `runs`. |
 
 `versions_file`, nonempty `overrides_file`, and managed SGLang's `config.file`
@@ -70,6 +70,36 @@ profile uses `""`, which disables override loading without opening a file.
 Profiles and nonempty referenced override files reject unknown fields and
 trailing JSON; there is no profile merge or inheritance layer. SGLang is the
 exception only for its separate native launch configuration, described below.
+
+### CPU pinning
+
+`execution.cpuset_cpus` confines every container a run creates on Docker to a
+set of host CPUs: the task sandbox, the harness, each fresh evaluation sandbox,
+and the run's bridge. It applies on top of the CPU quotas above; it does not
+replace them. Docker containers are children of the Engine, not of the `aries`
+process, so without this they run outside the CPU set of a Slurm job step or
+any other cgroup that launched ARIES, on cores a shared node gave to someone
+else. The value `"inherit"` selects the CPUs the `aries` process may run on, so
+one profile follows each allocation:
+
+```json
+{"execution": {"concurrency": 4, "cpuset_cpus": "inherit"}}
+```
+
+An explicit Linux cpuset list such as `"0-7,64-71"` (comma-separated `N` or
+`N-M` with `N <= M`) is also accepted. If the field is omitted, Docker decides
+placement. Before any task starts, `aries PROFILE` resolves the value against
+the process's CPU affinity. It rejects an explicit list that names a CPU
+outside that affinity, and it rejects any task whose sandbox CPU quota plus the
+`harness_resources` CPU quota exceeds the number of CPUs in the set. That check
+is per task: concurrent occurrences share the same CPUs, and an unlimited
+quota counts as zero. The resolved list is logged; `aries setup` checks only
+the syntax.
+
+The field requires the Docker deployment backend for harness, sandbox, and
+bridge. Profiles that place a component on Kubernetes or Apptainer are rejected
+when they set it, because those providers would leave the runtimes unpinned.
+A managed model runtime is a host process and keeps the affinity it inherits.
 
 ### Paper-reproduction profiles
 

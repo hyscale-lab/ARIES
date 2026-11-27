@@ -93,6 +93,14 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	if err := validateWiredComponents(cfg, dependencies.Wiring); err != nil {
 		return err
 	}
+	// The resolved list replaces the profile value, so the bridge and every
+	// occurrence get the same concrete CPUs even when the profile says
+	// "inherit".
+	cpuset, cpus, err := resolveCPUSet(cfg.Execution.CpusetCpus, processCPUs)
+	if err != nil {
+		return err
+	}
+	cfg.Execution.CpusetCpus = cpuset
 	runID := newRunID(time.Now(), cfg.Name)
 	outputRoot, err := resolveOutputRoot(cfg.OutputDir, runID)
 	if err != nil {
@@ -120,9 +128,15 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	preparationEntry := logger.WithFields(logrus.Fields{"run_id": runID, "profile": cfg.Name, "backend": cfg.Runtime.Backend, "mode": cfg.Runtime.Mode, "component": "preparation"})
 	preparationEntry.WithField("preparation_state", "preparing").Info("profile preparation")
 	catalog, err := ensurePrepared(ctx, cfg, outputRoot, dependencies.Wiring, apiKeyLookup)
+	if err == nil {
+		err = checkCPUSetFit(catalog.Tasks, cfg.Overrides, cpuset, len(cpus))
+	}
 	if err != nil {
 		preparationEntry.WithFields(logrus.Fields{"preparation_state": "not_prepared", "error_category": "preparation_failed"}).Error("profile preparation")
 		return err
+	}
+	if cpuset != "" {
+		preparationEntry.WithField("cpuset_cpus", cpuset).Info("run containers pinned to host CPUs")
 	}
 	preparationEntry.WithField("preparation_state", "prepared").Info("profile preparation")
 	if err := createRunOutputRoot(outputRoot); err != nil {
@@ -350,6 +364,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
 			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB},
 			AgentTimeout:          cfg.Overrides.AgentTimeout,
+			CPUSet:                cfg.Execution.CpusetCpus,
 		},
 	})
 	if err != nil {

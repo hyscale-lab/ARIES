@@ -64,11 +64,11 @@ func TestHarnessAppliesOnlyPresentCheckedResources(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	cpu, memory := 2.5, 1536
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), CPU: &cpu, MemoryMB: &memory}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), CPU: &cpu, MemoryMB: &memory, CPUSet: "0-3"}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.created; got.CPU == nil || *got.CPU != cpu || got.MemoryMB == nil || *got.MemoryMB != memory {
+	if got := fake.created; got.CPU == nil || *got.CPU != cpu || got.MemoryMB == nil || *got.MemoryMB != memory || got.CPUSet != "0-3" {
 		t.Fatalf("resources = %#v", got)
 	}
 	if err := manager.Stop(context.Background()); err != nil {

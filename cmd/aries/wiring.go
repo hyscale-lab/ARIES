@@ -201,6 +201,7 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 		return nil, fmt.Errorf("construct bridge deployment: %w", err)
 	}
 	launch := bridgewiring.Launch(cfg.Versions.Bridge.Image)
+	launch.Request.CPUSet = cfg.Execution.CpusetCpus
 	launch.RuntimeBackend = cfg.Bridge.Deployment.Backend
 	launch.ResourceMetrics = "unsupported"
 	switch cfg.Bridge.Deployment.Backend {

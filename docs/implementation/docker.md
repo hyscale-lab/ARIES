@@ -30,6 +30,17 @@ validates the declared source, destination and permissions; component labels do
 not grant mounts. Harness and sandbox runtimes do not receive the socket. See
 [deployment configuration](../configuration.md#deployment-configuration).
 
+## CPU pinning
+
+Docker containers are children of the Engine, so they do not inherit the CPU
+affinity of the ARIES process. The command layer resolves
+[`execution.cpuset_cpus`](../configuration.md#cpu-pinning) against that affinity
+in [`cpuset.go`](../../internal/app/cpuset.go) before any effect. The resolved
+list then travels with each request, like the CPU and memory quotas: the Runner
+places it in the task's and every evaluation sandbox's `core.Environment` and in
+the `core.HarnessRequest`, bridge wiring places it in the bridge launch request,
+and the Docker provider sets `CpusetCpus` from `deployment.Request.CPUSet`.
+
 ## Image preparation
 
 Hermes plugin images and bridge images share the Docker

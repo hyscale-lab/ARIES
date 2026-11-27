@@ -286,7 +286,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fmt.Errorf("generate Hermes harness ID: %w", err)
 	}
 	deploymentRequest := deployment.Request{
-		Name: core.RuntimeName("hermes", request.TaskID, id), Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, ServicePort: gatewayPort, ImageVolumes: []string{imageDeclaredVolume},
+		Name: core.RuntimeName("hermes", request.TaskID, id), Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, CPUSet: request.CPUSet, ServicePort: gatewayPort, ImageVolumes: []string{imageDeclaredVolume},
 		Image:      manager.runtime.Options.Image,
 		Workdir:    workspaceRoot,
 		Env:        environment,

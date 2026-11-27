@@ -553,6 +553,30 @@ func TestRunnerPassesTheTaskSandboxToolsToTheHarness(t *testing.T) {
 	}
 }
 
+// One cpuset confines every container of a task, so the task sandbox, the
+// harness, and a fresh evaluation sandbox carry the same value; the benchmark
+// task stays unpinned.
+func TestRunnerGivesSandboxesAndHarnessTheSameCPUSet(t *testing.T) {
+	for _, cpuset := range []string{"", "0-7,64-71"} {
+		rig := newRig(t, 1)
+		rig.benchmark.freshStarts = 1
+		rig.runner.runtimeOverrides = RuntimeOverrides{CPUSet: cpuset}
+		if _, err := rig.runner.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		requests := rig.factory.requests
+		if len(requests) != 2 || requests[0].Environment.CPUSet != cpuset || requests[1].Purpose != core.SandboxPurposeEvaluation || requests[1].Environment.CPUSet != cpuset {
+			t.Fatalf("cpuset %q: sandbox requests = %#v", cpuset, requests)
+		}
+		if harness := rig.harness.requests[0]; harness.CPUSet != cpuset {
+			t.Fatalf("cpuset %q: harness = %#v", cpuset, harness)
+		}
+		if rig.benchmark.tasks[0].Environment.CPUSet != "" {
+			t.Fatalf("benchmark task mutated: %#v", rig.benchmark.tasks[0])
+		}
+	}
+}
+
 func TestNewClonesRuntimeOverridePointers(t *testing.T) {
 	rig := newRig(t, 0)
 	cpu, memory, timeout := 1.5, 768, 2*time.Minute
@@ -560,13 +584,14 @@ func TestNewClonesRuntimeOverridePointers(t *testing.T) {
 		HarnessResources:      ResourceOverrides{CPU: &cpu},
 		AgentSandboxResources: ResourceOverrides{MemoryMB: &memory},
 		AgentTimeout:          &timeout,
+		CPUSet:                "0-3",
 	}
 	created, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{RunID: "clone", RuntimeOverrides: overrides})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cpu, memory, timeout = 9, 999, time.Hour
-	if *created.runtimeOverrides.HarnessResources.CPU != 1.5 || *created.runtimeOverrides.AgentSandboxResources.MemoryMB != 768 || *created.runtimeOverrides.AgentTimeout != 2*time.Minute {
+	if *created.runtimeOverrides.HarnessResources.CPU != 1.5 || *created.runtimeOverrides.AgentSandboxResources.MemoryMB != 768 || *created.runtimeOverrides.AgentTimeout != 2*time.Minute || created.runtimeOverrides.CPUSet != "0-3" {
 		t.Fatalf("runtime overrides were not cloned: %#v", created.runtimeOverrides)
 	}
 }
