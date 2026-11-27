@@ -86,6 +86,8 @@ type renderSettings struct {
 	noSandboxTools         bool
 	// grpcTarget enables the ARIES terminal backend plugin and supplies its target.
 	grpcTarget string
+	// skillDirs are plugin skill roots staged in the runtime (harness.Plugin).
+	skillDirs []string
 }
 
 // sandboxToolsets are Hermes's toolsets that act in the sandbox: the shell,
@@ -282,6 +284,12 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	if settings.webSearchEnabled {
 		toolsets = append(toolsets, "web")
 	}
+	if len(settings.skillDirs) > 0 {
+		// Plugin skills are read through Hermes's own skills tools, which
+		// the explicit API toolset list otherwise leaves out.
+		toolsets = append(toolsets, "skills")
+		config["skills"] = map[string]any{"external_dirs": settings.skillDirs}
+	}
 	config["platform_toolsets"] = map[string]any{"api_server": toolsets}
 	if settings.webSearchEnabled {
 		// The sandbox's SearXNG service is search-only. Only select Tavily
@@ -304,6 +312,9 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 				if server.Transport == "sse" {
 					entry["transport"] = "sse"
 				}
+				if len(server.Headers) > 0 {
+					entry["headers"] = server.Headers
+				}
 			} else if server.Command != "" {
 				entry["command"] = server.Command
 				if len(server.Args) > 0 {
@@ -318,6 +329,9 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 						environment[key] = "${" + hostVar + "}"
 					}
 					entry["env"] = environment
+				}
+				if server.Cwd != "" {
+					entry["cwd"] = server.Cwd
 				}
 			}
 			if server.TimeoutSeconds > 0 {

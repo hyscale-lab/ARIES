@@ -36,6 +36,10 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 		// Apptainer without subordinate IDs cannot switch users.
 		KeepRoot: cfg.Harness.Deployment.Backend == "apptainer",
 	}
+	if err := pluginOptions(cfg, &options.Common); err != nil {
+		return app.HarnessInstance{}, errors.Join(err, transport.Close())
+	}
+	reportIgnored(logger, options.Common.Plugins)
 
 	if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {
 		options.VoiceTranscribe = hermesVoiceOptions(cfg.Harness.VoiceTranscribe)

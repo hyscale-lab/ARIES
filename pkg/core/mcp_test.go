@@ -199,6 +199,44 @@ func TestValidateMCPServer(t *testing.T) {
 			},
 			wantErr: "secret_env is not supported for url servers",
 		},
+		{
+			name: "command server with cwd",
+			cfg:  MCPServerConfig{Name: "local", Command: "node", Cwd: "/run/aries/plugins/demo"},
+		},
+		{
+			name:    "relative cwd",
+			cfg:     MCPServerConfig{Name: "local", Command: "node", Cwd: "plugins/demo"},
+			wantErr: "cwd must be an absolute, clean path",
+		},
+		{
+			name:    "cwd on a url server",
+			cfg:     MCPServerConfig{Name: "remote", URL: "https://mcp.example.com/mcp", Cwd: "/tmp"},
+			wantErr: "cwd applies only to a command server",
+		},
+		{
+			name: "url server with headers",
+			cfg:  MCPServerConfig{Name: "remote", URL: "https://mcp.example.com/mcp", Headers: map[string]string{"X-Tenant": "public"}},
+		},
+		{
+			name:    "headers on a command server",
+			cfg:     MCPServerConfig{Name: "local", Command: "node", Headers: map[string]string{"X-Tenant": "public"}},
+			wantErr: "headers apply only to a url server",
+		},
+		{
+			name:    "credential header",
+			cfg:     MCPServerConfig{Name: "remote", URL: "https://mcp.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer x"}},
+			wantErr: "carries a credential",
+		},
+		{
+			name:    "header name repeated in another case",
+			cfg:     MCPServerConfig{Name: "remote", URL: "https://mcp.example.com/mcp", Headers: map[string]string{"X-Tenant": "a", "x-tenant": "b"}},
+			wantErr: "appears more than once",
+		},
+		{
+			name:    "invalid header name",
+			cfg:     MCPServerConfig{Name: "remote", URL: "https://mcp.example.com/mcp", Headers: map[string]string{"X Tenant": "a"}},
+			wantErr: "header name",
+		},
 	}
 
 	for _, tt := range tests {

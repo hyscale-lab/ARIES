@@ -41,6 +41,7 @@ type openClawConfig struct {
 	Talk    *talkConfig    `json:"talk,omitempty"`
 	Plugins *pluginsConfig `json:"plugins,omitempty"`
 	MCP     *openClawMCP   `json:"mcp,omitempty"`
+	Skills  *skillsConfig  `json:"skills,omitempty"`
 }
 
 type openClawMCP struct {
@@ -54,6 +55,18 @@ type openClawMCPServer struct {
 	Transport        string            `json:"transport,omitempty"`
 	RequestTimeoutMs int               `json:"requestTimeoutMs,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
+	Cwd              string            `json:"cwd,omitempty"`
+	Headers          map[string]string `json:"headers,omitempty"`
+}
+
+// skillsConfig adds plugin skill roots after OpenClaw's own skill locations
+// (skills.load.extraDirs has the lowest precedence).
+type skillsConfig struct {
+	Load skillsLoadConfig `json:"load"`
+}
+
+type skillsLoadConfig struct {
+	ExtraDirs []string `json:"extraDirs"`
 }
 
 // MCPOptions configures MCP servers and sandbox-allowlisted tools for OpenClaw.
@@ -62,6 +75,8 @@ type openClawMCPServer struct {
 type MCPOptions struct {
 	Servers        []core.MCPServerConfig
 	NoSandboxTools bool
+	// SkillDirs are plugin skill roots staged in the runtime (harness.Plugin).
+	SkillDirs []string
 }
 
 type talkConfig struct {
@@ -326,6 +341,8 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 					Args:             server.Args,
 					URL:              server.URL,
 					RequestTimeoutMs: server.TimeoutSeconds * 1000,
+					Cwd:              server.Cwd,
+					Headers:          server.Headers,
 				}
 				if server.Command != "" {
 					entry.Transport = "stdio"
@@ -356,6 +373,9 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 				alsoAllow = append(alsoAllow, "bundle-mcp")
 			}
 		}
+	}
+	if len(mcp) > 0 && len(mcp[0].SkillDirs) > 0 {
+		configuration.Skills = &skillsConfig{Load: skillsLoadConfig{ExtraDirs: mcp[0].SkillDirs}}
 	}
 	if len(alsoAllow) > 0 {
 		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
