@@ -332,6 +332,8 @@ func newDeployment(cfg config.DeploymentConfig, logger *logrus.Logger) (deployme
 
 func newHarnessDeployment(cfg config.Config, logger *logrus.Logger) (deployment.Deployment, error) {
 	switch cfg.Harness.Deployment.Backend {
+	case "docker":
+		return deploymentwiring.NewDockerHarness(cfg.Harness.Deployment, logger)
 	case "kubernetes":
 		return deploymentwiring.NewKubernetesHarness(cfg.Harness.Deployment, cfg.Harness.Type, logger)
 	default:

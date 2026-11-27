@@ -52,6 +52,16 @@ listener port. Protocol code does not probe interfaces or assume SSH port 2222.
 Search URLs use unique sandbox runtime names. Provider-specific address inspection
 stays in Docker, as described in [endpoint handoff](../design/deployment.md#endpoint-handoff).
 
+Each runtime carries its request's CPU, memory, storage and GPU limits. Docker
+task and evaluation sandboxes also get a fixed limit of 4096 processes, and
+harness containers one of 1024; the kernel counts threads towards it. Agents run
+whatever the repository offers, and test runners size worker pools from the
+host's CPU count rather than from the container's quota, so without the limit
+one task can hold thousands of processes at its memory cap and drive the node's
+load into the thousands. The limit is an isolation property that
+[deployment wiring](../../internal/app/wiring/deployment/docker.go) fixes per
+component, not a profile or task setting, and the bridge container has none.
+
 [Streaming execution](../../pkg/deployment/docker/exec.go) sends argv, workdir,
 environment and user directly to Moby exec, separates stdout and stderr, and reads
 the exit status from exec inspection. Cancellation closes the attached connection;
