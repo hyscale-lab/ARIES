@@ -1162,19 +1162,20 @@ func TestOpenClawBlock(t *testing.T) {
 		"huge telemetry limit":        openClawBlockConfig(`"openclaw":{"telemetry_limit_mib":4096}`),
 		// OpenClaw accepts each of these, and each moves the endpoint, sends
 		// a credential elsewhere, or starts a process.
-		"model base url":       openClawBlockConfig(`"openclaw":{"model":{"baseUrl":"http://elsewhere.example/v1"}}`),
-		"model api":            openClawBlockConfig(`"openclaw":{"model":{"api":"openai-responses"}}`),
-		"model headers":        openClawBlockConfig(`"openclaw":{"model":{"headers":{"X-Trace":"1"}}}`),
-		"request proxy":        openClawBlockConfig(`"openclaw":{"provider":{"request":{"proxy":{"mode":"explicit-proxy","url":"http://proxy.example:3128"}}}}`),
-		"request tls":          openClawBlockConfig(`"openclaw":{"provider":{"request":{"allowPrivateNetwork":true,"tls":{"insecureSkipVerify":true}}}}`),
-		"request secret ref":   openClawBlockConfig(`"openclaw":{"provider":{"request":{"headers":{"X-Trace":{"source":"env","provider":"default","id":"TAVILY_API_KEY"}}}}}`),
-		"request not object":   openClawBlockConfig(`"openclaw":{"provider":{"request":true}}`),
-		"local service":        openClawBlockConfig(`"openclaw":{"provider":{"localService":{"command":"/bin/sh","args":["-c","true"]}}}`),
-		"cli backends":         openClawBlockConfig(`"openclaw":{"agent_defaults":{"cliBackends":{"x":{"command":"/bin/sh"}}}}`),
-		"heartbeat model":      openClawBlockConfig(`"openclaw":{"agent_defaults":{"heartbeat":{"every":"0m","model":"openai/gpt-5"}}}`),
-		"compaction model":     openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"model":"openai/gpt-5"}}}`),
-		"memory flush model":   openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"memoryFlush":{"model":"openai/gpt-5"}}}}`),
-		"placeholder in a key": openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"${ARIES_TASK_ID}":true}}}}`),
+		"model base url":              openClawBlockConfig(`"openclaw":{"model":{"baseUrl":"http://elsewhere.example/v1"}}`),
+		"model api":                   openClawBlockConfig(`"openclaw":{"model":{"api":"openai-responses"}}`),
+		"model headers":               openClawBlockConfig(`"openclaw":{"model":{"headers":{"X-Trace":"1"}}}`),
+		"request proxy":               openClawBlockConfig(`"openclaw":{"provider":{"request":{"proxy":{"mode":"explicit-proxy","url":"http://proxy.example:3128"}}}}`),
+		"request tls":                 openClawBlockConfig(`"openclaw":{"provider":{"request":{"allowPrivateNetwork":true,"tls":{"insecureSkipVerify":true}}}}`),
+		"request secret ref":          openClawBlockConfig(`"openclaw":{"provider":{"request":{"headers":{"X-Trace":{"source":"env","provider":"default","id":"TAVILY_API_KEY"}}}}}`),
+		"request not object":          openClawBlockConfig(`"openclaw":{"provider":{"request":true}}`),
+		"local service":               openClawBlockConfig(`"openclaw":{"provider":{"localService":{"command":"/bin/sh","args":["-c","true"]}}}`),
+		"cli backends":                openClawBlockConfig(`"openclaw":{"agent_defaults":{"cliBackends":{"x":{"command":"/bin/sh"}}}}`),
+		"heartbeat model":             openClawBlockConfig(`"openclaw":{"agent_defaults":{"heartbeat":{"every":"0m","model":"openai/gpt-5"}}}`),
+		"compaction model":            openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"model":"openai/gpt-5"}}}`),
+		"memory flush model":          openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"memoryFlush":{"model":"openai/gpt-5"}}}}`),
+		"escaped foreign placeholder": openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"user":"\u0024{VLLM_API_KEY}"}}}}`),
+		"placeholder in a key":        openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"${ARIES_TASK_ID}":true}}}}`),
 	}
 	for name, text := range rejected {
 		if _, err := Decode(strings.NewReader(text)); err == nil {

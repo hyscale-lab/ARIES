@@ -380,7 +380,6 @@ func (o *HarnessOpenClawConfig) validate() error {
 	if err != nil {
 		return err
 	}
-	raws := o.raw()
 	for _, name := range []string{"model", "provider", "agent_defaults"} {
 		object, ok := objects[name]
 		if !ok {
@@ -401,10 +400,10 @@ func (o *HarnessOpenClawConfig) validate() error {
 		if field := findField(object, path, func(key string) bool { return strings.Contains(key, "${") }); field != "" {
 			return fmt.Errorf("%s: placeholders are replaced in values only, not in keys", field)
 		}
-		for _, match := range placeholderPattern.FindAllSubmatch(raws[name], -1) {
-			if !extraBodyPlaceholders[string(match[1])] {
-				return fmt.Errorf("%s may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", path, match[1])
-			}
+		// The decoded values are checked, not the raw JSON: an escaped
+		// "\u0024{NAME}" decodes to a placeholder OpenClaw would expand.
+		if foreign := foreignPlaceholder(object); foreign != "" {
+			return fmt.Errorf("%s may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", path, foreign)
 		}
 	}
 	if request, ok := objects["provider"]["request"]; ok {
@@ -447,6 +446,33 @@ func (o *HarnessOpenClawConfig) reasoningConflict() (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// foreignPlaceholder returns the name of the first ${NAME} reference in a
+// decoded JSON value's strings that ARIES does not replace, or "" when there
+// is none.
+func foreignPlaceholder(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			if name := foreignPlaceholder(typed[key]); name != "" {
+				return name
+			}
+		}
+	case []any:
+		for _, element := range typed {
+			if name := foreignPlaceholder(element); name != "" {
+				return name
+			}
+		}
+	case string:
+		for _, match := range placeholderPattern.FindAllStringSubmatch(typed, -1) {
+			if !extraBodyPlaceholders[match[1]] {
+				return match[1]
+			}
+		}
+	}
+	return ""
 }
 
 // findField walks a decoded JSON value and returns the dotted path of the
