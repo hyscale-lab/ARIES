@@ -52,6 +52,9 @@ func modifiedV5(ctx context.Context, path string, g guest, r *harbor.Recording) 
 		return err
 	}
 	req := deployment.Request{Name: name, Image: c.Image, AllowNetwork: c.Network, StorageMB: 65536, Workdir: "/tmp_workspace", Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
+	if r.Task == "01_Productivity_Flow_task_10_pdf_digest" || r.Task == "04_Search_Retrieval_task_2_conflicting_handling" {
+		req.Env = []string{"PIP_NO_INDEX=1", "PIP_FIND_LINKS=/tmp/document-wheels"}
+	}
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
