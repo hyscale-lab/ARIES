@@ -84,7 +84,21 @@ are not visible to the archive API and read as missing.
 ## Removal and observation
 
 Container cleanup inspects, stops or kills as needed, removes the runtime and
-anonymous volumes, then confirms absence. Network removal also confirms absence.
+anonymous volumes, then confirms absence. Under many concurrent tasks the Engine
+can refuse a removal as already in progress, or drop one whose deadline elapsed
+while its queue drained, and still complete it. Removal therefore treats absence
+as the outcome: it checks for the container after every call and retries a
+conflict or a timeout with backoff (2s, 4s, 8s, 16s), bounded to 60s so the work
+after it keeps time. Any other removal failure is reported at once if the
+container is still present, and a container that outlives the retries fails
+cleanup. Network removal is one call and also confirms absence.
+
+Cleanup deadlines are sized from that bound. A harness stop or rollback and a
+sandbox start rollback each get 90s, and the Runner gives every isolation and
+cleanup stage its own 120s instead of one shared deadline, so a slow stage
+cannot leave the stages after it an expired context. Run-scoped teardown of the
+shared bridge and network keeps 30s per owner.
+
 Lost allocation responses are recovered through generated names and verified
 ownership. Unresolved allocation returns `deployment.ErrAllocationUnconfirmed`;
 cleanup retains that uncertainty instead of treating an empty ID as success.

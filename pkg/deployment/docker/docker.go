@@ -62,6 +62,8 @@ type Manager struct {
 	closeOnce sync.Once
 	closeErr  error
 	timeout   time.Duration
+	// removal overrides defaultRemoval; the zero value selects it.
+	removal removalPolicy
 }
 
 var _ deployment.Deployment = (*Manager)(nil)
@@ -392,14 +394,13 @@ func (manager *Manager) Stop(ctx context.Context, id string) error {
 			}
 		}
 	}
-	if _, err := manager.client.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("remove deployment: %w", err))
+	// Removal is retried and confirmed together: a contended Engine rejects
+	// or drops the request while still completing it.
+	recovered, err := manager.removeContainer(ctx, id)
+	if err != nil {
+		return errors.Join(append(errs, err)...)
 	}
-	if _, err := manager.client.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); err == nil {
-		return errors.Join(append(errs, errors.New("deployment remains after removal"))...)
-	} else if !errdefs.IsNotFound(err) {
-		return errors.Join(append(errs, fmt.Errorf("verify deployment removal: %w", err))...)
-	}
+	errs = append(errs, recovered)
 	if warning := errors.Join(errs...); warning != nil {
 		logger := manager.logger
 		if logger == nil {

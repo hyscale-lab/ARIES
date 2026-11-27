@@ -152,11 +152,12 @@ observation, removes the shared network, and persists infrastructure outcomes
 separately from task counts. Task cleanup never removes a peer's infrastructure.
 
 Cleanup follows reverse ownership order and uses bounded cleanup work even when
-the run context has been cancelled. Partial starts still trigger cleanup, and
-stop operations are safe to repeat. Failures to confirm harness absence or
-bridge revocation block evaluation. Verifier tests and solutions are not
-uploaded until both isolation gates succeed, so a possibly live agent path
-cannot observe them.
+the run context has been cancelled. Each isolation and cleanup stage gets its
+own deadline, so a slow stage cannot expire the ones after it. Partial starts
+still trigger cleanup, and stop operations are safe to repeat. Failures to
+confirm harness absence or bridge revocation block evaluation. Verifier tests
+and solutions are not uploaded until both isolation gates succeed, so a
+possibly live agent path cannot observe them.
 
 Evaluation belongs to the Benchmark and is independent of the AgentHarness.
 Harness execution can fail while evaluation still reports the state that was

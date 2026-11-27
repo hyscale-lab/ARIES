@@ -21,7 +21,10 @@ import (
 )
 
 const (
-	DefaultCleanupTimeout = 30 * time.Second
+	// DefaultCleanupTimeout bounds Stop and rollback: the graceful stop and
+	// kill, then a container removal the Docker deployment may retry for up
+	// to 60s against a contended Engine.
+	DefaultCleanupTimeout = 90 * time.Second
 	DefaultStartTimeout   = 45 * time.Second
 	DefaultAgentTimeout   = 20 * time.Minute
 )
