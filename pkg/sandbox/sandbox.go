@@ -203,7 +203,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"},
 		Labels:    ownershipLabels(request, "task-container"),
 		Placement: s.connectivity.Placement,
-		StorageMB: env.StorageMB, GPUs: env.GPUs,
+		StorageMB: env.StorageMB, GPUs: env.GPUs, CPUSet: env.CPUSet,
 		Init: true, NoNewPrivileges: env.ExecUser != "", AllowImageVolumes: true,
 	}
 	if env.CPU > 0 {

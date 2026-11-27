@@ -267,7 +267,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		Name: active.Name, Image: manager.runtime.Options.Image,
 		Env: []string{"OPENCLAW_CONFIG_PATH=" + configContainerPath}, Args: []string{launcherPath, gatewayLauncherPath},
 		Labels:    map[string]string{"aries.managed": "true", "aries.kind": "openclaw-harness", "aries.component": "harness", "aries.run": request.RunID, "aries.task": request.TaskID, "aries.attempt": active.AttemptID},
-		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, ServicePort: 18789,
+		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, CPUSet: request.CPUSet, ServicePort: 18789,
 	}
 	fail := func(primary error) error {
 		err := manager.runtime.Rollback(ctx, active.Occurrence, primary)

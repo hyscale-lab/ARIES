@@ -99,7 +99,7 @@ func (manager *Manager) Close() error {
 }
 
 func resources(request deployment.Request) (container.Resources, error) {
-	var result container.Resources
+	result := container.Resources{CpusetCpus: request.CPUSet}
 	if request.CPU != nil {
 		scaled := *request.CPU * 1e9
 		if *request.CPU <= 0 || math.IsNaN(*request.CPU) || math.IsInf(*request.CPU, 0) || scaled >= math.Exp2(63) {

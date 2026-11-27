@@ -1326,12 +1326,12 @@ func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
 	cpu, memory := 2.5, 1536
-	request.CPU, request.MemoryMB = &cpu, &memory
+	request.CPU, request.MemoryMB, request.CPUSet = &cpu, &memory, "0-3"
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	if fake.created.CPU == nil || *fake.created.CPU != cpu || fake.created.MemoryMB == nil || *fake.created.MemoryMB != memory {
+	if fake.created.CPU == nil || *fake.created.CPU != cpu || fake.created.MemoryMB == nil || *fake.created.MemoryMB != memory || fake.created.CPUSet != "0-3" {
 		t.Fatalf("resources = %#v", fake.created)
 	}
 	if got := fake.validatedRequest; got.Name != fake.created.Name || got.Image != testHermesImage || got.Placement.AttachmentID != request.Connectivity.Placement.AttachmentID || !slices.Equal(got.Args, gatewayCommand(false)) || !slices.Equal(got.Entrypoint, gatewayEntrypoint) {

@@ -30,6 +30,10 @@ type Environment struct {
 	Env          map[string]string `json:"env,omitempty"`
 	Services     TaskServices      `json:"services,omitempty"`
 	ExecUser     string            `json:"-"`
+	// CPUSet confines the sandbox to these host CPUs, in Linux cpuset list
+	// form. The Runner sets it from the run's placement; benchmarks leave it
+	// empty.
+	CPUSet string `json:"cpuset,omitempty"`
 }
 
 // SandboxPurposeEvaluation marks a fresh sandbox started for evaluation rather
@@ -183,6 +187,9 @@ type HarnessRequest struct {
 	// NoSandboxTools is the task's Task.NoSandboxTools: the harness renders
 	// none of its own shell, code-execution or file tools.
 	NoSandboxTools bool `json:"no_sandbox_tools,omitempty"`
+	// CPUSet is the host CPU list the task sandbox receives; the harness
+	// container is confined to the same CPUs. Empty leaves it unpinned.
+	CPUSet string `json:"cpuset,omitempty"`
 }
 
 const (

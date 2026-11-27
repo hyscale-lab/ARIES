@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1082,5 +1083,74 @@ func TestJudgeSharedModelSettings(t *testing.T) {
 	}
 	if _, err := Decode(strings.NewReader(strings.Replace(custom, `"judge":{`, `"judge":{"reasoning_effort":"low",`, 1))); err == nil {
 		t.Fatal("accepted explicit reasoning for unsupported provider")
+	}
+}
+
+func TestExecutionCPUSetValidation(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Execution.CpusetCpus != "" {
+		t.Fatalf("default cpuset = %q", cfg.Execution.CpusetCpus)
+	}
+	withCPUSet := func(cpuset string) string {
+		return strings.Replace(validConfig, `"benchmark":`, `"execution":{"concurrency":1,"cpuset_cpus":"`+cpuset+`"},"benchmark":`, 1)
+	}
+	for _, cpuset := range []string{"0", "0-27", "0-7,64-71", "3,5,7", "12-12", "0-3,8,10-11", "inherit"} {
+		cfg, err := Decode(strings.NewReader(withCPUSet(cpuset)))
+		if err != nil {
+			t.Fatalf("%q: %v", cpuset, err)
+		}
+		if cfg.Execution.CpusetCpus != cpuset {
+			t.Fatalf("%q decoded as %q", cpuset, cfg.Execution.CpusetCpus)
+		}
+	}
+	for _, cpuset := range []string{" ", "7-0", "-1", "0-", "-", "0,,1", ",0", "0,", "a", "0-3,x", "0 - 3", " 0-3", "+1", "1.5", "0-3-5", "65536", "99999999999999999999", "0x1", "1_0", "Inherit"} {
+		if _, err := Decode(strings.NewReader(withCPUSet(cpuset))); err == nil || !strings.Contains(err.Error(), "execution.cpuset_cpus") {
+			t.Fatalf("%q: expected execution.cpuset_cpus rejection, got %v", cpuset, err)
+		}
+	}
+}
+
+// Only Docker applies a cpuset, so a profile placing any component elsewhere
+// is rejected instead of running unpinned.
+func TestExecutionCPUSetRequiresTheDockerBackend(t *testing.T) {
+	kubernetes := DeploymentConfig{Backend: "kubernetes"}
+	apptainer := DeploymentConfig{Backend: "apptainer", Apptainer: &ApptainerDeploymentConfig{StateDir: "/scratch/state", ImageDir: "/scratch/images"}}
+	for name, placement := range map[string]DeploymentConfig{"kubernetes": kubernetes, "apptainer": apptainer} {
+		for _, cpuset := range []string{"", "0-3", "inherit"} {
+			cfg, err := Decode(strings.NewReader(validConfig))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Harness.Deployment, cfg.Sandbox.Deployment, cfg.Bridge.Deployment = placement, placement, placement
+			cfg.Sandbox.Type = ""
+			cfg.Execution.CpusetCpus = cpuset
+			err = cfg.validate()
+			if cpuset == "" && err != nil {
+				t.Fatalf("%s without a cpuset: %v", name, err)
+			}
+			if cpuset != "" && (err == nil || !strings.Contains(err.Error(), "execution.cpuset_cpus is supported only with the docker deployment backend")) {
+				t.Fatalf("%s with cpuset %q: error = %v", name, cpuset, err)
+			}
+		}
+	}
+}
+
+// ParseCPUSet names each CPU once, in order, however the list spells it.
+func TestParseCPUSetReturnsDistinctSortedCPUs(t *testing.T) {
+	for value, want := range map[string][]int{
+		"0":           {0},
+		"3,1-2":       {1, 2, 3},
+		"0-3,2-5":     {0, 1, 2, 3, 4, 5},
+		"64-65,0":     {0, 64, 65},
+		"65535":       {65535},
+		"5,5,5-5,4-5": {4, 5},
+	} {
+		got, err := ParseCPUSet(value)
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("ParseCPUSet(%q) = %v, %v; want %v", value, got, err, want)
+		}
 	}
 }
