@@ -110,6 +110,23 @@ case "${3:-video}" in
         tls_hosts=(registry.npmjs.org cdn.playwright.dev storage.googleapis.com
                    playwright.download.prss.microsoft.com snapshot.debian.org)
         ;;
+    wildclaw-amd201)
+        private_dns=true
+        pin_egress=true
+        bridge=zbwcb201
+        subnet=10.246.201.0/28
+        chain=ZB201WCB
+        name=zbwcb201
+        dns_unit=zb-wcb-dns-amd201
+        tls_hosts=()
+        if [[ "$action" != remove ]]; then
+            mapfile -t tls_hosts < "$base/source-hosts.txt"
+            (( ${#tls_hosts[@]} > 0 ))
+            for host in "${tls_hosts[@]}"; do
+                [[ "$host" =~ ^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$ ]]
+            done
+        fi
+        ;;
     compcert)
         bridge=zbcc189
         subnet=10.231.189.0/28
@@ -225,6 +242,9 @@ PYTLS
             for protocol in udp tcp; do
                 printf -- '-A %s -d %s -p %s --dport 53 -j RETURN\n' "$chain" "$resolver" "$protocol"
             done
+            if [[ ${3:-video} == wildclaw-amd201 && -S "$base/brave.sock" ]]; then
+                printf -- '-A %s -d %s -p tcp --dport 443 -j RETURN\n' "$chain" "$resolver"
+            fi
             while read -r address; do
                 printf -- '-A %s -d %s -p tcp --dport 443 -j RETURN\n' "$chain" "$address"
             done < <(cut -d ' ' -f 1 "$base/dns.hosts" | sort -u)

@@ -77,12 +77,17 @@ func modifiedV5(ctx context.Context, path string, g guest, r *harbor.Recording) 
 	// Verify the complete fixture before extraction. The native task transport on
 	// this runtime can close a short stdin stream before the guest reads it.
 	hash := sha256.New()
-	buf := make([]byte, 48*1024)
+	buf := make([]byte, 384*1024)
 	for {
 		n, readErr := io.ReadFull(f, buf)
 		if n > 0 {
 			hash.Write(buf[:n])
-			res, e := m.Exec(ctx, id, core.Command{Path: "/bin/sh", Args: []string{"-ec", `printf %s "$1" | base64 -d >> /tmp/zb-fixture.tar`, "sh", base64.StdEncoding.EncodeToString(buf[:n])}})
+			args := []string{"-ec", `printf '%s' "$@" | base64 -d >> /tmp/zb-fixture.tar`, "sh"}
+			// Linux limits each exec argument to 128 KiB, including its terminator.
+			for offset := 0; offset < n; offset += 48 * 1024 {
+				args = append(args, base64.StdEncoding.EncodeToString(buf[offset:min(n, offset+48*1024)]))
+			}
+			res, e := m.Exec(ctx, id, core.Command{Path: "/bin/sh", Args: args})
 			if e != nil || res.ExitCode != 0 {
 				return errors.Join(e, f.Close(), fmt.Errorf("stage fixture: exit %d %s", res.ExitCode, res.Stderr))
 			}
