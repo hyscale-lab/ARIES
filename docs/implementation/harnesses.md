@@ -27,7 +27,23 @@ Realtime and voice-transcribe both convert the task instruction to staged audio 
 
 OpenClaw retains selected session archive files under `telemetry/`, redacting
 credentials. Files keep their basenames; a numeric prefix disambiguates collisions
-so distinct entries are retained.
+so distinct entries are retained. The copied archive and each file in it are
+bounded at 16 MiB unless `harness.openclaw.telemetry_limit_mib` sets another
+bound.
+
+The optional `harness.openclaw` block is OpenClaw's counterpart of
+`harness.hermes.extra_body`. After rendering `openclaw.json`, the harness adds
+the block's `model` object to the provider's one model entry, `provider` to the
+provider entry, and `agent_defaults` to `agents.defaults`, and replaces
+`${ARIES_RUN_ID}` and `${ARIES_TASK_ID}` in the block's string values. A profile
+without the block keeps the rendered bytes unchanged. Two checks keep the
+harness's own settings: the profile loader accepts only the
+[documented keys](../configuration.md#openclaw-model-entry-provider-and-agent-defaults),
+and the harness refuses the keys it writes at construction and any key the
+rendered file already holds at task start. Hermes limits its block to the
+OpenAI-compatible backends because it ignores the block elsewhere; OpenClaw
+renders the same provider entry for every backend, so this block has no backend
+restriction.
 
 Its native SSH sandbox receives the resolved per-sandbox listener endpoint on
 the shared bridge service. Because the pinned image has no `ssh` executable,

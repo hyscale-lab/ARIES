@@ -31,11 +31,29 @@ func NewOpenClaw(cfg config.Config, outputRoot string, lookup func(string) ([]by
 	if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
 		options.Realtime = openClawVoiceOptions(cfg.Harness)
 	}
+	var err error
+	if options.Overlay, options.TelemetryLimit, err = openClawOverlay(cfg.Harness.OpenClaw); err != nil {
+		return app.HarnessInstance{}, errors.Join(err, transport.Close())
+	}
 	manager, err := openclawharness.New(options)
 	if err != nil {
 		return app.HarnessInstance{}, errors.Join(fmt.Errorf("construct OpenClaw harness: %w", err), transport.Close())
 	}
 	return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
+}
+
+// openClawOverlay maps the harness.openclaw block onto the harness's overlay
+// and telemetry bound in bytes. An absent block leaves both empty.
+func openClawOverlay(block *config.HarnessOpenClawConfig) (openclawharness.Overlay, int64, error) {
+	if block == nil {
+		return openclawharness.Overlay{}, 0, nil
+	}
+	objects, err := block.Objects()
+	if err != nil {
+		return openclawharness.Overlay{}, 0, err
+	}
+	overlay := openclawharness.Overlay{Model: objects["model"], Provider: objects["provider"], AgentDefaults: objects["agent_defaults"]}
+	return overlay, int64(block.TelemetryLimitMiB) << 20, nil
 }
 
 func openClawVoiceOptions(harness config.HarnessConfig) openclawharness.RealtimeOptions {
