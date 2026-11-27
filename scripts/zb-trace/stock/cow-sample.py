@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -109,6 +110,7 @@ def main():
         elif name == 'run':
             q.add_argument('manifest', type=Path)
             q.add_argument('--interval', type=float, default=5)
+            q.add_argument('--no-idle', action='store_true', help='skip page-idle reads and arming')
         else:
             q.add_argument('socket', type=Path)
         q.add_argument('out', type=Path)
@@ -116,7 +118,7 @@ def main():
     if a.command == 'run':
         if a.interval <= 0:
             p.error('interval must be positive')
-        run(a.manifest.resolve(), a.out.resolve(), a.interval)
+        run(a.manifest.resolve(), a.out.resolve(), a.interval, not a.no_idle)
     elif a.command == 'setup-from-receipt':
         save(a.out, setup(load(a.inspect), load(a.dirty)))
     else:
@@ -138,12 +140,19 @@ ZERO = 1 << 24
 UNKNOWN = (1 << 64) - 1
 
 
-def batches(keys, size):
+def batches(keys, size, max_gap=None):
     """Read only blocks containing requested PFNs (or idle words)."""
     import numpy as np
-    for indices in np.split(np.arange(len(keys)), np.flatnonzero(np.diff(keys // size)) + 1):
-        if len(indices):
-            yield indices[0], indices[-1] + 1
+    if not len(keys):
+        return
+    cut = np.diff(keys // size) != 0
+    if max_gap is not None:
+        cut |= np.diff(keys) > max_gap
+    start = 0
+    for end in np.flatnonzero(cut) + 1:
+        yield start, end
+        start = end
+    yield start, len(keys)
 
 
 def frame_info(path, pfns):
@@ -151,7 +160,7 @@ def frame_info(path, pfns):
     values = np.full(len(pfns), UNKNOWN, dtype='u8')
     try:
         with open(path, 'rb', buffering=0) as stream:
-            for a, b in batches(pfns, 4096):
+            for a, b in batches(pfns, 4096, max_gap=64):
                 base = int(pfns[a])
                 n = int(pfns[b - 1]) - base + 1
                 raw = os.pread(stream.fileno(), n * 8, base * 8)
@@ -204,7 +213,7 @@ def pressure():
     return dict(begin_ns=begin, end_ns=now(), sources=data)
 
 
-def snapshots(guests, pool, previous, timing):
+def snapshots(guests, pool, previous, timing, watch_idle=True):
     import numpy as np
     records = list(pool.map(lambda v: v.capture(), guests))
     ptes = np.stack([r[0] for r in records])
@@ -216,34 +225,38 @@ def snapshots(guests, pool, previous, timing):
     errors = dict(kpageflags=flag_error, kpagecount=count_error)
     # Idle bits represent host references to a frame. Only arm ordinary,
     # exclusive LRU pages, so peer and global-zero traffic cannot look guest-local.
-    eligible = pfns[((flags & ((1 << 21) | ZERO | COMPLEX)) == 0) &
-                    ((flags & (1 << 5)) != 0) & (counts == 1)]
-    marked = np.isin(frames, eligible)
     idle = np.zeros(frames.shape, dtype='u1')
-    timing['idle_begin_ns'] = now()
-    if previous is not None:
-        prior, prior_marked = previous
-        observed = marked & prior_marked & (prior == frames)
-        probes, inverse = np.unique(frames[observed], return_inverse=True)
-        if len(probes):
+    if watch_idle:
+        eligible = pfns[((flags & ((1 << 21) | ZERO | COMPLEX)) == 0) &
+                        ((flags & (1 << 5)) != 0) & (counts == 1)]
+        marked = np.isin(frames, eligible)
+        timing['idle_begin_ns'] = now()
+        if previous is not None:
+            prior, prior_marked = previous
+            observed = marked & prior_marked & (prior == frames)
+            probes, inverse = np.unique(frames[observed], return_inverse=True)
+            if len(probes):
+                try:
+                    idle[observed] = 1 + idle_bitmap(probes, False)[inverse].astype('u1')
+                except OSError as exc:
+                    errors['idle_read'] = str(exc)
+        if len(eligible):
             try:
-                idle[observed] = 1 + idle_bitmap(probes, False)[inverse].astype('u1')
+                idle_bitmap(eligible, True)
             except OSError as exc:
-                errors['idle_read'] = str(exc)
-    if len(eligible):
-        try:
-            idle_bitmap(eligible, True)
-        except OSError as exc:
-            marked[:] = False
-            errors['idle_arm'] = str(exc)
-    timing['idle_end_ns'] = now()
+                marked[:] = False
+                errors['idle_arm'] = str(exc)
+        timing['idle_end_ns'] = now()
+    else:
+        marked = None
     confirm = np.stack(list(pool.map(lambda v: v.pages(), guests)))
     # Ignore unrelated pagemap permission/status bits when rechecking identity.
     stable = ((confirm ^ ptes) & (PRESENT | SWAP | PFN)) == 0
     uncertain_frames = np.union1d(frames[~stable], identities(confirm[~stable]))
     uncertain_frames = uncertain_frames[uncertain_frames != 0]
     idle[~stable] = 0
-    marked &= stable
+    if watch_idle:
+        marked &= stable
     arrays = dict(ptes=ptes, pfns=pfns, flags=flags, mapcount=counts, stable=np.packbits(stable, axis=1),
                   unstable_pfns=uncertain_frames, idle=idle)
     return arrays, [r[1] for r in records], [r[2] for r in records], (frames, marked), errors
@@ -258,7 +271,7 @@ def save_arrays(path, arrays):
                 np.lib.format.write_array(destination, value, allow_pickle=False)
 
 
-def run(manifest_path, out, interval):
+def run(manifest_path, out, interval, watch_idle):
     import numpy as np
     config = load(manifest_path)
     rows = config['vms']
@@ -281,7 +294,8 @@ def run(manifest_path, out, interval):
         setup_masks = np.stack([dirty_mask(m['dirty'], m) for m in setups])
         save_arrays(out / 'setup.npz', dict(dirty=np.packbits(setup_masks, axis=1)))
         save(out / 'metadata.json', dict(names=names, guests=[v.metadata for v in guests], ancestor=base,
-             setup=[{k:v for k,v in m.items() if k != 'dirty'} for m in setups], interval_s=interval,
+             setup=[{k:v for k,v in m.items() if k != 'dirty'} for m in setups], interval_s=interval, idle_observed=watch_idle,
+             sampler_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
              clock='CLOCK_MONOTONIC', host=os.uname().nodename, boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()))
         previous, replay_mask = None, np.zeros_like(setup_masks)
         deadline = now()
@@ -308,7 +322,7 @@ def run(manifest_path, out, interval):
                     wait(jobs)
                     timing['pause'] = [job.result() for job in jobs]
                 timing['aligned_begin_ns'] = now()
-                arrays, dirty, charge, previous, errors = snapshots(guests, pool, previous, timing)
+                arrays, dirty, charge, previous, errors = snapshots(guests, pool, previous, timing, watch_idle)
                 list(pool.map(lambda v: v.state('Paused'), guests))
                 timing['pressure'] = pressure()
                 timing['aligned_end_ns'] = now()
