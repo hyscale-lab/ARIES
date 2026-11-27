@@ -52,8 +52,10 @@ func modifiedV5(ctx context.Context, path string, g guest, r *harbor.Recording) 
 		return err
 	}
 	req := deployment.Request{Name: name, Image: c.Image, AllowNetwork: c.Network, StorageMB: 65536, Workdir: "/tmp_workspace", Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
+	// The stock workload spec starts with a clean environment. The publisher image carries build-time proxies.
+	req.Env = []string{"http_proxy", "https_proxy", "HOME=/root", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 	if r.Task == "01_Productivity_Flow_task_10_pdf_digest" || r.Task == "04_Search_Retrieval_task_2_conflicting_handling" {
-		req.Env = []string{"PIP_NO_INDEX=1", "PIP_FIND_LINKS=/tmp/document-wheels"}
+		req.Env = append(req.Env, "PIP_NO_INDEX=1", "PIP_FIND_LINKS=/tmp/document-wheels")
 	}
 	id, err := m.Create(ctx, req)
 	if id != "" {
@@ -116,6 +118,9 @@ func modifiedV5(ctx context.Context, path string, g guest, r *harbor.Recording) 
 		return log.Encode(map[string]any{"event": phase, "stdout": res.Stdout})
 	}
 	if err = checked("fixture_verified", core.Command{Path: "/bin/sh", Args: []string{"-ec", `printf '%s  /tmp/zb-fixture.tar\n' "$1" | sha256sum -c -; tar xf /tmp/zb-fixture.tar -C /; rm /tmp/zb-fixture.tar`, "sh", fmt.Sprintf("%x", hash.Sum(nil))}}); err != nil {
+		return err
+	}
+	if err = checked("workload_environment", core.Command{Path: "/bin/sh", Args: []string{"-ec", `test -z "${http_proxy+x}${https_proxy+x}"; test "$HOME" = /root; test "$PATH" = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; printf 'stock HOME and PATH; image proxies absent\n'; cat /sys/class/net/lo/flags /proc/net/route`}}); err != nil {
 		return err
 	}
 	if err = checked("fixture_prepared", core.Command{Path: "/bin/sh", Args: []string{"/tmp/zb-prepare.sh"}}); err != nil {

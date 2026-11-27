@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -325,6 +326,23 @@ func TestNativeSpecHonorsExplicitPrivilegePolicyAndCPUQuota(t *testing.T) {
 		if *spec.Linux.Resources.CPU.Period != 100000 || *spec.Linux.Resources.CPU.Quota != 150000 {
 			t.Fatalf("CPU quota=%#v", spec.Linux.Resources.CPU)
 		}
+	}
+}
+
+func TestSandboxRemovesExplicitImageEnvironmentKeys(t *testing.T) {
+	r := deployment.Request{Name: "sandbox", Env: []string{"http_proxy", "HOME=/root"}}
+	opts := append([]oci.SpecOpts{oci.WithEnv([]string{"http_proxy=http://build.invalid", "HOME=/build", "KEEP=yes"})}, sandboxSpecOptions(r)...)
+	spec, err := oci.GenerateSpec(namespaces.WithNamespace(t.Context(), "aries"), nil, &containers.Container{ID: r.Name}, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range spec.Process.Env {
+		if strings.HasPrefix(entry, "http_proxy=") || entry == "HOME=/build" {
+			t.Fatalf("unexpected inherited environment %v", spec.Process.Env)
+		}
+	}
+	if !slices.Contains(spec.Process.Env, "HOME=/root") || !slices.Contains(spec.Process.Env, "KEEP=yes") {
+		t.Fatalf("missing expected environment %v", spec.Process.Env)
 	}
 }
 

@@ -271,8 +271,8 @@ func (m *Manager) validateRequest(r deployment.Request) error {
 		return errors.New("vHive sandbox requires an explicit command")
 	}
 	for _, env := range r.Env {
-		key, value, ok := strings.Cut(env, "=")
-		if !ok || !validEnv(key) || strings.ContainsRune(value, 0) {
+		key, value, _ := strings.Cut(env, "=")
+		if !validEnv(key) || strings.ContainsRune(value, 0) {
 			return errors.New("invalid vHive environment entry")
 		}
 	}
@@ -624,7 +624,7 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		return err
 	}
 	for _, entry := range r.Env {
-		key, value, _ := strings.Cut(entry, "=")
+		key, value, present := strings.Cut(entry, "=")
 		actual := ""
 		found := false
 		for _, e := range spec.Process.Env {
@@ -634,7 +634,7 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 				found = true
 			}
 		}
-		if !found || actual != value {
+		if found != present || (present && actual != value) {
 			return errors.New("vHive guest environment differs")
 		}
 	}
