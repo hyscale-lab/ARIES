@@ -461,7 +461,10 @@ Use `"off"` (or the OpenAI spelling `"none"`) to disable reasoning.
 Model support varies: accepting a profile does not prove that an endpoint supports
 that effort. ARIES does not silently translate one enabled effort into another.
 DeepSeek's noncanonical effort aliases are rejected. Explicit settings conflict
-with `thinking`, `reasoning`, or `reasoning_effort` in `harness.hermes.extra_body`.
+with `thinking`, `reasoning`, or `reasoning_effort` in `harness.hermes.extra_body`. With
+OpenClaw they conflict with `reasoning` or `compat` in `harness.openclaw.model`
+and with `thinking` or `extra_body` in `harness.openclaw.agent_defaults.params`;
+see [the OpenClaw block](#openclaw-model-entry-provider-and-agent-defaults).
 
 Omitting the field preserves existing harness behavior. OpenClaw asks its Gateway
 for thinking off for the official DeepSeek Flash/V4 models; Hermes and Codex leave
@@ -857,6 +860,93 @@ covered by this execution path. The rendered `config.yaml` under
 `<run>/<task>/harness/` shows the selected settings.
 The Gateway reads `agent.max_turns`; `agent_timeout_seconds` in the overrides
 file also bounds the wall-clock wait for the run.
+
+### OpenClaw model entry, provider, and agent defaults
+
+ARIES writes one `openclaw.json` per task with the endpoint, the Gateway, the SSH
+sandbox, and a provider entry that names only the model. OpenClaw therefore runs
+with its own defaults: a 200,000-token context budget that it compacts against,
+no output cap, no sampling parameters or `chat_template_kwargs`, no per-task
+identifier in the request, and no replay of earlier reasoning for a model it
+does not know reasons. `model.context_length`, `model.max_tokens`, and
+`model.temperature` are not rendered for OpenClaw and stay rejected.
+
+The optional `harness.openclaw` block adds three objects to that file. It is
+OpenClaw-only, must set at least one field, and applies under every model
+backend because OpenClaw uses the same provider entry for each. A profile
+without the block renders the same file as before.
+
+| Field | Added to | Accepted keys |
+| --- | --- | --- |
+| `harness.openclaw.model` | the provider's one model entry | `contextWindow`, `contextTokens`, `maxTokens`, `reasoning`, `compat` |
+| `harness.openclaw.provider` | the provider entry | `timeoutSeconds`, `request` (only `allowPrivateNetwork`, for an endpoint on a link-local or private address) |
+| `harness.openclaw.agent_defaults` | `agents.defaults` | `params`, `heartbeat`, `skipBootstrap`, `compaction` |
+| `harness.openclaw.telemetry_limit_mib` | not written to the file | an integer from 1 to 1024 |
+
+OpenClaw applies `agent_defaults.params` to every agent request and assigns
+`params.extra_body` onto the request body last. ARIES does not interpret the
+accepted values; OpenClaw validates them against its own schema when the
+Gateway starts.
+
+Only the listed keys are accepted. OpenClaw's schema has many more, and some
+would move the endpoint (a model entry's `baseUrl`), send a credential
+elsewhere (`request.proxy`, or a `SecretRef` header that OpenClaw resolves from
+its environment), or start a process (`localService`, `cliBackends`). A `model`
+key under `agent_defaults` outside `params` is rejected because it selects
+another model for heartbeat or compaction calls, and so is any field named like
+a credential. The harness independently refuses any key it writes itself.
+
+OpenClaw's configuration has no per-session template, so ARIES itself replaces
+`${ARIES_RUN_ID}` and `${ARIES_TASK_ID}` in the block's string values when it
+writes each task's file. A placeholder in a key is rejected, and so is any
+other `${NAME}`: OpenClaw would expand it from its environment, which holds the
+model key.
+
+With `model.reasoning_effort` set, ARIES already writes the model entry's
+`reasoning` and `compat` and a per-model `params` entry, and OpenClaw uses that
+entry's `thinking` and `extra_body` in place of the ones under
+`agents.defaults.params`. The profile is therefore rejected when it sets
+`model.reasoning_effort` together with `harness.openclaw.model.reasoning`,
+`harness.openclaw.model.compat`, or `thinking` or `extra_body` in
+`harness.openclaw.agent_defaults.params`. Choose one: the shared field, or the
+block with the reasoning settings written out.
+
+`telemetry_limit_mib` sets the bound on the session archive copied out of the
+harness after the run and on each file in it (16 MiB by default). An archive
+past the bound fails the copy and the task reports a failed harness. A long
+session's transcript and trajectory grow with every turn.
+
+```json
+{
+  "harness": {
+    "type": "openclaw",
+    "openclaw": {
+      "model": {
+        "contextWindow": 262144,
+        "maxTokens": 32768,
+        "reasoning": true
+      },
+      "provider": {
+        "timeoutSeconds": 900
+      },
+      "agent_defaults": {
+        "params": {
+          "temperature": 1.0,
+          "extra_body": {
+            "chat_template_kwargs": {
+              "preserve_thinking": true
+            },
+            "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+          }
+        }
+      },
+      "telemetry_limit_mib": 256
+    }
+  }
+}
+```
+
+The rendered `openclaw.json` under `<run>/<task>/harness/` shows the result.
 
 ### Realtime OpenClaw mode
 

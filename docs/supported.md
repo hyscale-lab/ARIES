@@ -17,7 +17,7 @@ This page summarizes capabilities and limitations. Use the
 
 | Category | Supported implementation | Guide |
 | --- | --- | --- |
-| Agent harness | **OpenClaw** — text, realtime, and voice-transcribe modes; web tools and configurable subagent spawning | [Harness configuration](configuration.md), [realtime mode](configuration.md#realtime-openclaw-mode), [voice guide](voice_mode.md) |
+| Agent harness | **OpenClaw** — text, realtime, and voice-transcribe modes; web tools, configurable subagent spawning, and optional model, provider, and agent defaults merged into the rendered `openclaw.json` | [Harness configuration](configuration.md), [OpenClaw block](configuration.md#openclaw-model-entry-provider-and-agent-defaults), [realtime mode](configuration.md#realtime-openclaw-mode), [voice guide](voice_mode.md) |
 | Agent harness | **Hermes** — text and voice-transcribe modes through its native Gateway; web tools, context compaction, and custom request bodies for compatible backends | [Hermes configuration](configuration.md#hermes-context-window-compaction-and-request-extra-body), [voice guide](voice_mode.md) |
 | Agent harness | **Codex** — text only; unmodified CLI `0.157.1` with its native remote executor; Responses API model servers | [Codex guide](codex.md), [harness implementation](implementation/harnesses.md#codex) |
 | Benchmark | **Terminal-Bench 2** — verifier-based terminal tasks | [Quick start](quick-start.md) |

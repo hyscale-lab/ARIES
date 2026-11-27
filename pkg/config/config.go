@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -283,6 +284,9 @@ type HarnessConfig struct {
 	// configured and mean nothing to another harness. Such escape hatches go
 	// under this type-specific block rather than onto the shared fields.
 	Hermes *HarnessHermesConfig `json:"hermes,omitempty"`
+	// OpenClaw is the OpenClaw counterpart of Hermes above: settings that
+	// exist only in OpenClaw's openclaw.json.
+	OpenClaw *HarnessOpenClawConfig `json:"openclaw,omitempty"`
 	// Codex selects the installed, unmodified Codex CLI. It is valid only with
 	// harness.type "codex", which requires it.
 	Codex *HarnessCodexConfig `json:"codex,omitempty"`
@@ -293,6 +297,207 @@ type HarnessConfig struct {
 type HarnessCodexConfig struct {
 	Executable         string `json:"executable"`
 	ResolvedExecutable string `json:"-"`
+}
+
+// HarnessOpenClawConfig is the harness.openclaw block. It is valid only with
+// harness.type "openclaw" and must set at least one field.
+//
+// The three objects are added to the openclaw.json ARIES writes for each
+// task: Model to the one model entry of the provider ARIES configures
+// (contextWindow, contextTokens, maxTokens, reasoning, compat), Provider to
+// that provider entry (timeoutSeconds, request.allowPrivateNetwork), and
+// AgentDefaults to agents.defaults (params, heartbeat, skipBootstrap,
+// compaction). Only those keys are accepted: OpenClaw's schema has many
+// others, such as a model entry's baseUrl, a provider's request.proxy or
+// localService, and SecretRef headers, that would move the endpoint, send a
+// credential elsewhere, or start a process. A model key under agents.defaults
+// outside params is refused for the same reason, since it picks another model
+// for heartbeat or compaction calls. ARIES does not interpret the accepted
+// keys' values; OpenClaw validates them against its own schema when the
+// gateway starts.
+//
+// String values may reference ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, which
+// ARIES replaces with the task occurrence's ids when it writes the file, so a
+// value such as params.extra_body can name the task on every request. Keys
+// are not replaced, so a placeholder in a key is refused.
+//
+// TelemetryLimitMiB bounds the session archive ARIES copies out of the
+// harness after the run, and each file in it (default 16). A long session
+// writes a transcript and a trajectory that grow with every turn.
+type HarnessOpenClawConfig struct {
+	Model             json.RawMessage `json:"model,omitempty"`
+	Provider          json.RawMessage `json:"provider,omitempty"`
+	AgentDefaults     json.RawMessage `json:"agent_defaults,omitempty"`
+	TelemetryLimitMiB int             `json:"telemetry_limit_mib,omitempty"`
+}
+
+// openClawOverlayKeys are the only keys each harness.openclaw object may set.
+// provider.request may set only allowPrivateNetwork.
+var openClawOverlayKeys = map[string][]string{
+	"model":          {"contextWindow", "contextTokens", "maxTokens", "reasoning", "compat"},
+	"provider":       {"timeoutSeconds", "request"},
+	"agent_defaults": {"params", "heartbeat", "skipBootstrap", "compaction"},
+}
+
+// maxOpenClawTelemetryMiB caps telemetry_limit_mib. The archive is read into
+// memory once per task.
+const maxOpenClawTelemetryMiB = 1024
+
+func (o *HarnessOpenClawConfig) raw() map[string]json.RawMessage {
+	return map[string]json.RawMessage{"model": o.Model, "provider": o.Provider, "agent_defaults": o.AgentDefaults}
+}
+
+// Objects decodes each non-empty harness.openclaw object, keyed by its
+// profile name, with numbers kept as written.
+func (o *HarnessOpenClawConfig) Objects() (map[string]map[string]any, error) {
+	objects := map[string]map[string]any{}
+	if o == nil {
+		return objects, nil
+	}
+	for name, raw := range o.raw() {
+		if len(raw) == 0 {
+			continue
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var object map[string]any
+		if err := decoder.Decode(&object); err != nil || object == nil {
+			return nil, fmt.Errorf("harness.openclaw.%s must be a JSON object", name)
+		}
+		objects[name] = object
+	}
+	return objects, nil
+}
+
+func (o *HarnessOpenClawConfig) validate() error {
+	if len(o.Model) == 0 && len(o.Provider) == 0 && len(o.AgentDefaults) == 0 && o.TelemetryLimitMiB == 0 {
+		return errors.New("harness.openclaw must set model, provider, agent_defaults, or telemetry_limit_mib")
+	}
+	if o.TelemetryLimitMiB < 0 || o.TelemetryLimitMiB > maxOpenClawTelemetryMiB {
+		return fmt.Errorf("harness.openclaw.telemetry_limit_mib must be between 1 and %d", maxOpenClawTelemetryMiB)
+	}
+	objects, err := o.Objects()
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"model", "provider", "agent_defaults"} {
+		object, ok := objects[name]
+		if !ok {
+			continue
+		}
+		path := "harness.openclaw." + name
+		if len(object) == 0 {
+			return fmt.Errorf("%s must be a non-empty JSON object", path)
+		}
+		for _, key := range slices.Sorted(maps.Keys(object)) {
+			if !slices.Contains(openClawOverlayKeys[name], key) {
+				return fmt.Errorf("%s.%s is not accepted; the block may set only %s", path, key, strings.Join(openClawOverlayKeys[name], ", "))
+			}
+		}
+		if field := findCredentialField(object, path); field != "" {
+			return fmt.Errorf("%s is named like a credential; model keys stay out of JSON profiles", field)
+		}
+		if field := findField(object, path, func(key string) bool { return strings.Contains(key, "${") }); field != "" {
+			return fmt.Errorf("%s: placeholders are replaced in values only, not in keys", field)
+		}
+		// The decoded values are checked, not the raw JSON: an escaped
+		// "\u0024{NAME}" decodes to a placeholder OpenClaw would expand.
+		if foreign, found := foreignPlaceholder(object); found {
+			return fmt.Errorf("%s may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", path, foreign)
+		}
+	}
+	if request, ok := objects["provider"]["request"]; ok {
+		fields, isObject := request.(map[string]any)
+		if _, private := fields["allowPrivateNetwork"]; !isObject || len(fields) != 1 || !private {
+			return errors.New("harness.openclaw.provider.request may set only allowPrivateNetwork")
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(objects["agent_defaults"])) {
+		if key == "params" {
+			continue
+		}
+		path := "harness.openclaw.agent_defaults." + key
+		if field := findField(objects["agent_defaults"][key], path, func(key string) bool { return key == "model" }); field != "" {
+			return fmt.Errorf("%s would pick a model other than the one ARIES configures", field)
+		}
+	}
+	return nil
+}
+
+// reasoningConflict returns the harness.openclaw field that
+// model.reasoning_effort already renders, or "" when there is none. With an
+// effort set the harness writes the model entry's reasoning and compat and a
+// per-model params entry whose thinking and extra_body OpenClaw takes in place
+// of the ones under agents.defaults.params.
+func (o *HarnessOpenClawConfig) reasoningConflict() (string, error) {
+	objects, err := o.Objects()
+	if err != nil {
+		return "", err
+	}
+	for _, key := range []string{"reasoning", "compat"} {
+		if _, exists := objects["model"][key]; exists {
+			return "harness.openclaw.model." + key, nil
+		}
+	}
+	params, _ := objects["agent_defaults"]["params"].(map[string]any)
+	for _, key := range []string{"thinking", "extra_body", "extraBody"} {
+		if _, exists := params[key]; exists {
+			return "harness.openclaw.agent_defaults.params." + key, nil
+		}
+	}
+	return "", nil
+}
+
+// foreignPlaceholder reports the name of the first ${NAME} reference in a
+// decoded JSON value's strings that ARIES does not replace. The name may be
+// empty ("${}"), so found, not the name, says whether there is one.
+func foreignPlaceholder(value any) (name string, found bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			if name, found := foreignPlaceholder(typed[key]); found {
+				return name, true
+			}
+		}
+	case []any:
+		for _, element := range typed {
+			if name, found := foreignPlaceholder(element); found {
+				return name, true
+			}
+		}
+	case string:
+		for _, match := range placeholderPattern.FindAllStringSubmatch(typed, -1) {
+			if !extraBodyPlaceholders[match[1]] {
+				return match[1], true
+			}
+		}
+	}
+	return "", false
+}
+
+// findField walks a decoded JSON value and returns the dotted path of the
+// first field whose name matches, or "" when there is none. Keys are visited
+// in sorted order so the reported path is stable.
+func findField(value any, path string, matches func(string) bool) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			child := path + "." + key
+			if matches(key) {
+				return child
+			}
+			if found := findField(typed[key], child, matches); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for index, element := range typed {
+			if found := findField(element, path+"["+strconv.Itoa(index)+"]", matches); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }
 
 // HarnessHermesConfig is the harness.hermes block. It is valid only with
@@ -847,6 +1052,15 @@ func (c *Config) validate() error {
 			}
 		}
 	}
+	if c.Model.ReasoningEffort != "" && c.Harness.OpenClaw != nil {
+		field, err := c.Harness.OpenClaw.reasoningConflict()
+		if err != nil {
+			return err
+		}
+		if field != "" {
+			return fmt.Errorf("model.reasoning_effort conflicts with %s", field)
+		}
+	}
 	if c.Harness.Compaction != nil && c.Model.ContextLength > 0 && c.Harness.Compaction.ThresholdTokens >= c.Model.ContextLength {
 		return errors.New("harness.compaction.threshold_tokens must be smaller than model.context_length")
 	}
@@ -1101,6 +1315,14 @@ func (h *HarnessConfig) validate() error {
 	}
 	if err := h.validateHermesBlocks(); err != nil {
 		return err
+	}
+	if h.OpenClaw != nil {
+		if h.Type != "openclaw" {
+			return errors.New("harness.openclaw requires OpenClaw")
+		}
+		if err := h.OpenClaw.validate(); err != nil {
+			return err
+		}
 	}
 	if h.WebSearch.Enabled && h.Type != "openclaw" && h.Type != "hermes" {
 		return errors.New("harness.web_search requires OpenClaw or Hermes")

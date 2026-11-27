@@ -48,6 +48,11 @@ type Options struct {
 	Runtime  harness.RuntimeOptions
 	Common   harness.Options
 	Realtime RealtimeOptions
+	// Overlay is merged into every task's openclaw.json (harness.openclaw).
+	Overlay Overlay
+	// TelemetryLimit bounds the copied session archive and each file in it,
+	// in bytes. Zero keeps the 16 MiB bound of the other container outputs.
+	TelemetryLimit int64
 }
 
 type RealtimeOptions struct {
@@ -145,6 +150,15 @@ func New(options Options) (*Manager, error) {
 			return nil, err
 		}
 	}
+	if err := options.Overlay.validate(); err != nil {
+		return nil, err
+	}
+	if options.TelemetryLimit < 0 {
+		return nil, errors.New("OpenClaw telemetry limit must not be negative")
+	}
+	if options.TelemetryLimit == 0 {
+		options.TelemetryLimit = maxDockerOutput
+	}
 	options.Runtime = runtime.Options
 	return &Manager{runtime: runtime, options: options, newID: privatefiles.RandomID,
 		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
@@ -208,6 +222,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		Servers:        mcpServers,
 		NoSandboxTools: request.NoSandboxTools,
 	})
+	if err == nil && !manager.options.Overlay.empty() {
+		configuration, err = applyOverlay(configuration, manager.options.Overlay, request.RunID, request.TaskID)
+	}
 	if err != nil {
 		return err
 	}
@@ -876,14 +893,15 @@ func (manager *Manager) collectTelemetry(ctx context.Context, active *session) (
 		return nil, fmt.Errorf("collect OpenClaw telemetry: %w", err)
 	}
 	defer archiveReader.Close()
-	archive, err := io.ReadAll(io.LimitReader(archiveReader, maxDockerOutput+1))
-	if err != nil || len(archive) > maxDockerOutput {
+	limit := manager.options.TelemetryLimit
+	archive, err := io.ReadAll(io.LimitReader(archiveReader, limit+1))
+	if err != nil || int64(len(archive)) > limit {
 		return nil, errors.New("OpenClaw telemetry archive exceeded its bound")
 	}
-	return extractTelemetry(active.ArtifactDir, archive, active.Credentials.Secrets()...)
+	return extractTelemetry(active.ArtifactDir, archive, limit, active.Credentials.Secrets()...)
 }
 
-func extractTelemetry(artifactDir string, archive []byte, secrets ...[]byte) ([]string, error) {
+func extractTelemetry(artifactDir string, archive []byte, fileLimit int64, secrets ...[]byte) ([]string, error) {
 	usedNames := make(map[string]bool)
 	reader := tar.NewReader(bytes.NewReader(archive))
 	var paths []string
@@ -896,7 +914,7 @@ func extractTelemetry(artifactDir string, archive []byte, secrets ...[]byte) ([]
 			return paths, err
 		}
 		base := filepath.Base(filepath.Clean(header.Name))
-		if (header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA) || header.Size < 0 || header.Size > maxDockerOutput ||
+		if (header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA) || header.Size < 0 || header.Size > fileLimit ||
 			(base != "sessions.json" && !strings.HasSuffix(base, ".jsonl") && !strings.Contains(strings.ToLower(base), "trajectory")) {
 			continue
 		}

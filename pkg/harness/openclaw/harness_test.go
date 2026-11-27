@@ -1466,6 +1466,47 @@ func TestStartRejectsMissingAttachmentBeforeAllocation(t *testing.T) {
 	}
 }
 
+func TestTelemetryLimitBoundsTheCopiedArchive(t *testing.T) {
+	fake := newFakeDeployment()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	if manager.options.TelemetryLimit != maxDockerOutput {
+		t.Fatalf("default telemetry limit = %d", manager.options.TelemetryLimit)
+	}
+	active := func() *session {
+		return &session{Occurrence: &harnesscommon.Occurrence{ID: "openclaw-id", ArtifactDir: t.TempDir(), Credentials: harnesscommon.NewCredentials("OpenClaw")}}
+	}
+	// The fake's archive is 2,048 bytes: a header, one data block, and the
+	// two end blocks.
+	manager.options.TelemetryLimit = 2048
+	if paths, err := manager.collectTelemetry(context.Background(), active()); err != nil || len(paths) != 1 {
+		t.Fatalf("archive at the limit = %v, %v", paths, err)
+	}
+	manager.options.TelemetryLimit = 2047
+	if _, err := manager.collectTelemetry(context.Background(), active()); err == nil || !strings.Contains(err.Error(), "exceeded its bound") {
+		t.Fatalf("archive past the limit = %v", err)
+	}
+}
+
+func TestExtractTelemetrySkipsFilesPastTheFileLimit(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for name, content := range map[string]string{"sessions/kept.jsonl": "1234", "sessions/large.trajectory.jsonl": "0123456789"} {
+		if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(content))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := extractTelemetry(t.TempDir(), archive.Bytes(), 8)
+	if err != nil || len(paths) != 1 || filepath.Base(paths[0]) != "kept.jsonl" {
+		t.Fatalf("paths = %v, %v", paths, err)
+	}
+}
+
 func TestExtractTelemetryKeepsCollidingBasenames(t *testing.T) {
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
@@ -1483,7 +1524,7 @@ func TestExtractTelemetryKeepsCollidingBasenames(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	paths, err := extractTelemetry(root, archive.Bytes(), []byte("secret-value"))
+	paths, err := extractTelemetry(root, archive.Bytes(), maxDockerOutput, []byte("secret-value"))
 	if err != nil {
 		t.Fatal(err)
 	}

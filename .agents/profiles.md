@@ -14,6 +14,9 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
   sandbox resource limits independent; preserve omission/default semantics and
   explicit model request settings without silently changing their meaning. Judges
   share model fields; preserve independent evaluation defaults and validation.
+- `harness.openclaw` only adds its documented keys to the rendered model entry,
+  provider entry, and `agents.defaults`. It must not replace what the harness
+  renders, carry credentials, or use placeholders other than the run and task IDs.
 - Match model IDs to the served catalog. Keep credential values out of profiles,
   metadata, logs, and results; use configured environment-variable references.
 - Preserve [DeepSeek credential-file validation and fallback](../docs/configuration.md#external-deepseek).

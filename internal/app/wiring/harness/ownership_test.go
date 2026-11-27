@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ func TestHarnessConstructionOwnsDeployment(t *testing.T) {
 	}
 	for name, construct := range constructors {
 		t.Run(name, func(t *testing.T) {
-			for _, failure := range []string{"invalid MCP", "invalid image", "success"} {
+			for _, failure := range []string{"invalid MCP", "invalid image", "invalid OpenClaw block", "success"} {
 				t.Run(failure, func(t *testing.T) {
 					closeErr := errors.New("transport close failure")
 					transport := &closeDeployment{err: closeErr}
@@ -41,6 +42,11 @@ func TestHarnessConstructionOwnsDeployment(t *testing.T) {
 					case "invalid image":
 						cfg.Versions.Hermes.Image = ""
 						cfg.Versions.OpenClaw.Image = ""
+					case "invalid OpenClaw block":
+						if name != "OpenClaw" {
+							t.Skip("OpenClaw only")
+						}
+						cfg.Harness.OpenClaw = &config.HarnessOpenClawConfig{Model: json.RawMessage(`[1]`)}
 					}
 					instance, err := construct(cfg, t.TempDir(), nil, nil, transport)
 					if failure == "success" {

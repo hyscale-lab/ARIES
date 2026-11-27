@@ -1084,3 +1084,127 @@ func TestJudgeSharedModelSettings(t *testing.T) {
 		t.Fatal("accepted explicit reasoning for unsupported provider")
 	}
 }
+
+const openClawBlock = `"openclaw":{"model":{"contextWindow":2000000,"reasoning":true,"compat":{"maxTokensField":"max_tokens"}},` +
+	`"provider":{"timeoutSeconds":900},` +
+	`"agent_defaults":{"params":{"temperature":1.0,"extra_body":{"metadata":{"session_id":"${ARIES_RUN_ID}-${ARIES_TASK_ID}"}}},"heartbeat":{"every":"0m"}},` +
+	`"telemetry_limit_mib":256}`
+
+// openClawFullBlock sets every accepted key.
+const openClawFullBlock = `"openclaw":{` +
+	`"model":{"contextWindow":2000000,"contextTokens":2000000,"reasoning":true,"maxTokens":32768,` +
+	`"compat":{"supportsUsageInStreaming":true,"maxTokensField":"max_tokens","supportsDeveloperRole":false,"supportsStore":false,"thinkingFormat":"openrouter"}},` +
+	`"provider":{"timeoutSeconds":900,"request":{"allowPrivateNetwork":true}},` +
+	`"agent_defaults":{"params":{"extra_body":{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true},` +
+	`"metadata":{"session_id":"${ARIES_RUN_ID}-${ARIES_TASK_ID}","enabled":true}},"temperature":1.0},` +
+	`"heartbeat":{"every":"0m"},"skipBootstrap":true,"compaction":{"memoryFlush":{"enabled":false}}},` +
+	`"telemetry_limit_mib":256}`
+
+func openClawBlockConfig(block string) string {
+	return strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw",`+block+`}`, 1)
+}
+
+func TestOpenClawBlock(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(openClawBlockConfig(openClawBlock)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := cfg.Harness.OpenClaw
+	if block == nil || block.TelemetryLimitMiB != 256 {
+		t.Fatalf("openclaw block = %#v", block)
+	}
+	objects, err := block.Objects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Numbers keep their written form, so 2000000 is not re-encoded as 2e+06.
+	if window, ok := objects["model"]["contextWindow"].(json.Number); !ok || window.String() != "2000000" {
+		t.Fatalf("model object = %#v", objects["model"])
+	}
+	if objects["provider"]["timeoutSeconds"].(json.Number).String() != "900" || objects["agent_defaults"]["heartbeat"] == nil {
+		t.Fatalf("objects = %#v", objects)
+	}
+	// A block built without Decode is decoded, not trusted: a bad section is
+	// an error, never a silently missing one.
+	if _, err := (&HarnessOpenClawConfig{Model: json.RawMessage(`[1]`)}).Objects(); err == nil {
+		t.Fatal("Objects accepted a non-object section")
+	}
+	if _, err := Decode(strings.NewReader(openClawBlockConfig(`"openclaw":{"telemetry_limit_mib":64}`))); err != nil {
+		t.Fatalf("telemetry limit alone rejected: %v", err)
+	}
+	if _, err := Decode(strings.NewReader(openClawBlockConfig(openClawFullBlock))); err != nil {
+		t.Fatalf("full block rejected: %v", err)
+	}
+	// The block applies under every backend: OpenClaw renders the same
+	// provider entry for each.
+	openAI := strings.Replace(openClawBlockConfig(openClawFullBlock), `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"openai","mode":"external"}`, 1)
+	openAI = strings.Replace(openAI, `"base_url":"http://127.0.0.1:8080"`, `"base_url":"http://127.0.0.1:8080/v1"`, 1)
+	if _, err := Decode(strings.NewReader(openAI)); err != nil {
+		t.Fatalf("full block rejected under openai: %v", err)
+	}
+
+	rejected := map[string]string{
+		"openclaw block under hermes": strings.Replace(hermesContextConfig(), `"hermes":{`, openClawBlock+`,"hermes":{`, 1),
+		"empty block":                 openClawBlockConfig(`"openclaw":{}`),
+		"empty object":                openClawBlockConfig(`"openclaw":{"model":{}}`),
+		"array object":                openClawBlockConfig(`"openclaw":{"provider":[1]}`),
+		"model id":                    openClawBlockConfig(`"openclaw":{"model":{"id":"other"}}`),
+		"provider base url":           openClawBlockConfig(`"openclaw":{"provider":{"baseUrl":"http://elsewhere/v1"}}`),
+		"provider models":             openClawBlockConfig(`"openclaw":{"provider":{"models":[]}}`),
+		"provider headers":            openClawBlockConfig(`"openclaw":{"provider":{"headers":{"x":"y"}}}`),
+		"defaults sandbox":            openClawBlockConfig(`"openclaw":{"agent_defaults":{"sandbox":{"mode":"off"}}}`),
+		"defaults model":              openClawBlockConfig(`"openclaw":{"agent_defaults":{"model":{"primary":"x/y"}}}`),
+		"defaults models":             openClawBlockConfig(`"openclaw":{"agent_defaults":{"models":{"aries/fake":{"params":{"thinking":"high"}}}}}`),
+		"defaults subagents":          openClawBlockConfig(`"openclaw":{"agent_defaults":{"subagents":{"maxConcurrent":4}}}`),
+		"credential field":            openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"api_key":"sk-live"}}}}`),
+		"foreign placeholder":         openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"user":"${DEEPSEEK_API_KEY}"}}}}`),
+		"negative telemetry limit":    openClawBlockConfig(`"openclaw":{"telemetry_limit_mib":-1}`),
+		"huge telemetry limit":        openClawBlockConfig(`"openclaw":{"telemetry_limit_mib":4096}`),
+		// OpenClaw accepts each of these, and each moves the endpoint, sends
+		// a credential elsewhere, or starts a process.
+		"model base url":              openClawBlockConfig(`"openclaw":{"model":{"baseUrl":"http://elsewhere.example/v1"}}`),
+		"model api":                   openClawBlockConfig(`"openclaw":{"model":{"api":"openai-responses"}}`),
+		"model headers":               openClawBlockConfig(`"openclaw":{"model":{"headers":{"X-Trace":"1"}}}`),
+		"request proxy":               openClawBlockConfig(`"openclaw":{"provider":{"request":{"proxy":{"mode":"explicit-proxy","url":"http://proxy.example:3128"}}}}`),
+		"request tls":                 openClawBlockConfig(`"openclaw":{"provider":{"request":{"allowPrivateNetwork":true,"tls":{"insecureSkipVerify":true}}}}`),
+		"request secret ref":          openClawBlockConfig(`"openclaw":{"provider":{"request":{"headers":{"X-Trace":{"source":"env","provider":"default","id":"TAVILY_API_KEY"}}}}}`),
+		"request not object":          openClawBlockConfig(`"openclaw":{"provider":{"request":true}}`),
+		"local service":               openClawBlockConfig(`"openclaw":{"provider":{"localService":{"command":"/bin/sh","args":["-c","true"]}}}`),
+		"cli backends":                openClawBlockConfig(`"openclaw":{"agent_defaults":{"cliBackends":{"x":{"command":"/bin/sh"}}}}`),
+		"heartbeat model":             openClawBlockConfig(`"openclaw":{"agent_defaults":{"heartbeat":{"every":"0m","model":"openai/gpt-5"}}}`),
+		"compaction model":            openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"model":"openai/gpt-5"}}}`),
+		"memory flush model":          openClawBlockConfig(`"openclaw":{"agent_defaults":{"compaction":{"memoryFlush":{"model":"openai/gpt-5"}}}}`),
+		"escaped foreign placeholder": openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"user":"\u0024{VLLM_API_KEY}"}}}}`),
+		"empty placeholder first":     openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"user":"${}${VLLM_API_KEY}"}}}}`),
+		"placeholder in a key":        openClawBlockConfig(`"openclaw":{"agent_defaults":{"params":{"extra_body":{"${ARIES_TASK_ID}":true}}}}`),
+	}
+	for name, text := range rejected {
+		if _, err := Decode(strings.NewReader(text)); err == nil {
+			t.Fatalf("%s: expected rejection", name)
+		}
+	}
+}
+
+// With model.reasoning_effort the harness renders the model entry's reasoning
+// and compat and a per-model params entry that OpenClaw takes in place of
+// agents.defaults.params.thinking and extra_body.
+func TestOpenClawBlockConflictsWithReasoningEffort(t *testing.T) {
+	withEffort := func(block string) string {
+		return strings.Replace(openClawBlockConfig(block), `"model":{"id":"fake",`, `"model":{"id":"fake","reasoning_effort":"high",`, 1)
+	}
+	accepted := `"openclaw":{"model":{"contextWindow":2000000,"maxTokens":32768},"provider":{"timeoutSeconds":900},"agent_defaults":{"params":{"temperature":1.0},"heartbeat":{"every":"0m"}}}`
+	if _, err := Decode(strings.NewReader(withEffort(accepted))); err != nil {
+		t.Fatalf("block without reasoning fields rejected: %v", err)
+	}
+	for field, block := range map[string]string{
+		"harness.openclaw.model.reasoning":                  `"openclaw":{"model":{"reasoning":true}}`,
+		"harness.openclaw.model.compat":                     `"openclaw":{"model":{"compat":{"thinkingFormat":"openrouter"}}}`,
+		"harness.openclaw.agent_defaults.params.thinking":   `"openclaw":{"agent_defaults":{"params":{"thinking":"low"}}}`,
+		"harness.openclaw.agent_defaults.params.extra_body": `"openclaw":{"agent_defaults":{"params":{"extra_body":{"metadata":{"trace":true}}}}}`,
+		"harness.openclaw.agent_defaults.params.extraBody":  `"openclaw":{"agent_defaults":{"params":{"extraBody":{"metadata":{"trace":true}}}}}`,
+	} {
+		if _, err := Decode(strings.NewReader(withEffort(block))); err == nil || err.Error() != "model.reasoning_effort conflicts with "+field {
+			t.Fatalf("%s: error = %v", field, err)
+		}
+	}
+}
