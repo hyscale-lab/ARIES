@@ -182,3 +182,21 @@ func TestCheckpointErrorInterruptsThinking(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCheckpointReleasesOnlyFinishedUnnamedStream(t *testing.T) {
+	s := NewProcessSessions(t.Context(), nil)
+	ended := make(chan struct{})
+	close(ended)
+	s.active[-1] = &guestProcess{done: ended}
+	s.active[-2] = &guestProcess{done: make(chan struct{})}
+	s.active[-3] = &guestProcess{done: ended, err: errors.New("lost stream")}
+	s.active[7] = &guestProcess{done: ended}
+	h := Hooks{lifecycle: &checkpointState{handles: map[int]bool{-1: true, -2: true, -3: true, 7: true}}, UnnamedFinished: s.UnnamedFinished}
+	if err := h.startCheckpoint(t.Context(), 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	handles := h.lifecycle.handles
+	if len(handles) != 3 || !handles[-2] || !handles[-3] || !handles[7] {
+		t.Fatal(handles)
+	}
+}

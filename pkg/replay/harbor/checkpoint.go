@@ -48,7 +48,15 @@ func (h Hooks) observeHandle(call replay.Call, out core.CommandResult, err error
 }
 
 func (h Hooks) startCheckpoint(ctx context.Context, step int, following []Event) error {
-	if h.lifecycle == nil || len(h.lifecycle.handles) != 0 {
+	if h.lifecycle == nil {
+		return nil
+	}
+	for id := range h.lifecycle.handles {
+		if id < 0 && h.UnnamedFinished != nil && h.UnnamedFinished(id) {
+			delete(h.lifecycle.handles, id)
+		}
+	}
+	if len(h.lifecycle.handles) != 0 {
 		return nil
 	}
 	// No transition to thinking remains after the last reply in some recordings.

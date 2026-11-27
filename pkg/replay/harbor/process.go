@@ -110,6 +110,22 @@ const codexEarlyExitGrace = 150 * time.Millisecond
 
 func (s *ProcessSessions) Close() { s.cancel(); s.wg.Wait() }
 
+// UnnamedFinished checks only local completion of a previously yielded foreground stream.
+func (s *ProcessSessions) UnnamedFinished(id int) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	p := s.active[id]
+	if id >= 0 || p == nil {
+		return false
+	}
+	select {
+	case <-p.done:
+		return p.err == nil && p.result.ExitCode >= 0
+	default:
+		return false
+	}
+}
+
 // EndingProcessStates observes source handles without polling or consuming their output.
 func (s *ProcessSessions) EndingProcessStates(ids []int) map[int]string {
 	s.lock.Lock()

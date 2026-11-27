@@ -149,6 +149,7 @@ func replayGuest(ctx context.Context, g guest, r *harbor.Recording, out io.Write
 		Periodic:              periodic,
 		Record:                record,
 		WasRetained:           sessions.WasRetained,
+		UnnamedFinished:       sessions.UnnamedFinished,
 		RelaxedMeasuredStatus: true,
 		Exec: func(ctx context.Context, c replay.Call) (core.CommandResult, error) {
 			if c.NativeTool != "" {

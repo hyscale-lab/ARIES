@@ -24,6 +24,7 @@ type Hooks struct {
 	RecordToolRequests     bool
 	deferProcessJoin       func(func() error)
 	WasRetained            func(int) bool
+	UnnamedFinished        func(int) bool
 	FinishObservedProcess  func(context.Context, replay.Call) (core.CommandResult, error)
 	KeepBoundedPollResult  bool
 	RecordSourceDivergence bool
