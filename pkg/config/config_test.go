@@ -334,6 +334,21 @@ func TestDecodeExecutionAndURLValidation(t *testing.T) {
 	}
 }
 
+func TestDecodeRunDeadline(t *testing.T) {
+	withExecution := func(execution string) string {
+		return strings.Replace(validConfig, `"benchmark":`, `"execution":`+execution+`,"benchmark":`, 1)
+	}
+	cfg, err := Decode(strings.NewReader(withExecution(`{"concurrency":5,"run_deadline":"6h"}`)))
+	if err != nil || cfg.Execution.Deadline != 6*time.Hour {
+		t.Fatalf("execution=%#v err=%v", cfg.Execution, err)
+	}
+	for _, bad := range []string{`"0s"`, `"-1h"`, `"6"`} {
+		if _, err := Decode(strings.NewReader(withExecution(`{"concurrency":5,"run_deadline":` + bad + `}`))); err == nil {
+			t.Fatalf("accepted run_deadline %s", bad)
+		}
+	}
+}
+
 const validDeepResearchBenchConfig = `{
   "name":"test-run","versions_file":"../configs/versions.json",
   "benchmark":{"type":"deepresearchbench","root":".cache/drb","tasks":["1"],"environment":{"image":"aries/drb:latest","workdir":"/workspace"},

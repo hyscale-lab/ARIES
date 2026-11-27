@@ -197,7 +197,9 @@ with profile order determining admission and result order by default. An
 [arrival trace](configuration.md#replay-task-arrivals) instead orders selected
 occurrences by scaled offset, preserving profile order for ties. Concurrency
 still bounds admission, and every admitted occurrence drains through the full
-lifecycle.
+lifecycle. A [run deadline](configuration.md#end-a-run-at-a-deadline) closes
+admission and bounds only the harness run; stop, revocation, evaluation, and
+cleanup of admitted occurrences still complete.
 
 Run output contains structured lifecycle and outcome records plus component
 artifacts. Replayable bridge input, child logs, rendered harness configuration,

@@ -339,11 +339,11 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}
 	preparedGPUIndices := []int{4, 2}
 	catalog := testPreparedBenchmark(t, wiring)
-	first, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-001", nil, nil, catalog, wiring)
+	first, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), taskOccurrence{logicalID: "a", executionID: "a-001"}, nil, nil, catalog, wiring)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-002", nil, nil, catalog, wiring)
+	second, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), taskOccurrence{logicalID: "a", executionID: "a-002"}, nil, nil, catalog, wiring)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 			return nil, errors.New("bridge construct")
 		},
 	}
-	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, nil, "run", t.TempDir(), "a", "a-001", nil, nil, testPreparedBenchmark(t, wiring), wiring)
+	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, nil, "run", t.TempDir(), taskOccurrence{logicalID: "a", executionID: "a-001"}, nil, nil, testPreparedBenchmark(t, wiring), wiring)
 	if err == nil || !strings.Contains(err.Error(), "bridge construct") || !strings.Contains(err.Error(), "sandbox close") || !strings.Contains(err.Error(), "harness close") {
 		t.Fatalf("err=%v", err)
 	}

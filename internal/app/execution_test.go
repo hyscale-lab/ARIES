@@ -74,7 +74,7 @@ func TestRunProfileConcurrentDuplicatesPreserveDispatchOrder(t *testing.T) {
 	}
 	done := make(chan core.RunResult, 1)
 	go func() {
-		result, err := runProfile(context.Background(), "name", "run", []string{"fix-git", "fix-git", "fix-git", "fix-git", "fix-git"}, 5, 0, nil, run)
+		result, err := runProfile(context.Background(), "name", "run", []string{"fix-git", "fix-git", "fix-git", "fix-git", "fix-git"}, 5, 0, 0, nil, run)
 		if err != nil {
 			t.Errorf("runProfile: %v", err)
 		}
@@ -98,7 +98,7 @@ func TestRunProfileConcurrentDuplicatesPreserveDispatchOrder(t *testing.T) {
 
 func TestRunProfileGlobalIDsErrorsAndLimit(t *testing.T) {
 	var active, peak atomic.Int32
-	result, err := runProfile(context.Background(), "name", "run", []string{"a", "b", "a", "b"}, 2, 0, nil,
+	result, err := runProfile(context.Background(), "name", "run", []string{"a", "b", "a", "b"}, 2, 0, 0, nil,
 		func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 			current := active.Add(1)
 			defer active.Add(-1)
@@ -129,7 +129,7 @@ func TestRunProfileLoopStopsAdmissionsAndDrains(t *testing.T) {
 	started := make(chan struct{}, 2)
 	done := make(chan core.RunResult, 1)
 	go func() {
-		result, _ := runProfile(context.Background(), "name", "run", []string{"a"}, 2, 25*time.Millisecond, nil,
+		result, _ := runProfile(context.Background(), "name", "run", []string{"a"}, 2, 25*time.Millisecond, 0, nil,
 			func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 				started <- struct{}{}
 				<-release
@@ -153,7 +153,7 @@ func TestRunProfileCancellationStopsAdmissionsAndWaitsForActive(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		_, err := runProfile(ctx, "name", "run", []string{"a", "b", "c"}, 1, 0, nil,
+		_, err := runProfile(ctx, "name", "run", []string{"a", "b", "c"}, 1, 0, 0, nil,
 			func(context.Context, taskOccurrence) (core.RunResult, error) {
 				close(started)
 				<-release
@@ -177,7 +177,7 @@ func TestRunProfileCancellationStopsAdmissionsAndWaitsForActive(t *testing.T) {
 func TestRunProfileRepeatedOccurrencesCloseEachObservedExperimentOnce(t *testing.T) {
 	var mu sync.Mutex
 	closes := make(map[string]int)
-	result, err := runProfile(context.Background(), "name", "run", []string{"a", "a", "a"}, 3, 0, nil,
+	result, err := runProfile(context.Background(), "name", "run", []string{"a", "a", "a"}, 3, 0, 0, nil,
 		func(ctx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 			closeExperiment := func() error { mu.Lock(); closes[occurrence.executionID]++; mu.Unlock(); return nil }
 			observed, runErr := runObserved(ctx,
@@ -353,7 +353,7 @@ func TestRunProfileArrivalsAdmitEachTaskAtItsOffset(t *testing.T) {
 	starts := map[string]time.Time{}
 	began := time.Now()
 	schedule := []arrival{{logicalID: "a", at: 0}, {logicalID: "b", at: 80 * time.Millisecond}}
-	result, err := runProfile(context.Background(), "name", "run", []string{"a", "b"}, 2, 0, schedule,
+	result, err := runProfile(context.Background(), "name", "run", []string{"a", "b"}, 2, 0, 0, schedule,
 		func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 			mu.Lock()
 			starts[occurrence.logicalID] = time.Now()
@@ -373,10 +373,58 @@ func TestRunProfileArrivalsAdmitEachTaskAtItsOffset(t *testing.T) {
 
 func TestRunProfileArrivalsRejectMismatchedScheduleAndLoop(t *testing.T) {
 	run := func(context.Context, taskOccurrence) (core.RunResult, error) { return core.RunResult{}, nil }
-	if _, err := runProfile(context.Background(), "n", "r", []string{"a", "b"}, 2, 0, []arrival{{logicalID: "a"}}, run); err == nil {
+	if _, err := runProfile(context.Background(), "n", "r", []string{"a", "b"}, 2, 0, 0, []arrival{{logicalID: "a"}}, run); err == nil {
 		t.Fatal("accepted a schedule shorter than the task list")
 	}
-	if _, err := runProfile(context.Background(), "n", "r", []string{"a"}, 1, time.Second, []arrival{{logicalID: "a"}}, run); err == nil {
+	if _, err := runProfile(context.Background(), "n", "r", []string{"a"}, 1, time.Second, 0, []arrival{{logicalID: "a"}}, run); err == nil {
 		t.Fatal("accepted a schedule together with a loop duration")
+	}
+}
+
+func TestRunProfileRunDeadlineStopsAdmissionsAndStampsOccurrences(t *testing.T) {
+	const runDeadline = 5 * time.Second
+	schedule := []arrival{{logicalID: "a", at: 0}, {logicalID: "b", at: 10 * time.Millisecond}, {logicalID: "c", at: time.Hour}}
+	var mu sync.Mutex
+	deadlines := map[string]time.Time{}
+	before := time.Now()
+	result, err := runProfile(context.Background(), "name", "run", []string{"a", "b", "c"}, 3, 0, runDeadline, schedule,
+		func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+			mu.Lock()
+			deadlines[occurrence.logicalID] = occurrence.agentDeadline
+			mu.Unlock()
+			return core.RunResult{Tasks: []core.TaskResult{{TaskID: occurrence.executionID}}, Summary: core.RunSummary{Tasks: 1}}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(before); elapsed >= runDeadline {
+		t.Fatalf("run waited %s for an arrival past its deadline", elapsed)
+	}
+	if len(result.Tasks) != 2 || len(deadlines) != 2 {
+		t.Fatalf("admitted %d tasks (%v), want the two before the deadline", len(result.Tasks), deadlines)
+	}
+	for id, deadline := range deadlines {
+		if deadline.Before(before.Add(runDeadline)) || deadline.After(time.Now().Add(runDeadline)) {
+			t.Fatalf("occurrence %s deadline %v is not %s after the run start %v", id, deadline, runDeadline, before)
+		}
+	}
+	if deadlines["a"] != deadlines["b"] {
+		t.Fatalf("occurrences carry different deadlines: %v", deadlines)
+	}
+}
+
+func TestRunProfileRunDeadlineClosesAdmissions(t *testing.T) {
+	var runs atomic.Int32
+	result, err := runProfile(context.Background(), "name", "run", []string{"a", "b", "c"}, 1, 0, 500*time.Millisecond, nil,
+		func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+			runs.Add(1)
+			time.Sleep(time.Until(occurrence.agentDeadline) + 10*time.Millisecond)
+			return core.RunResult{Tasks: []core.TaskResult{{TaskID: occurrence.executionID}}, Summary: core.RunSummary{Tasks: 1}}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs.Load() != 1 || len(result.Tasks) != 1 {
+		t.Fatalf("admitted %d tasks, want only the one started before the deadline", runs.Load())
 	}
 }
